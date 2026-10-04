@@ -110,3 +110,38 @@ h1 { margin: 0 0 12px; line-height: 1.15; }
   .nps-legend { font-size: 14px; }
   .card { padding: 24px; }
 }
+
+/* ---- idiomas, privacidade, contato, horário, modo link (celular) */
+.welcome-wrap { width: 100%; height: 100%; display: flex; flex-direction: column; position: relative; }
+.welcome-wrap .welcome { flex: 1; }
+.lang-bar { display: flex; gap: 8px; justify-content: center; padding-top: 4px; }
+.lang { background: rgba(255,255,255,.12); color: var(--fg); border: 2px solid transparent; border-radius: 999px; padding: 8px 18px; font: inherit; font-weight: 700; cursor: pointer; }
+.lang.active { border-color: var(--accent); background: rgba(255,255,255,.2); }
+.privacy-link { background: none; border: 0; color: inherit; opacity: .65; text-decoration: underline; font: inherit; font-size: 14px; cursor: pointer; padding: 4px; }
+.welcome-wrap > .privacy-link { position: absolute; left: 0; bottom: 0; }
+.overlay { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; padding: 24px; z-index: 20; }
+.overlay .card h2 { margin-top: 0; }
+.privacy-text { line-height: 1.6; white-space: pre-line; }
+.contact { width: min(820px, 100%); display: flex; flex-direction: column; gap: 18px; }
+.contact .q-text { text-align: center; }
+.contact .q-help { text-align: center; }
+.contact-form { display: grid; gap: 14px; background: rgba(255,255,255,.08); border-radius: 20px; padding: 22px; }
+.contact-form label { display: flex; flex-direction: column; gap: 6px; font-weight: 700; font-size: 18px; }
+.field { font: inherit; font-size: 22px; padding: 14px 16px; border-radius: 14px; border: 0; color: var(--ink); }
+.consent { flex-direction: row !important; align-items: flex-start; gap: 12px !important; font-weight: 500 !important; font-size: 17px !important; line-height: 1.4; }
+.consent-box { width: 28px; height: 28px; flex: none; accent-color: var(--accent); margin-top: 2px; }
+.form-error { color: #ffb4b4; min-height: 1.2em; margin: 0; font-weight: 700; }
+.closed { text-align: center; opacity: .9; }
+.closed h1 { font-size: clamp(30px, 5vw, 56px); }
+.spinner { width: 46px; height: 46px; border-radius: 50%; border: 5px solid #e2e8f0; border-top-color: var(--bg); animation: spin 1s linear infinite; margin: 10px auto; }
+@keyframes spin { to { transform: rotate(360deg); } }
+body.mode-link { overflow: auto; }
+html:has(body.mode-link) { height: auto; overflow: auto; }
+body.mode-link { height: auto; }
+body.mode-link .app { min-height: 100dvh; height: auto; padding: 20px 16px; }
+body.mode-link .question { height: auto; min-height: calc(100dvh - 40px); }
+@media (max-width: 700px) {
+  .q-nav .btn-lg { min-width: 0; padding: 14px 22px; font-size: 18px; }
+  .contact-form { padding: 16px; }
+  .field { font-size: 18px; }
+}

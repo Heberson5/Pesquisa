@@ -9,10 +9,15 @@ const { get, all, run, tx, audit } = require('../db');
 const { hashPassword, verifyPassword, pairingCode, sha256, passwordPolicyError, rateLimiter } = require('../security');
 const { destroySession, destroyUserSessions, requireUser, requireAdmin } = require('../auth');
 const { HttpError, bad, str, int, bool, id, email, dateParam } = require('../validate');
-const { QUESTION_TYPES, DISPLAYS, loadSurvey, normalizeQuestion, npsFromCounts } = require('../surveys');
-const { getSettings, saveSettings } = require('../settings');
+const { QUESTION_TYPES, DISPLAYS, LANGS, LANG_LABELS, CONTACT_MODES, loadSurvey, normalizeQuestions, normalizeI18n, npsFromCounts } = require('../surveys');
+const { getSettings, saveSettings, emailList } = require('../settings');
+const { queueEmail, renderEmail, processOutbox, outboxStatus, webhookSecret } = require('../notify');
 const { buildReport } = require('../report');
 const { resetUserMfa } = require('./auth');
+const QRCode = require('qrcode');
+const { encrypt, decrypt, lookup } = require('../vault');
+const { publicUrl } = require('../config');
+const { parseLocal } = require('../time');
 
 const router = express.Router();
 const { MEDIA_DIR } = require('../db');
@@ -36,7 +41,7 @@ router.get('/me', (req, res) => {
   res.json({ user: { id: req.user.id, name: req.user.name, email: req.user.email, role: req.user.role, mfaEnabled: !!u.totp_enabled,
     notify: { detractors: !!u.notify_detractors, reports: !!u.notify_reports, offline: !!u.notify_offline } },
   mfaSetupRequired: req.user.mfaSetupRequired, csrf: req.user.csrf,
-  questionTypes: QUESTION_TYPES, displays: DISPLAYS, settings: req.user.mfaSetupRequired ? null : getSettings() });
+  questionTypes: QUESTION_TYPES, displays: DISPLAYS, langs: LANG_LABELS, contactModes: CONTACT_MODES, settings: req.user.mfaSetupRequired ? null : getSettings() });
 });
 
 // Preferências de notificação do próprio usuário.
@@ -62,24 +67,13 @@ router.post('/me/password', loginLimiter, (req, res) => {
 });
 
 
-// ---------------------------------------------------------------- escopo por filial
-// Retorna null (todas as filiais) para admin, ou a lista de filiais do gestor.
-function scope(user) {
-  if (user.role === 'admin') return null;
-  return all('SELECT branch_id FROM user_branches WHERE user_id = ?', user.id).map((r) => r.branch_id);
-}
-function assertBranch(user, branchId) {
-  const s = scope(user);
-  if (s && !s.includes(branchId)) throw new HttpError(404, 'Filial não encontrada.');
-  if (!get('SELECT 1 FROM branches WHERE id = ?', branchId)) throw new HttpError(404, 'Filial não encontrada.');
-}
-const placeholders = (arr) => arr.map(() => '?').join(',');
+const { scope, assertBranch, placeholders } = require('../scope');
 
 // ---------------------------------------------------------------- filiais
 router.get('/branches', (req, res) => {
   const s = scope(req.user);
   const where = s ? `WHERE b.id IN (${placeholders(s)})` : '';
-  res.json(all(`SELECT b.id, b.code, b.name, b.city, b.active, b.survey_id, s.title AS survey_title,
+  res.json(all(`SELECT b.id, b.code, b.name, b.city, b.active, b.survey_id, s.title AS survey_title, b.alert_emails, b.alert_phones, b.nps_goal, b.hours_json, b.public_enabled,
       (SELECT COUNT(*) FROM devices d WHERE d.branch_id = b.id AND d.active = 1) AS devices
     FROM branches b LEFT JOIN surveys s ON s.id = b.survey_id ${where} ORDER BY b.name`, ...(s || [])));
 });
@@ -92,13 +86,42 @@ function branchInput(body) {
     name: str(body?.name, { field: 'nome', min: 2, max: 100 }),
     city: str(body?.city, { field: 'cidade', max: 100, optional: true }),
     active: body?.active === undefined ? 1 : (bool(body.active) ? 1 : 0),
+    alert_emails: JSON.stringify(body?.alert_emails === undefined ? [] : emailList(body.alert_emails, 10)),
+    alert_phones: JSON.stringify(phoneList(body?.alert_phones)),
+    nps_goal: body?.nps_goal === undefined || body.nps_goal === null || body.nps_goal === '' ? null : int(body.nps_goal, { field: 'meta de NPS', min: -100, max: 100 }),
+    hours_json: hoursInput(body?.hours),
   };
+}
+
+// Telefones para WhatsApp no formato internacional, só dígitos (ex.: 5511999990000).
+function phoneList(v) {
+  if (v === undefined || v === null) return [];
+  if (!Array.isArray(v) || v.length > 5) throw bad('Informe no máximo 5 telefones.');
+  if (!v.every((p) => typeof p === 'string' && /^[\d\s()+.-]{8,25}$/.test(p))) throw bad('Telefone inválido: use apenas números (ex.: 5511999990000).');
+  const out = [...new Set(v.map((p) => p.replace(/\D/g, '')))];
+  for (const p of out) if (!/^\d{12,15}$/.test(p)) throw bad('Telefone inválido: use DDI + DDD + número (ex.: 5511999990000).');
+  return out;
+}
+
+// Horário de funcionamento: 7 itens (domingo a sábado), cada um null (fechado) ou { open: 'HH:MM', close: 'HH:MM' }.
+// null no total = sempre aberto.
+function hoursInput(v) {
+  if (v === undefined || v === null) return null;
+  if (!Array.isArray(v) || v.length !== 7) throw bad('Horário de funcionamento inválido.');
+  const hm = /^([01]\d|2[0-3]):[0-5]\d$/;
+  const out = v.map((d) => {
+    if (d === null) return null;
+    if (!d || typeof d !== 'object' || !hm.test(d.open) || !hm.test(d.close) || d.open >= d.close) throw bad('Horário inválido (use HH:MM e abertura antes do fechamento).');
+    return { open: d.open, close: d.close };
+  });
+  return JSON.stringify(out);
 }
 
 router.post('/branches', requireAdmin, (req, res) => {
   const b = branchInput(req.body);
   if (get('SELECT 1 FROM branches WHERE code = ?', b.code)) throw new HttpError(409, 'Já existe uma filial com esse código.');
-  const r = run('INSERT INTO branches (code, name, city, active, created_at) VALUES (?,?,?,?,?)', b.code, b.name, b.city, b.active, Date.now());
+  const r = run('INSERT INTO branches (code, name, city, active, alert_emails, alert_phones, nps_goal, hours_json, created_at) VALUES (?,?,?,?,?,?,?,?,?)',
+    b.code, b.name, b.city, b.active, b.alert_emails, b.alert_phones, b.nps_goal, b.hours_json, Date.now());
   audit(req.user.id, 'branch.create', { id: r.lastInsertRowid, ...b }, req.ip);
   res.status(201).json({ id: Number(r.lastInsertRowid) });
 });
@@ -108,7 +131,8 @@ router.put('/branches/:id', requireAdmin, (req, res) => {
   assertBranch(req.user, bid);
   const b = branchInput(req.body);
   if (get('SELECT 1 FROM branches WHERE code = ? AND id <> ?', b.code, bid)) throw new HttpError(409, 'Já existe uma filial com esse código.');
-  run('UPDATE branches SET code = ?, name = ?, city = ?, active = ? WHERE id = ?', b.code, b.name, b.city, b.active, bid);
+  run('UPDATE branches SET code = ?, name = ?, city = ?, active = ?, alert_emails = ?, alert_phones = ?, nps_goal = ?, hours_json = ? WHERE id = ?',
+    b.code, b.name, b.city, b.active, b.alert_emails, b.alert_phones, b.nps_goal, b.hours_json, bid);
   audit(req.user.id, 'branch.update', { id: bid, ...b }, req.ip);
   res.json({ ok: true });
 });
@@ -124,6 +148,69 @@ router.put('/branches/:id/survey', (req, res) => {
   res.json({ ok: true });
 });
 
+// ---------------------------------------------------------------- link / QR Code por filial
+async function linkInfo(b) {
+  const token = b.public_token_enc ? decrypt(b.public_token_enc) : null;
+  if (!token) return { enabled: false, url: null, qr: null };
+  const url = `${publicUrl}/r/${token}`;
+  return { enabled: !!b.public_enabled, url, qr: await QRCode.toDataURL(url, { errorCorrectionLevel: 'M', margin: 2, width: 600 }) };
+}
+
+router.get('/branches/:id/public-link', async (req, res) => {
+  const bid = id(req.params.id);
+  assertBranch(req.user, bid);
+  res.json(await linkInfo(get('SELECT * FROM branches WHERE id = ?', bid)));
+});
+
+// Ativar/desativar ou gerar um novo link (o anterior deixa de funcionar — útil se um QR vazar).
+router.post('/branches/:id/public-link', requireAdmin, async (req, res) => {
+  const bid = id(req.params.id);
+  assertBranch(req.user, bid);
+  const b = get('SELECT * FROM branches WHERE id = ?', bid);
+  const enabled = req.body?.enabled !== false;
+  if (req.body?.regenerate === true || !b.public_token_enc) {
+    const token = crypto.randomBytes(24).toString('base64url');
+    run('UPDATE branches SET public_token_enc = ?, public_token_hash = ? WHERE id = ?', encrypt(token), lookup('link:' + token), bid);
+  }
+  run('UPDATE branches SET public_enabled = ? WHERE id = ?', enabled ? 1 : 0, bid);
+  audit(req.user.id, 'branch.public_link', { branchId: bid, enabled, regenerated: req.body?.regenerate === true }, req.ip);
+  res.json(await linkInfo(get('SELECT * FROM branches WHERE id = ?', bid)));
+});
+
+// ---------------------------------------------------------------- campanhas agendadas
+router.get('/schedules', (req, res) => {
+  const s = scope(req.user);
+  const where = s ? `WHERE (c.branch_id IS NULL OR c.branch_id IN (${placeholders(s)}))` : '';
+  res.json(all(`SELECT c.id, c.survey_id, v.title AS survey, c.branch_id, b.name AS branch, c.starts_at, c.ends_at
+    FROM schedules c JOIN surveys v ON v.id = c.survey_id LEFT JOIN branches b ON b.id = c.branch_id ${where}
+    ORDER BY c.starts_at DESC LIMIT 200`, ...(s || [])));
+});
+
+router.post('/schedules', requireAdmin, (req, res) => {
+  const surveyId = id(req.body?.surveyId, 'pesquisa');
+  if (!get('SELECT 1 FROM surveys WHERE id = ? AND active = 1', surveyId)) throw bad('Pesquisa inexistente ou inativa.');
+  const branchId = req.body?.branchId === null || req.body?.branchId === undefined || req.body?.branchId === '' ? null : id(req.body.branchId, 'filial');
+  if (branchId !== null) assertBranch(req.user, branchId);
+  const startsAt = parseLocal(req.body?.startsAt);
+  const endsAt = parseLocal(req.body?.endsAt);
+  if (startsAt === null || endsAt === null) throw bad('Datas inválidas (use dia e hora).');
+  if (endsAt <= startsAt) throw bad('O fim precisa ser depois do início.');
+  if (endsAt - startsAt > 366 * 86_400_000) throw bad('Campanha de no máximo 1 ano.');
+  if (endsAt < Date.now()) throw bad('Essa campanha já terminou.');
+  const r = run('INSERT INTO schedules (survey_id, branch_id, starts_at, ends_at, created_by, created_at) VALUES (?,?,?,?,?,?)',
+    surveyId, branchId, startsAt, endsAt, req.user.id, Date.now());
+  audit(req.user.id, 'schedule.create', { id: r.lastInsertRowid, surveyId, branchId, startsAt, endsAt }, req.ip);
+  res.status(201).json({ id: Number(r.lastInsertRowid) });
+});
+
+router.delete('/schedules/:id', requireAdmin, (req, res) => {
+  const sid = id(req.params.id);
+  const r = run('DELETE FROM schedules WHERE id = ?', sid);
+  if (!r.changes) throw new HttpError(404, 'Campanha não encontrada.');
+  audit(req.user.id, 'schedule.delete', { id: sid }, req.ip);
+  res.json({ ok: true });
+});
+
 // ---------------------------------------------------------------- pesquisas
 router.get('/surveys', (req, res) => {
   res.json(all(`SELECT s.id, s.title, s.active, s.updated_at,
@@ -134,8 +221,8 @@ router.get('/surveys', (req, res) => {
 });
 
 router.get('/surveys/:id', (req, res) => {
-  const s = loadSurvey(id(req.params.id));
-  if (!s) throw new HttpError(404, 'Pesquisa não encontrada.');
+  const s = withRefs(loadSurvey(id(req.params.id)) || { questions: [] });
+  if (!s.id) throw new HttpError(404, 'Pesquisa não encontrada.');
   s.has_responses = !!get('SELECT 1 FROM responses WHERE survey_id = ? LIMIT 1', s.id);
   s.thanks_media = s.thanks_media_id ? get('SELECT id, mime, original_name FROM media WHERE id = ?', s.thanks_media_id) : null;
   res.json(s);
@@ -146,6 +233,7 @@ function surveyInput(body) {
   if (mediaId && (!/^[a-f0-9]{32}$/.test(mediaId) || !get('SELECT 1 FROM media WHERE id = ?', mediaId))) throw bad('Mídia inválida.');
   const questions = body?.questions;
   if (!Array.isArray(questions) || questions.length < 1 || questions.length > 30) throw bad('A pesquisa deve ter entre 1 e 30 perguntas.');
+  const languages = parseLanguages(body.languages);
   return {
     title: str(body.title, { field: 'título', min: 3, max: 120 }),
     welcome_title: str(body.welcome_title, { field: 'título de boas-vindas', min: 2, max: 120 }),
@@ -156,14 +244,37 @@ function surveyInput(body) {
     thanks_seconds: int(body.thanks_seconds, { field: 'tempo do agradecimento', min: 3, max: 60 }),
     idle_seconds: int(body.idle_seconds, { field: 'tempo de inatividade', min: 15, max: 600 }),
     active: body.active === false ? 0 : 1,
-    questions: questions.map(normalizeQuestion),
+    contact_mode: body.contact_mode === undefined ? 'never' : (Object.hasOwn(CONTACT_MODES, body.contact_mode) ? body.contact_mode : (() => { throw bad('Modo de contato inválido.'); })()),
+    languages,
+    i18n: normalizeI18n(body.i18n, languages, [['welcome_title', 120], ['welcome_text', 300], ['thanks_title', 120], ['thanks_text', 300]], { where: 'da pesquisa' }),
+    questions: normalizeQuestions(questions, languages),
   };
 }
 
+function parseLanguages(v) {
+  if (v === undefined) return ['pt'];
+  if (!Array.isArray(v) || v.length > LANGS.length || !v.every((l) => LANGS.includes(l))) throw bad('Idiomas inválidos.');
+  return ['pt', ...LANGS.filter((l) => l !== 'pt' && v.includes(l))];
+}
+
+// Condições no banco referenciam o id da pergunta; no editor, a posição (ref). Converte nos dois sentidos.
+function withRefs(survey) {
+  const pos = new Map(survey.questions.map((q, i) => [q.id, i]));
+  survey.questions = survey.questions.map((q) => ({ ...q, show_if: q.show_if && pos.has(q.show_if.q) ? { ref: pos.get(q.show_if.q), op: q.show_if.op, value: q.show_if.value } : null }));
+  return survey;
+}
+const condForDb = (cond, ids) => (cond ? JSON.stringify({ q: ids[cond.ref], op: cond.op, value: cond.value }) : null);
+const i18nForDb = (o) => (o && Object.keys(o).length ? JSON.stringify(o) : null);
+
 function insertQuestions(surveyId, questions) {
-  questions.forEach((q, i) => run(
-    'INSERT INTO questions (survey_id, position, text, help_text, type, required, is_nps, options_json, display, icon) VALUES (?,?,?,?,?,?,?,?,?,?)',
-    surveyId, i, q.text, q.help_text, q.type, q.required, q.is_nps, q.options.length ? JSON.stringify(q.options) : null, q.display || 'numbers', q.icon || null));
+  const ids = [];
+  questions.forEach((q, i) => {
+    const r = run(
+      'INSERT INTO questions (survey_id, position, text, help_text, type, required, is_nps, options_json, display, icon, show_if, i18n) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+      surveyId, i, q.text, q.help_text, q.type, q.required, q.is_nps, q.options.length ? JSON.stringify(q.options) : null, q.display || 'default', q.icon || null,
+      condForDb(q.show_if, ids), i18nForDb(q.i18n));
+    ids.push(Number(r.lastInsertRowid));
+  });
 }
 
 router.post('/surveys', requireAdmin, (req, res) => {
@@ -171,9 +282,9 @@ router.post('/surveys', requireAdmin, (req, res) => {
   const now = Date.now();
   const newId = tx(() => {
     const r = run(`INSERT INTO surveys (title, welcome_title, welcome_text, thanks_title, thanks_text, thanks_media_id,
-      thanks_seconds, idle_seconds, active, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+      thanks_seconds, idle_seconds, active, contact_mode, languages, i18n, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     s.title, s.welcome_title, s.welcome_text, s.thanks_title, s.thanks_text, s.thanks_media_id,
-    s.thanks_seconds, s.idle_seconds, s.active, now, now);
+    s.thanks_seconds, s.idle_seconds, s.active, s.contact_mode, JSON.stringify(s.languages), i18nForDb(s.i18n), now, now);
     insertQuestions(r.lastInsertRowid, s.questions);
     return Number(r.lastInsertRowid);
   });
@@ -189,9 +300,9 @@ router.put('/surveys/:id', requireAdmin, (req, res) => {
   const hasResponses = !!get('SELECT 1 FROM responses WHERE survey_id = ? LIMIT 1', sid);
   tx(() => {
     run(`UPDATE surveys SET title=?, welcome_title=?, welcome_text=?, thanks_title=?, thanks_text=?, thanks_media_id=?,
-      thanks_seconds=?, idle_seconds=?, active=?, updated_at=? WHERE id=?`,
+      thanks_seconds=?, idle_seconds=?, active=?, contact_mode=?, languages=?, i18n=?, updated_at=? WHERE id=?`,
     s.title, s.welcome_title, s.welcome_text, s.thanks_title, s.thanks_text, s.thanks_media_id,
-    s.thanks_seconds, s.idle_seconds, s.active, Date.now(), sid);
+    s.thanks_seconds, s.idle_seconds, s.active, s.contact_mode, JSON.stringify(s.languages), i18nForDb(s.i18n), Date.now(), sid);
     if (!hasResponses) {
       run('DELETE FROM questions WHERE survey_id = ?', sid);
       insertQuestions(sid, s.questions);
@@ -205,8 +316,8 @@ router.put('/surveys/:id', requireAdmin, (req, res) => {
           throw new HttpError(409, 'Esta pesquisa já tem respostas: não é possível mudar tipo ou opções. Use "Duplicar".');
         }
         // A aparência (números/carinhas/ícones) pode mudar: o valor gravado continua o mesmo número.
-        run('UPDATE questions SET text=?, help_text=?, required=?, is_nps=?, display=?, icon=? WHERE id=?',
-          q.text, q.help_text, q.required, q.is_nps, q.display, q.icon, old.id);
+        run('UPDATE questions SET text=?, help_text=?, required=?, is_nps=?, display=?, icon=?, show_if=?, i18n=? WHERE id=?',
+          q.text, q.help_text, q.required, q.is_nps, q.display, q.icon, condForDb(q.show_if, current.questions.map((x) => x.id)), i18nForDb(q.i18n), old.id);
       });
     }
     if (!s.active) run('UPDATE branches SET survey_id = NULL WHERE survey_id = ?', sid);
@@ -221,10 +332,10 @@ router.post('/surveys/:id/duplicate', requireAdmin, (req, res) => {
   const now = Date.now();
   const newId = tx(() => {
     const r = run(`INSERT INTO surveys (title, welcome_title, welcome_text, thanks_title, thanks_text, thanks_media_id,
-      thanks_seconds, idle_seconds, active, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,1,?,?)`,
+      thanks_seconds, idle_seconds, active, contact_mode, languages, i18n, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,1,?,?,?,?,?)`,
     (src.title + ' (cópia)').slice(0, 120), src.welcome_title, src.welcome_text, src.thanks_title, src.thanks_text,
-    src.thanks_media_id, src.thanks_seconds, src.idle_seconds, now, now);
-    insertQuestions(r.lastInsertRowid, src.questions.map((q) => ({ ...q, required: q.required ? 1 : 0, is_nps: q.is_nps ? 1 : 0 })));
+    src.thanks_media_id, src.thanks_seconds, src.idle_seconds, src.contact_mode, JSON.stringify(src.languages), i18nForDb(src.i18n), now, now);
+    insertQuestions(r.lastInsertRowid, withRefs(src).questions.map((q) => ({ ...q, required: q.required ? 1 : 0, is_nps: q.is_nps ? 1 : 0 })));
     return Number(r.lastInsertRowid);
   });
   audit(req.user.id, 'survey.duplicate', { from: src.id, id: newId }, req.ip);
@@ -316,6 +427,7 @@ function responseFilter(user, q) {
   if (from !== null) { where.push('r.submitted_at >= ?'); params.push(from); }
   if (to !== null) { where.push('r.submitted_at < ?'); params.push(to + 86_400_000); }
   if (q.surveyId) { where.push('r.survey_id = ?'); params.push(id(q.surveyId, 'pesquisa')); }
+  if (q.channel) { if (!['tablet', 'link'].includes(q.channel)) throw bad('Canal inválido.'); where.push('r.channel = ?'); params.push(q.channel); }
   if (q.branchId) {
     const bid = id(q.branchId, 'filial');
     assertBranch(user, bid);
@@ -336,11 +448,18 @@ function computeStats(user, query) {
   const f = responseFilter(user, query);
   const totalResponses = get(`SELECT COUNT(*) AS n FROM responses r ${f.sql}`, ...f.params).n;
   const overall = npsRow(get(`SELECT ${NPS_AGG} FROM responses r ${NPS_JOIN} ${f.sql}`, ...f.params));
-  const byBranch = all(`SELECT b.id, b.name, COUNT(DISTINCT r.id) AS responses, ${NPS_AGG}
+  const defaultGoal = getSettings().defaultNpsGoal;
+  const byBranch = all(`SELECT b.id, b.name, b.nps_goal, COUNT(DISTINCT r.id) AS responses, ${NPS_AGG}
       FROM responses r JOIN branches b ON b.id = r.branch_id
       LEFT JOIN answers a ON a.response_id = r.id AND a.question_id IN (SELECT id FROM questions WHERE is_nps = 1)
       ${f.sql} GROUP BY b.id ORDER BY b.name`, ...f.params)
-    .map((r) => ({ id: r.id, name: r.name, responses: r.responses, ...npsRow(r) }));
+    .map((r) => {
+      const n = npsRow(r);
+      const goal = r.nps_goal ?? defaultGoal;
+      return { id: r.id, name: r.name, responses: r.responses, ...n, goal, goalMet: goal === null || n.nps === null ? null : n.nps >= goal };
+    });
+  // Ranking: maior NPS primeiro (filiais sem nota de NPS ficam no fim).
+  const ranking = [...byBranch].sort((a, b) => (b.nps ?? -1000) - (a.nps ?? -1000) || b.total - a.total).map((b, i) => ({ position: i + 1, ...b }));
   const byQuestion = all(`SELECT q.id, q.text, s.title AS survey, ${NPS_AGG}
       FROM responses r ${NPS_JOIN} JOIN surveys s ON s.id = q.survey_id ${f.sql} GROUP BY q.id ORDER BY s.title, q.position`, ...f.params)
     .map((r) => ({ id: r.id, text: r.text, survey: r.survey, ...npsRow(r) }));
@@ -352,7 +471,8 @@ function computeStats(user, query) {
   const comments = all(`SELECT r.submitted_at, b.name AS branch, q.text AS question, a.value_text AS comment
       FROM responses r JOIN answers a ON a.response_id = r.id JOIN questions q ON q.id = a.question_id AND q.type = 'text'
       JOIN branches b ON b.id = r.branch_id ${f.sql} ORDER BY r.submitted_at DESC LIMIT 15`, ...f.params);
-  return { totalResponses, overall, byBranch, byQuestion, trend, scoreDist, comments };
+  const channels = all(`SELECT r.channel, COUNT(*) AS n FROM responses r ${f.sql} GROUP BY r.channel`, ...f.params);
+  return { totalResponses, overall, byBranch, ranking, defaultGoal, byQuestion, trend, scoreDist, comments, channels };
 }
 
 router.get('/stats', (req, res) => res.json(computeStats(req.user, req.query)));
@@ -383,7 +503,7 @@ router.get('/surveys/:id/breakdown', (req, res) => {
 function listResponses(user, query, limit, offset) {
   const f = responseFilter(user, query);
   const total = get(`SELECT COUNT(*) AS n FROM responses r ${f.sql}`, ...f.params).n;
-  const rows = all(`SELECT r.id, r.uuid, r.submitted_at, r.started_at, b.name AS branch, s.title AS survey, d.name AS device
+  const rows = all(`SELECT r.id, r.uuid, r.submitted_at, r.started_at, r.channel, r.lang, b.name AS branch, s.title AS survey, d.name AS device
       FROM responses r JOIN branches b ON b.id = r.branch_id JOIN surveys s ON s.id = r.survey_id
       LEFT JOIN devices d ON d.id = r.device_id ${f.sql} ORDER BY r.submitted_at DESC LIMIT ? OFFSET ?`, ...f.params, limit, offset);
   if (rows.length) {
@@ -498,6 +618,21 @@ router.put('/users/:id', requireAdmin, (req, res) => {
 
 // ---------------------------------------------------------------- configurações (somente admin)
 router.get('/settings', (req, res) => res.json(getSettings()));
+
+router.get('/settings/notifications', requireAdmin, (req, res) => {
+  const recent = all("SELECT id, kind, channel, status, attempts, last_error, created_at, sent_at FROM outbox ORDER BY id DESC LIMIT 30");
+  res.json({ ...outboxStatus(), webhookSecret: webhookSecret(), recent });
+});
+
+const testLimiter = rateLimiter({ windowMs: 60 * 60_000, max: 5, keyFn: (req) => 'test:' + req.user.id, message: 'Limite de e-mails de teste atingido. Aguarde.' });
+router.post('/settings/test-email', requireAdmin, testLimiter, async (req, res) => {
+  const s = getSettings();
+  const { html, text } = renderEmail({ brand: s, title: 'E-mail de teste', intro: 'Se você recebeu esta mensagem, o envio de e-mails do sistema de pesquisa está funcionando.' });
+  queueEmail({ to: req.user.email, subject: `${s.companyName}: e-mail de teste`, text, html, kind: 'test' });
+  await processOutbox(5);
+  const last = get("SELECT status, last_error FROM outbox WHERE kind = 'test' ORDER BY id DESC LIMIT 1");
+  res.json({ sent: last.status === 'sent', error: last.last_error });
+});
 
 router.put('/settings', requireAdmin, (req, res) => {
   const saved = saveSettings(req.body);

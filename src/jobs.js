@@ -16,6 +16,11 @@ every('limpeza-sessoes', 10 * 60_000, () => {
   run('DELETE FROM link_tickets WHERE issued_at < ?', Date.now() - 2 * 3_600_000);
 });
 
+every('retencao-lgpd', 6 * 3_600_000, () => {
+  const r = require('./retention').applyRetention();
+  if (r.contacts || r.comments || r.audit) require('./db').audit(null, 'lgpd.retention', r, null);
+});
+
 async function tick() {
   const now = Date.now();
   for (const j of jobs) {

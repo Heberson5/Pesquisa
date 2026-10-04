@@ -18,7 +18,10 @@ app.use('/api', express.json({ limit: '64kb', strict: true }));
 // Identidade visual pública (tela de login e tablet). Não expõe nada sensível.
 app.get('/api/public/branding', (req, res) => res.json(publicBranding()));
 app.use('/api/kiosk', require('./src/routes/kiosk'));
+app.use('/api/link', require('./src/routes/link'));
 app.use('/api/admin', require('./src/routes/auth'));
+app.use('/api/admin/cases', require('./src/routes/cases'));
+app.use('/api/admin/privacy', require('./src/routes/privacy'));
 app.use('/api/admin', require('./src/routes/admin'));
 app.use('/api', (req, res) => res.status(404).json({ error: 'Rota não encontrada.' }));
 
@@ -57,6 +60,12 @@ const staticOpts = { index: 'index.html', dotfiles: 'deny', redirect: true, maxA
 app.use('/admin', express.static(path.join(__dirname, 'public', 'admin'), staticOpts));
 app.use('/kiosk', express.static(path.join(__dirname, 'public', 'kiosk'), staticOpts));
 app.use('/shared', express.static(path.join(__dirname, 'public', 'shared'), staticOpts));
+// Página da pesquisa por link/QR Code (mesmo app do tablet, em modo celular).
+app.get('/r/:token', (req, res, next) => {
+  if (!/^[A-Za-z0-9_-]{20,64}$/.test(req.params.token)) return res.status(404).end();
+  res.set('Cache-Control', 'no-store').set('Referrer-Policy', 'no-referrer');
+  res.sendFile(path.join(__dirname, 'public', 'kiosk', 'index.html'), (e) => e && next(e));
+});
 app.get('/', (req, res) => res.redirect('/admin/'));
 
 app.use((req, res) => res.status(404).type('text/plain').send('Não encontrado'));
