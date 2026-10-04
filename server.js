@@ -13,6 +13,11 @@ app.set('etag', false);
 app.set('trust proxy', process.env.TRUST_PROXY ? Number(process.env.TRUST_PROXY) || process.env.TRUST_PROXY : false);
 
 app.use(securityHeaders);
+
+// Verificação de saúde (Docker/monitoramento). Não expõe versão nem detalhes.
+app.get('/healthz', (req, res) => {
+  try { get('SELECT 1 AS ok'); res.set('Cache-Control', 'no-store').json({ ok: true }); } catch { res.status(503).json({ ok: false }); }
+});
 app.use('/api', express.json({ limit: '64kb', strict: true }));
 
 // Identidade visual pública (tela de login e tablet). Não expõe nada sensível.
@@ -86,7 +91,15 @@ if (require.main === module) {
   if (jobsEnabled) require('./src/jobs').start();
   const port = Number(process.env.PORT || 3000);
   const host = process.env.HOST || '127.0.0.1';
-  app.listen(port, host, () => console.log(`Pesquisa de satisfação rodando em http://${host}:${port}  (painel: /admin  •  tablet: /kiosk)`));
+  const server = app.listen(port, host, () => console.log(`Pesquisa de satisfação rodando em http://${host}:${port}  (painel: /admin  •  tablet: /kiosk)`));
+  // Parada limpa (docker stop / atualização): termina as requisições em andamento e fecha o banco.
+  const shutdown = (sig) => {
+    console.log(`${sig} recebido, encerrando…`);
+    server.close(() => { try { require('./src/db').db.close(); } catch { /* */ } process.exit(0); });
+    setTimeout(() => process.exit(0), 10_000).unref();
+  };
+  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', shutdown);
 }
 
 module.exports = app;

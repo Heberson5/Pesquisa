@@ -1,0 +1,58 @@
+# Pesquisa de satisfação — produção.
+# Uso: docker compose up -d --build            (app + backup; app em 127.0.0.1:3000 para o seu proxy)
+#      docker compose -f docker-compose.yml -f docker-compose.caddy.yml up -d --build   (com HTTPS automático via Caddy)
+services:
+  app:
+    build: .
+    image: pesquisa-satisfacao:latest
+    restart: unless-stopped
+    init: true
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      DATA_DIR: /data
+    volumes:
+      - pesquisa-data:/data
+    # Só acessível pela própria VPS (o proxy HTTPS fica na frente). Nunca exponha a porta 3000 na internet.
+    ports:
+      - "127.0.0.1:3000:3000"
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 512m
+    pids_limit: 200
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "5" }
+
+  backup:
+    image: pesquisa-satisfacao:latest
+    depends_on: [app]
+    restart: unless-stopped
+    init: true
+    command: ["node", "scripts/backup.js", "--loop"]
+    healthcheck:
+      disable: true
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      DATA_DIR: /data
+      DISABLE_JOBS: "true"
+    volumes:
+      - pesquisa-data:/data
+      - ./backups:/backups
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 256m
+
+volumes:
+  pesquisa-data:

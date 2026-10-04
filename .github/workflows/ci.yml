@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  testes:
+    name: Testes de segurança e auditoria
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Testes (ataques simulados)
+        run: npm test
+      - name: Auditoria de dependências
+        run: npm audit --audit-level=moderate
+
+  imagem:
+    name: Build da imagem Docker
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: testes
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Build
+        run: docker build -t pesquisa-satisfacao:ci .
+      - name: Recusa iniciar sem segredos (produção)
+        run: |
+          out=$(docker run --rm -e NODE_ENV=production pesquisa-satisfacao:ci 2>&1 || true)
+          echo "$out"
+          echo "$out" | grep -q "APP_SECRET é obrigatório"
+      - name: Sobe e responde ao healthcheck
+        run: |
+          docker run -d --name app -p 127.0.0.1:3000:3000 -e NODE_ENV=production -e PUBLIC_URL=https://exemplo.com.br \
+            -e APP_SECRET="$(openssl rand -base64 48)" --read-only --tmpfs /tmp --tmpfs /data:uid=1000 --cap-drop ALL \
+            --security-opt no-new-privileges pesquisa-satisfacao:ci
+          for i in $(seq 1 20); do curl -fsS http://127.0.0.1:3000/healthz && exit 0; sleep 1; done
+          docker logs app; exit 1
