@@ -6,50 +6,22 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { get, all, run, tx, audit } = require('../db');
-const {
-  hashPassword, verifyPassword, DUMMY_HASH, pairingCode, sha256, passwordPolicyError, rateLimiter,
-} = require('../security');
-const { createSession, destroySession, destroyUserSessions, requireUser, requireAdmin } = require('../auth');
+const { hashPassword, verifyPassword, pairingCode, sha256, passwordPolicyError, rateLimiter } = require('../security');
+const { destroySession, destroyUserSessions, requireUser, requireAdmin } = require('../auth');
 const { HttpError, bad, str, int, bool, id, email, dateParam } = require('../validate');
 const { QUESTION_TYPES, DISPLAYS, loadSurvey, normalizeQuestion, npsFromCounts } = require('../surveys');
 const { getSettings, saveSettings } = require('../settings');
 const { buildReport } = require('../report');
+const { resetUserMfa } = require('./auth');
 
 const router = express.Router();
-const MEDIA_DIR = process.env.MEDIA_DIR || path.join(__dirname, '..', '..', 'data', 'media');
+const { MEDIA_DIR } = require('../db');
 fs.mkdirSync(MEDIA_DIR, { recursive: true });
 
 const PAIR_TTL_MS = 15 * 60_000;
-const LOCK_AFTER = 5;
-const LOCK_MS = 15 * 60_000;
 
-// ---------------------------------------------------------------- autenticação
-const loginLimiter = rateLimiter({ windowMs: 15 * 60_000, max: 20, message: 'Muitas tentativas de login. Aguarde 15 minutos.' });
-
-router.post('/login', loginLimiter, (req, res) => {
-  const mail = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase().slice(0, 254) : '';
-  const password = typeof req.body?.password === 'string' ? req.body.password.slice(0, 200) : '';
-  const user = get('SELECT * FROM users WHERE email = ?', mail);
-  const now = Date.now();
-  const ok = verifyPassword(password, user ? user.password_hash : DUMMY_HASH);
-  const generic = new HttpError(401, 'E-mail ou senha inválidos.');
-  if (!user || !user.active) { audit(null, 'login.failed', { email: mail }, req.ip); throw generic; }
-  if (user.locked_until && user.locked_until > now) {
-    audit(user.id, 'login.locked', null, req.ip);
-    throw new HttpError(423, 'Conta temporariamente bloqueada por excesso de tentativas. Tente em 15 minutos.');
-  }
-  if (!ok) {
-    const fails = user.failed_logins + 1;
-    run('UPDATE users SET failed_logins = ?, locked_until = ? WHERE id = ?',
-      fails >= LOCK_AFTER ? 0 : fails, fails >= LOCK_AFTER ? now + LOCK_MS : null, user.id);
-    audit(user.id, 'login.failed', null, req.ip);
-    throw generic;
-  }
-  run('UPDATE users SET failed_logins = 0, locked_until = NULL WHERE id = ?', user.id);
-  const csrf = createSession(res, user, req);
-  audit(user.id, 'login.ok', null, req.ip);
-  res.json({ user: publicUser(user), csrf });
-});
+// Login, 2FA e recuperação de senha ficam em routes/auth.js.
+const loginLimiter = rateLimiter({ windowMs: 15 * 60_000, max: 20, message: 'Muitas tentativas. Aguarde 15 minutos.' });
 
 router.use(requireUser);
 
@@ -60,8 +32,21 @@ router.post('/logout', (req, res) => {
 });
 
 router.get('/me', (req, res) => {
-  res.json({ user: { id: req.user.id, name: req.user.name, email: req.user.email, role: req.user.role },
-    csrf: req.user.csrf, questionTypes: QUESTION_TYPES, displays: DISPLAYS, settings: getSettings() });
+  const u = get('SELECT totp_enabled, notify_detractors, notify_reports, notify_offline FROM users WHERE id = ?', req.user.id);
+  res.json({ user: { id: req.user.id, name: req.user.name, email: req.user.email, role: req.user.role, mfaEnabled: !!u.totp_enabled,
+    notify: { detractors: !!u.notify_detractors, reports: !!u.notify_reports, offline: !!u.notify_offline } },
+  mfaSetupRequired: req.user.mfaSetupRequired, csrf: req.user.csrf,
+  questionTypes: QUESTION_TYPES, displays: DISPLAYS, settings: req.user.mfaSetupRequired ? null : getSettings() });
+});
+
+// Preferências de notificação do próprio usuário.
+router.put('/me/notifications', (req, res) => {
+  const b = req.body || {};
+  const f = (v, cur) => (v === undefined ? cur : v === true ? 1 : v === false ? 0 : (() => { throw bad('Valor inválido.'); })());
+  const u = get('SELECT notify_detractors, notify_reports, notify_offline FROM users WHERE id = ?', req.user.id);
+  run('UPDATE users SET notify_detractors = ?, notify_reports = ?, notify_offline = ? WHERE id = ?',
+    f(b.detractors, u.notify_detractors), f(b.reports, u.notify_reports), f(b.offline, u.notify_offline), req.user.id);
+  res.json({ ok: true });
 });
 
 router.post('/me/password', loginLimiter, (req, res) => {
@@ -76,7 +61,6 @@ router.post('/me/password', loginLimiter, (req, res) => {
   res.json({ ok: true });
 });
 
-function publicUser(u) { return { id: u.id, name: u.name, email: u.email, role: u.role }; }
 
 // ---------------------------------------------------------------- escopo por filial
 // Retorna null (todas as filiais) para admin, ou a lista de filiais do gestor.
@@ -447,7 +431,7 @@ router.get('/responses.csv', (req, res) => {
 
 // ---------------------------------------------------------------- usuários (somente admin)
 router.get('/users', requireAdmin, (req, res) => {
-  const users = all('SELECT id, name, email, role, active, locked_until, created_at FROM users ORDER BY name');
+  const users = all('SELECT id, name, email, role, active, locked_until, created_at, totp_enabled FROM users ORDER BY name');
   const links = all('SELECT user_id, branch_id FROM user_branches');
   res.json(users.map((u) => ({ ...u, branches: links.filter((l) => l.user_id === u.id).map((l) => l.branch_id) })));
 });
@@ -502,7 +486,13 @@ router.put('/users/:id', requireAdmin, (req, res) => {
   });
   // Mudança de papel, desativação ou senha nova derrubam as sessões abertas do usuário.
   if (u.password || !u.active || u.role !== existing.role) destroyUserSessions(uid);
-  audit(req.user.id, 'user.update', { id: uid, email: u.email, role: u.role, active: u.active, passwordReset: !!u.password }, req.ip);
+  // Reset do 2FA (celular perdido): o usuário configura de novo no próximo login.
+  const resetMfa = req.body?.resetMfa === true;
+  if (resetMfa) {
+    if (uid === req.user.id) throw bad('Para trocar o seu próprio 2FA, use "Minha conta".');
+    resetUserMfa(uid);
+  }
+  audit(req.user.id, 'user.update', { id: uid, email: u.email, role: u.role, active: u.active, passwordReset: !!u.password, resetMfa }, req.ip);
   res.json({ ok: true });
 });
 

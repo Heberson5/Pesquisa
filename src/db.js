@@ -5,7 +5,10 @@ const path = require('node:path');
 const fs = require('node:fs');
 const { DatabaseSync } = require('node:sqlite');
 
-const DB_FILE = process.env.DB_FILE || path.join(__dirname, '..', 'data', 'pesquisa.db');
+const { DATA_DIR } = require('./config');
+
+const DB_FILE = process.env.DB_FILE || path.join(DATA_DIR, 'pesquisa.db');
+const MEDIA_DIR = process.env.MEDIA_DIR || path.join(DATA_DIR, 'media');
 if (DB_FILE !== ':memory:') fs.mkdirSync(path.dirname(DB_FILE), { recursive: true });
 
 const db = new DatabaseSync(DB_FILE);
@@ -136,6 +139,121 @@ function addColumnIfMissing(table, column, ddl) {
 addColumnIfMissing('questions', 'display', "display TEXT NOT NULL DEFAULT 'default' CHECK (display IN ('default','numbers','faces','icons'))");
 addColumnIfMissing('questions', 'icon', 'icon TEXT');
 
+// ---- versão 3: 2FA, recuperação de senha, e-mails, contato (LGPD), casos, metas, agendamento,
+//      link/QR por filial, idiomas, condicionais, horário de funcionamento e alertas.
+db.exec(`
+CREATE TABLE IF NOT EXISTS mfa_recovery_codes (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  code_hash TEXT NOT NULL,
+  used_at INTEGER,
+  PRIMARY KEY (user_id, code_hash)
+);
+CREATE TABLE IF NOT EXISTS mfa_challenges (
+  token_hash TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at INTEGER NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS password_resets (
+  token_hash TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  used_at INTEGER
+);
+CREATE TABLE IF NOT EXISTS outbox (
+  id INTEGER PRIMARY KEY,
+  kind TEXT NOT NULL,
+  channel TEXT NOT NULL DEFAULT 'email' CHECK (channel IN ('email','webhook','whatsapp')),
+  recipient TEXT NOT NULL,
+  subject TEXT,
+  body_text TEXT,
+  body_html TEXT,
+  payload TEXT,
+  attachment BLOB,
+  attachment_name TEXT,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','sent','failed')),
+  attempts INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at INTEGER NOT NULL,
+  last_error TEXT,
+  created_at INTEGER NOT NULL,
+  sent_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_outbox_pending ON outbox(status, next_attempt_at);
+CREATE TABLE IF NOT EXISTS cases (
+  id INTEGER PRIMARY KEY,
+  response_id INTEGER NOT NULL UNIQUE REFERENCES responses(id) ON DELETE CASCADE,
+  branch_id INTEGER NOT NULL REFERENCES branches(id),
+  min_score INTEGER,
+  status TEXT NOT NULL DEFAULT 'aberto' CHECK (status IN ('aberto','em_contato','resolvido','sem_retorno')),
+  assignee_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  resolved_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_cases_branch_status ON cases(branch_id, status);
+CREATE TABLE IF NOT EXISTS case_notes (
+  id INTEGER PRIMARY KEY,
+  case_id INTEGER NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+  user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  at INTEGER NOT NULL,
+  text TEXT,
+  status_from TEXT,
+  status_to TEXT
+);
+CREATE TABLE IF NOT EXISTS schedules (
+  id INTEGER PRIMARY KEY,
+  survey_id INTEGER NOT NULL REFERENCES surveys(id) ON DELETE CASCADE,
+  branch_id INTEGER REFERENCES branches(id) ON DELETE CASCADE,
+  starts_at INTEGER NOT NULL,
+  ends_at INTEGER NOT NULL,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at INTEGER NOT NULL,
+  CHECK (ends_at > starts_at)
+);
+CREATE INDEX IF NOT EXISTS idx_schedules_time ON schedules(starts_at, ends_at);
+CREATE TABLE IF NOT EXISTS link_tickets (
+  nonce TEXT PRIMARY KEY,
+  branch_id INTEGER NOT NULL,
+  issued_at INTEGER NOT NULL,
+  used_at INTEGER
+);
+`);
+for (const [table, column, ddl] of [
+  ['users', 'totp_secret_enc', 'totp_secret_enc TEXT'],
+  ['users', 'totp_enabled', 'totp_enabled INTEGER NOT NULL DEFAULT 0'],
+  ['users', 'totp_last_step', 'totp_last_step INTEGER'],
+  ['users', 'notify_detractors', 'notify_detractors INTEGER NOT NULL DEFAULT 1'],
+  ['users', 'notify_reports', 'notify_reports INTEGER NOT NULL DEFAULT 1'],
+  ['users', 'notify_offline', 'notify_offline INTEGER NOT NULL DEFAULT 1'],
+  ['sessions', 'mfa_setup_required', 'mfa_setup_required INTEGER NOT NULL DEFAULT 0'],
+  ['responses', 'channel', "channel TEXT NOT NULL DEFAULT 'tablet'"],
+  ['responses', 'lang', 'lang TEXT'],
+  ['responses', 'contact_name_enc', 'contact_name_enc TEXT'],
+  ['responses', 'contact_phone_enc', 'contact_phone_enc TEXT'],
+  ['responses', 'contact_email_enc', 'contact_email_enc TEXT'],
+  ['responses', 'contact_phone_lookup', 'contact_phone_lookup TEXT'],
+  ['responses', 'contact_email_lookup', 'contact_email_lookup TEXT'],
+  ['responses', 'contact_consent_at', 'contact_consent_at INTEGER'],
+  ['responses', 'anonymized_at', 'anonymized_at INTEGER'],
+  ['branches', 'alert_emails', 'alert_emails TEXT'],
+  ['branches', 'alert_phones', 'alert_phones TEXT'],
+  ['branches', 'nps_goal', 'nps_goal INTEGER'],
+  ['branches', 'hours_json', 'hours_json TEXT'],
+  ['branches', 'public_enabled', 'public_enabled INTEGER NOT NULL DEFAULT 0'],
+  ['branches', 'public_token_enc', 'public_token_enc TEXT'],
+  ['branches', 'public_token_hash', 'public_token_hash TEXT'],
+  ['devices', 'offline_alerted_at', 'offline_alerted_at INTEGER'],
+  ['surveys', 'languages', "languages TEXT NOT NULL DEFAULT '[\"pt\"]'"],
+  ['surveys', 'i18n', 'i18n TEXT'],
+  ['surveys', 'contact_mode', "contact_mode TEXT NOT NULL DEFAULT 'never'"],
+  ['questions', 'show_if', 'show_if TEXT'],
+  ['questions', 'i18n', 'i18n TEXT'],
+]) addColumnIfMissing(table, column, ddl);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_resp_phone ON responses(contact_phone_lookup);
+CREATE INDEX IF NOT EXISTS idx_resp_email ON responses(contact_email_lookup);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_branch_public ON branches(public_token_hash);`);
+
 // Bancos de versões anteriores não aceitavam a aparência 'default'. Recria a tabela seguindo o
 // procedimento oficial do SQLite (nova tabela → copia → apaga a antiga → renomeia a nova), que mantém
 // válidas as referências de `answers` para `questions`.
@@ -177,4 +295,4 @@ function audit(userId, action, detail, ip) {
     Date.now(), userId ?? null, action, detail ? JSON.stringify(detail).slice(0, 2000) : null, ip ?? null);
 }
 
-module.exports = { db, tx, get, all, run, audit };
+module.exports = { db, tx, get, all, run, audit, MEDIA_DIR };

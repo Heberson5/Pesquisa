@@ -3,7 +3,7 @@ const path = require('node:path');
 const express = require('express');
 const { securityHeaders } = require('./src/security');
 const { HttpError } = require('./src/validate');
-const { get, run } = require('./src/db');
+const { get } = require('./src/db');
 const { getSettings, publicBranding } = require('./src/settings');
 
 const app = express();
@@ -18,11 +18,12 @@ app.use('/api', express.json({ limit: '64kb', strict: true }));
 // Identidade visual pública (tela de login e tablet). Não expõe nada sensível.
 app.get('/api/public/branding', (req, res) => res.json(publicBranding()));
 app.use('/api/kiosk', require('./src/routes/kiosk'));
+app.use('/api/admin', require('./src/routes/auth'));
 app.use('/api/admin', require('./src/routes/admin'));
 app.use('/api', (req, res) => res.status(404).json({ error: 'Rota não encontrada.' }));
 
 // Mídia de agradecimento: nomes aleatórios de 128 bits, tipo validado no upload.
-const MEDIA_DIR = process.env.MEDIA_DIR || path.join(__dirname, 'data', 'media');
+const { MEDIA_DIR } = require('./src/db');
 app.get('/media/:id', (req, res, next) => {
   if (!/^[a-f0-9]{32}$/.test(req.params.id)) return res.status(404).end();
   const m = get('SELECT id, mime FROM media WHERE id = ?', req.params.id);
@@ -72,11 +73,8 @@ app.use((err, req, res, next) => {
 });
 
 if (require.main === module) {
-  // Limpeza periódica de sessões expiradas e códigos de pareamento vencidos.
-  setInterval(() => {
-    run('DELETE FROM sessions WHERE created_at < ? OR last_seen_at < ?', Date.now() - 12 * 3_600_000, Date.now() - 2 * 3_600_000);
-    run('UPDATE devices SET pair_code_hash = NULL WHERE pair_expires_at < ?', Date.now());
-  }, 10 * 60_000).unref();
+  const { jobsEnabled } = require('./src/config');
+  if (jobsEnabled) require('./src/jobs').start();
   const port = Number(process.env.PORT || 3000);
   const host = process.env.HOST || '127.0.0.1';
   app.listen(port, host, () => console.log(`Pesquisa de satisfação rodando em http://${host}:${port}  (painel: /admin  •  tablet: /kiosk)`));

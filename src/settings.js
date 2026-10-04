@@ -1,7 +1,8 @@
 'use strict';
 // Configurações gerais da empresa: identidade visual, ícones do menu e das respostas.
 const { all, run, get } = require('./db');
-const { bad, str } = require('./validate');
+const { bad, str, int } = require('./validate');
+const { isEmail, validateWebhookUrl } = require('./notify');
 const Icons = require('../public/shared/icons');
 
 const HEX = /^#[0-9a-f]{6}$/i;
@@ -19,7 +20,16 @@ const DEFAULTS = {
   ratingIcon: 'star',
   colorScheme: 'bands', // cores por nível: faixas do NPS (vermelho/amarelo/verde) ou gradiente
   faceStyle: 'color', // carinhas coloridas ou monocromáticas
+  requireAdminMfa: true, // 2FA obrigatório para administradores
+  privacyText: 'Suas respostas são usadas apenas para melhorar nosso atendimento. Dados de contato só são coletados com sua autorização, ficam protegidos e podem ser excluídos a qualquer momento a seu pedido.',
+  retention: { commentsMonths: 24, contactsMonths: 12, auditMonths: 24 },
+  alerts: { detractorEmail: true, webhookUrl: null, whatsappTemplate: null, whatsappLanguage: 'pt_BR' },
+  weeklyReport: { enabled: false, weekday: 1, hour: 8, extraEmails: [] },
+  defaultNpsGoal: 50,
+  offlineAlert: { enabled: true, minutes: 30 },
 };
+
+const OBJECT_KEYS = ['menuIcons', 'retention', 'alerts', 'weeklyReport', 'offlineAlert'];
 
 // Aceita somente texto (recusa listas/objetos que virariam texto por conversão automática).
 function text(v, fallback, field) {
@@ -28,11 +38,21 @@ function text(v, fallback, field) {
   return v;
 }
 
+function obj(v, field) { if (!v || typeof v !== 'object' || Array.isArray(v)) throw bad(`Valor de ${field} inválido.`); }
+function flag(v) { if (typeof v !== 'boolean') throw bad('Valor verdadeiro/falso inválido.'); return v; }
+// Lista de e-mails: sem quebras de linha nem caracteres que permitam injeção de cabeçalho.
+function emailList(v, max = 20) {
+  if (!Array.isArray(v) || v.length > max) throw bad(`Informe no máximo ${max} e-mails.`);
+  const out = [...new Set(v.map((e) => String(e).trim().toLowerCase()).filter(Boolean))];
+  for (const e of out) if (!isEmail(e)) throw bad(`E-mail inválido: ${e.slice(0, 60)}`);
+  return out;
+}
+
 function getSettings() {
   const out = structuredClone(DEFAULTS);
   for (const { key, value } of all('SELECT key, value FROM settings')) {
     if (!Object.hasOwn(DEFAULTS, key)) continue;
-    try { out[key] = key === 'menuIcons' ? { ...DEFAULTS.menuIcons, ...JSON.parse(value) } : JSON.parse(value); } catch { /* ignora valor corrompido */ }
+    try { out[key] = OBJECT_KEYS.includes(key) ? { ...DEFAULTS[key], ...JSON.parse(value) } : JSON.parse(value); } catch { /* ignora valor corrompido */ }
   }
   return out;
 }
@@ -75,6 +95,55 @@ function saveSettings(input) {
       next.menuIcons[k] = v;
     }
   }
+  if (input.requireAdminMfa !== undefined) {
+    if (typeof input.requireAdminMfa !== 'boolean') throw bad('Valor inválido para 2FA obrigatório.');
+    next.requireAdminMfa = input.requireAdminMfa;
+  } else next.requireAdminMfa = cur.requireAdminMfa;
+  next.privacyText = input.privacyText === undefined ? cur.privacyText : str(input.privacyText, { field: 'aviso de privacidade', min: 20, max: 1500 });
+  next.retention = { ...cur.retention };
+  if (input.retention !== undefined) {
+    obj(input.retention, 'retenção');
+    for (const [k, min, max] of [['commentsMonths', 1, 120], ['contactsMonths', 1, 60], ['auditMonths', 6, 120]]) {
+      if (input.retention[k] !== undefined) next.retention[k] = int(input.retention[k], { field: 'prazo de retenção', min, max });
+    }
+  }
+  next.alerts = { ...cur.alerts };
+  if (input.alerts !== undefined) {
+    obj(input.alerts, 'alertas');
+    const a = input.alerts;
+    if (a.detractorEmail !== undefined) next.alerts.detractorEmail = flag(a.detractorEmail);
+    if (a.webhookUrl !== undefined) {
+      const url = a.webhookUrl ? str(a.webhookUrl, { field: 'URL do webhook', max: 500 }) : null;
+      if (url) { const e = validateWebhookUrl(url); if (e) throw bad(e); }
+      next.alerts.webhookUrl = url;
+    }
+    if (a.whatsappTemplate !== undefined) {
+      const t = a.whatsappTemplate ? String(a.whatsappTemplate) : null;
+      if (t && !/^[a-z0-9_]{1,512}$/.test(t)) throw bad('Nome do modelo do WhatsApp inválido (use letras minúsculas, números e _).');
+      next.alerts.whatsappTemplate = t;
+    }
+    if (a.whatsappLanguage !== undefined) {
+      if (!/^[a-z]{2}(_[A-Z]{2})?$/.test(String(a.whatsappLanguage))) throw bad('Idioma do modelo do WhatsApp inválido.');
+      next.alerts.whatsappLanguage = a.whatsappLanguage;
+    }
+  }
+  next.weeklyReport = { ...cur.weeklyReport };
+  if (input.weeklyReport !== undefined) {
+    obj(input.weeklyReport, 'relatório semanal');
+    const w = input.weeklyReport;
+    if (w.enabled !== undefined) next.weeklyReport.enabled = flag(w.enabled);
+    if (w.weekday !== undefined) next.weeklyReport.weekday = int(w.weekday, { field: 'dia da semana', min: 0, max: 6 });
+    if (w.hour !== undefined) next.weeklyReport.hour = int(w.hour, { field: 'hora', min: 0, max: 23 });
+    if (w.extraEmails !== undefined) next.weeklyReport.extraEmails = emailList(w.extraEmails);
+  }
+  if (input.defaultNpsGoal !== undefined) next.defaultNpsGoal = input.defaultNpsGoal === null ? null : int(input.defaultNpsGoal, { field: 'meta de NPS', min: -100, max: 100 });
+  else next.defaultNpsGoal = cur.defaultNpsGoal;
+  next.offlineAlert = { ...cur.offlineAlert };
+  if (input.offlineAlert !== undefined) {
+    obj(input.offlineAlert, 'alerta de tablet');
+    if (input.offlineAlert.enabled !== undefined) next.offlineAlert.enabled = flag(input.offlineAlert.enabled);
+    if (input.offlineAlert.minutes !== undefined) next.offlineAlert.minutes = int(input.offlineAlert.minutes, { field: 'minutos sem sinal', min: 10, max: 1440 });
+  }
   for (const [k, v] of Object.entries(next)) {
     run('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', k, JSON.stringify(v));
   }
@@ -93,7 +162,8 @@ function publicBranding() {
     ratingIcon: s.ratingIcon,
     colorScheme: s.colorScheme,
     faceStyle: s.faceStyle,
+    privacyText: s.privacyText,
   };
 }
 
-module.exports = { DEFAULTS, getSettings, saveSettings, publicBranding };
+module.exports = { DEFAULTS, getSettings, saveSettings, publicBranding, emailList };

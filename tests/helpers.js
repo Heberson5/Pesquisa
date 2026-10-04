@@ -8,9 +8,14 @@ const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pesquisa-test-'));
 process.env.DB_FILE = path.join(dir, 'test.db');
 process.env.MEDIA_DIR = path.join(dir, 'media');
 process.env.TRUST_PROXY = '1'; // permite simular IPs distintos via X-Forwarded-For
+process.env.DATA_DIR = dir;
+process.env.NODE_ENV = 'test';
+process.env.DISABLE_JOBS = 'true';
 
 const app = require('../server');
 const { run, get } = require('../src/db');
+// Os testes antigos rodam sem 2FA obrigatório; os testes de 2FA ligam explicitamente.
+run("INSERT INTO settings (key, value) VALUES ('requireAdminMfa', 'false') ON CONFLICT(key) DO UPDATE SET value = excluded.value");
 const { hashPassword } = require('../src/security');
 
 let server;

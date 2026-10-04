@@ -46,7 +46,8 @@
       throw new Error('401');
     }
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || 'Erro ' + res.status);
+    if (res.status === 403 && data.code === 'MFA_SETUP_REQUIRED') { showMfaSetup(true); throw new Error('401'); }
+    if (!res.ok) { const e = new Error(data.error || 'Erro ' + res.status); e.status = res.status; throw e; }
     return data;
   }
 
@@ -86,34 +87,134 @@
   const loadBranding = fetch('/api/public/branding', { cache: 'no-store' }).then((r) => r.json()).then(applyBranding).catch(() => {});
 
   // ------------------------------------------------------------ login
-  async function showLogin(msg) {
+  // Moldura das telas sem login (entrar, 2FA, esqueci a senha, redefinir).
+  async function loginShell(title, sub, ...content) {
     await loadBranding;
-    const email = h('input', { type: 'email', required: true, autocomplete: 'username', placeholder: 'seu@email.com' });
-    const pw = h('input', { type: 'password', required: true, autocomplete: 'current-password', placeholder: '••••••••••' });
-    const err = h('p', { class: 'bad small', role: 'alert' }, msg || '');
-    const btn = h('button', { class: 'btn', type: 'submit' }, 'Entrar');
     root.replaceChildren(h('div', { class: 'login-wrap' },
       h('div', { class: 'login-hero' },
         branding.logoUrl ? h('div', {}, h('span', { class: 'logo-box' }, h('img', { src: branding.logoUrl, alt: branding.companyName })))
           : h('div', { class: 'row' }, h('span', { class: 'brand-mark' }, initials(branding.companyName)), h('b', {}, branding.companyName)),
         h('div', {}, h('h2', {}, 'A opinião dos seus clientes, de todas as filiais, em um só lugar.'),
           h('p', {}, 'NPS em tempo real, relatórios em PowerPoint e tablets em modo quiosque.'))),
-      h('div', { class: 'login-side' }, h('div', { class: 'login' },
-        h('h1', {}, 'Entrar no painel'),
-        h('p', { class: 'muted' }, branding.companyName),
-        h('form', { onsubmit: async (e) => {
-          e.preventDefault(); btn.disabled = true; err.textContent = '';
-          try {
-            const r = await api('/login', { method: 'POST', body: { email: email.value, password: pw.value } });
-            csrf = r.csrf; await loadMe(); route();
-          } catch (ex) { err.textContent = ex.message; btn.disabled = false; pw.value = ''; }
-        } }, h('label', { class: 'f' }, 'E-mail', email), h('label', { class: 'f' }, 'Senha', pw), btn, err)))));
+      h('div', { class: 'login-side' }, h('div', { class: 'login' }, h('h1', {}, title), sub ? h('p', { class: 'muted' }, sub) : null, ...content))));
+  }
+
+  function formOf(fields, button, onSubmit) {
+    const err = h('p', { class: 'bad small', role: 'alert' });
+    const btn = h('button', { class: 'btn', type: 'submit' }, button);
+    const form = h('form', { onsubmit: async (e) => {
+      e.preventDefault(); btn.disabled = true; err.textContent = '';
+      try { await onSubmit(); } catch (ex) { if (ex.message !== '401') err.textContent = ex.message; btn.disabled = false; }
+    } }, ...fields, btn, err);
+    return { form, err };
+  }
+
+  async function afterLogin(r) {
+    csrf = r.csrf;
+    if (r.mfaSetupRequired) return showMfaSetup(true);
+    await loadMe(); route();
+  }
+
+  async function showLogin(msg) {
+    const email = h('input', { type: 'email', required: true, autocomplete: 'username', placeholder: 'seu@email.com' });
+    const pw = h('input', { type: 'password', required: true, autocomplete: 'current-password', placeholder: '••••••••••' });
+    const { form, err } = formOf([h('label', { class: 'f' }, 'E-mail', email), h('label', { class: 'f' }, 'Senha', pw)], 'Entrar', async () => {
+      try {
+        const r = await api('/login', { method: 'POST', body: { email: email.value, password: pw.value } });
+        if (r.mfaRequired) return showMfaStep(r.challenge);
+        await afterLogin(r);
+      } catch (ex) { pw.value = ''; throw ex; }
+    });
+    err.textContent = msg || '';
+    await loginShell('Entrar no painel', branding.companyName, form,
+      h('a', { href: '#', class: 'small', onclick: (e) => { e.preventDefault(); showForgot(email.value); } }, 'Esqueci minha senha'));
     email.focus();
+  }
+
+  async function showMfaStep(challenge) {
+    const code = h('input', { inputmode: 'numeric', autocomplete: 'one-time-code', maxlength: '11', placeholder: '000000', class: 'code-input' });
+    const { form } = formOf([h('label', { class: 'f' }, 'Código de 6 dígitos', code)], 'Confirmar', async () => {
+      await afterLogin(await api('/login/mfa', { method: 'POST', body: { challenge, code: code.value } }));
+    });
+    await loginShell('Verificação em duas etapas', 'Abra o aplicativo autenticador no celular e digite o código. Sem o celular? Use um dos códigos de recuperação.',
+      form, h('a', { href: '#', class: 'small', onclick: (e) => { e.preventDefault(); showLogin(); } }, 'Voltar'));
+    code.focus();
+  }
+
+  async function showForgot(prefill = '') {
+    const email = h('input', { type: 'email', required: true, value: prefill, placeholder: 'seu@email.com' });
+    const { form, err } = formOf([h('label', { class: 'f' }, 'E-mail cadastrado', email)], 'Enviar link', async () => {
+      const r = await api('/password/forgot', { method: 'POST', body: { email: email.value } });
+      err.className = 'good small'; err.textContent = r.message;
+    });
+    await loginShell('Esqueci minha senha', 'Enviaremos um link para criar uma nova senha. O link vale por 30 minutos.',
+      form, h('a', { href: '#', class: 'small', onclick: (e) => { e.preventDefault(); showLogin(); } }, 'Voltar ao login'));
+    email.focus();
+  }
+
+  async function showReset(token) {
+    const pw = h('input', { type: 'password', autocomplete: 'new-password', required: true });
+    const pw2 = h('input', { type: 'password', autocomplete: 'new-password', required: true });
+    const { form } = formOf([h('label', { class: 'f' }, 'Nova senha (mín. 10 caracteres, letras e números)', pw), h('label', { class: 'f' }, 'Repita a nova senha', pw2)], 'Salvar nova senha', async () => {
+      if (pw.value !== pw2.value) throw new Error('As senhas não conferem.');
+      await api('/password/reset', { method: 'POST', body: { token, password: pw.value } });
+      history.replaceState(null, '', '/admin/'); // remove o token da barra de endereço
+      showLogin('Senha alterada. Entre com a nova senha.');
+    });
+    await loginShell('Criar nova senha', null, form);
+  }
+
+  // Configuração do 2FA. forced = administrador que ainda não ativou (obrigatório).
+  async function showMfaSetup(forced) {
+    const pw = h('input', { type: 'password', autocomplete: 'current-password', required: true });
+    const area = h('div');
+    const { form } = formOf([h('label', { class: 'f' }, 'Confirme sua senha', pw)], 'Continuar', async () => {
+      const s = await api('/mfa/setup', { method: 'POST', body: { password: pw.value } });
+      const code = h('input', { inputmode: 'numeric', autocomplete: 'one-time-code', maxlength: '6', placeholder: '000000', class: 'code-input' });
+      const step2 = formOf([h('label', { class: 'f' }, 'Digite o código que aparece no aplicativo', code)], 'Ativar', async () => {
+        const r = await api('/mfa/enable', { method: 'POST', body: { code: code.value } });
+        showRecoveryCodes(r.recoveryCodes, forced);
+      });
+      area.replaceChildren(
+        h('ol', { class: 'small steps' }, h('li', {}, 'Instale o Google Authenticator, Microsoft Authenticator ou Authy.'),
+          h('li', {}, 'Leia o QR Code abaixo com o aplicativo.'), h('li', {}, 'Digite o código de 6 dígitos gerado.')),
+        h('img', { src: s.qr, alt: 'QR Code para o aplicativo autenticador', class: 'qr' }),
+        h('p', { class: 'small muted' }, 'Não consegue ler? Digite esta chave: ', h('code', { class: 'secret' }, s.secret)),
+        step2.form);
+      code.focus();
+    });
+    area.append(form);
+    const content = [area];
+    if (forced) {
+      content.push(h('a', { href: '#', class: 'small', onclick: async (e) => { e.preventDefault(); await api('/logout', { method: 'POST' }).catch(() => {}); me = null; showLogin(); } }, 'Sair'));
+      await loginShell('Ative a verificação em duas etapas', 'Por segurança, administradores precisam usar um código do celular além da senha.', ...content);
+    } else {
+      modal('Ativar verificação em duas etapas', h('div', {}, ...content));
+    }
+    pw.focus();
+  }
+
+  function showRecoveryCodes(codes, forced) {
+    document.querySelector('.modal-bg')?.remove();
+    const text = codes.join('\n');
+    const download = () => {
+      const a = h('a', { href: URL.createObjectURL(new Blob([`Códigos de recuperação — ${branding.companyName}\nCada código funciona uma única vez.\n\n${text}\n`], { type: 'text/plain' })), download: 'codigos-recuperacao.txt' });
+      document.body.append(a); a.click(); a.remove();
+    };
+    const content = h('div', {},
+      h('p', {}, 'Guarde estes códigos em local seguro. Cada um permite entrar uma única vez caso você perca o celular.'),
+      h('div', { class: 'recovery' }, codes.map((c) => h('code', {}, c))),
+      h('div', { class: 'row' }, h('button', { class: 'btn secondary', onclick: download }, icon('download', 16), 'Baixar .txt'),
+        h('button', { class: 'btn secondary', onclick: () => navigator.clipboard?.writeText(text).then(() => toast('Copiado.')) }, icon('copy', 16), 'Copiar')),
+      h('div', { class: 'row' }, h('button', { class: 'btn', onclick: async () => { document.querySelector('.modal-bg')?.remove(); me = null; await loadMe(); route(); } }, 'Guardei os códigos, continuar')));
+    if (forced) loginShell('2FA ativado', null, content);
+    else modal('2FA ativado', content);
   }
 
   let displays = {};
   async function loadMe() {
     const r = await api('/me');
+    if (r.mfaSetupRequired) { csrf = r.csrf; showMfaSetup(true); throw new Error('401'); }
     me = r.user; csrf = r.csrf; questionTypes = r.questionTypes; displays = r.displays; settings = r.settings;
     applyBranding({ companyName: settings.companyName, primaryColor: settings.primaryColor, accentColor: settings.accentColor,
       logoUrl: settings.logoMediaId ? '/media/' + settings.logoMediaId : null });
@@ -177,6 +278,8 @@
   }
 
   async function route() {
+    const reset = /^#\/redefinir\/([A-Za-z0-9_-]{20,100})$/.exec(location.hash);
+    if (reset) return showReset(reset[1]);
     if (!me) { try { await loadMe(); } catch { return; } }
     const [, name = 'dashboard', param] = location.hash.split('/');
     const page = PAGES.find((p) => p[0] === name && (!p[3] || me.role === p[3])) || PAGES[0];
@@ -558,17 +661,19 @@
       role.value = u.role || 'gestor';
       const pw = h('input', { type: 'password', autocomplete: 'new-password', placeholder: u.id ? 'Deixe em branco para manter' : 'Mín. 10 caracteres, letras e números' });
       const active = h('input', { type: 'checkbox', checked: u.id ? !!u.active : true });
+      const resetMfa = h('input', { type: 'checkbox' });
       const chosen = new Set(u.branches || []);
       const brBox = h('div', {}, brs.map((b) => h('label', { class: 'chk' },
         h('input', { type: 'checkbox', checked: chosen.has(b.id), onchange: (e) => { e.target.checked ? chosen.add(b.id) : chosen.delete(b.id); } }), b.name)));
       modal(u.id ? 'Editar usuário' : 'Novo usuário', h('div', { class: 'form-grid' },
         h('label', { class: 'f' }, 'Nome', name), h('label', { class: 'f' }, 'E-mail', email), h('label', { class: 'f' }, 'Perfil', role),
         h('label', { class: 'f' }, 'Senha', pw), h('label', { class: 'chk' }, active, 'Ativo'),
+        u.id && u.totp_enabled && u.id !== me.id ? h('label', { class: 'chk', title: 'Use quando a pessoa perdeu o celular' }, resetMfa, 'Resetar 2FA (perdeu o celular)') : null,
         h('div', {}, h('div', { class: 'small muted' }, 'Filiais que o gestor pode ver'), brBox)),
       [{ label: 'Salvar', onClick: async (close) => {
         try {
           await api(u.id ? '/users/' + u.id : '/users', { method: u.id ? 'PUT' : 'POST', body: {
-            name: name.value, email: email.value, role: role.value, password: pw.value || null, active: active.checked, branches: [...chosen], unlock: true } });
+            name: name.value, email: email.value, role: role.value, password: pw.value || null, active: active.checked, branches: [...chosen], unlock: true, resetMfa: resetMfa.checked } });
           close(); toast('Usuário salvo.'); route();
         } catch (ex) { toast(ex.message, true); }
       } }]);
@@ -583,7 +688,8 @@
           h('td', {}, u.role === 'admin' ? 'Administrador' : 'Gestor'),
           h('td', { class: 'small' }, u.role === 'admin' ? 'Todas' : (u.branches.map(bName).join(', ') || '—')),
           h('td', {}, h('span', { class: 'badge ' + (u.active ? 'ok' : 'off') }, u.active ? 'Ativo' : 'Inativo'),
-            u.locked_until && u.locked_until > Date.now() ? h('span', { class: 'badge warn' }, 'Bloqueado') : null),
+            u.locked_until && u.locked_until > Date.now() ? h('span', { class: 'badge warn' }, 'Bloqueado') : null,
+            u.totp_enabled ? h('span', { class: 'badge ok', title: 'Verificação em duas etapas ativa' }, icon('shield', 12), '2FA') : null),
           h('td', {}, h('button', { class: 'btn secondary sm', onclick: () => edit(u) }, 'Editar'))))))));
   }
 
@@ -718,8 +824,36 @@
     const cur = h('input', { type: 'password', autocomplete: 'current-password' });
     const pw = h('input', { type: 'password', autocomplete: 'new-password' });
     const pw2 = h('input', { type: 'password', autocomplete: 'new-password' });
-    return h('div', {}, pageHead('Minha conta'),
-      h('div', { class: 'card' }, h('p', {}, h('b', {}, me.name), ' · ', me.email)),
+    const mfa = await api('/mfa');
+    const askPw = (title, withCode, run) => {
+      const p = h('input', { type: 'password', autocomplete: 'current-password' });
+      const c = h('input', { inputmode: 'numeric', maxlength: '6', placeholder: '000000' });
+      modal(title, h('div', { class: 'form-grid' }, h('label', { class: 'f' }, 'Senha atual', p), withCode ? h('label', { class: 'f' }, 'Código do aplicativo', c) : null),
+        [{ label: 'Confirmar', onClick: async (close) => { try { await run(p.value, c.value, close); } catch (ex) { toast(ex.message, true); } } }]);
+    };
+    const notif = (key, label) => h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: me.notify[key], onchange: async (e) => {
+      try { await api('/me/notifications', { method: 'PUT', body: { [key]: e.target.checked } }); me.notify[key] = e.target.checked; toast('Preferência salva.'); } catch (ex) { toast(ex.message, true); }
+    } }), label);
+    return h('div', {}, pageHead('Minha conta', me.email),
+      h('div', { class: 'grid c2' },
+        h('div', { class: 'card' }, h('h2', {}, 'Verificação em duas etapas (2FA)'),
+          h('p', {}, mfa.enabled ? h('span', { class: 'badge ok' }, icon('shield', 14), 'Ativa') : h('span', { class: 'badge warn' }, 'Desativada'),
+            mfa.enabled ? h('span', { class: 'small muted' }, `  ${mfa.recoveryCodesLeft} códigos de recuperação restantes`) : null),
+          h('p', { class: 'small muted' }, 'Além da senha, o login pede um código que muda a cada 30 segundos no seu celular.'),
+          h('div', { class: 'row' },
+            !mfa.enabled ? h('button', { class: 'btn', onclick: () => showMfaSetup(false) }, 'Ativar 2FA') : null,
+            mfa.enabled ? h('button', { class: 'btn secondary', onclick: () => askPw('Gerar novos códigos de recuperação', false, async (p, _c, close) => {
+              const r = await api('/mfa/recovery-codes', { method: 'POST', body: { password: p } }); close(); showRecoveryCodes(r.recoveryCodes, false);
+            }) }, 'Novos códigos de recuperação') : null,
+            mfa.enabled && !mfa.required ? h('button', { class: 'btn danger', onclick: () => askPw('Desativar 2FA', true, async (p, c, close) => {
+              await api('/mfa/disable', { method: 'POST', body: { password: p, code: c } }); close(); toast('2FA desativado.'); route();
+            }) }, 'Desativar') : null),
+          mfa.required ? h('p', { class: 'small muted' }, 'Obrigatório para administradores nesta empresa.') : null),
+        h('div', { class: 'card' }, h('h2', {}, 'Notificações por e-mail'),
+          h('div', { class: 'grid' },
+            notif('detractors', 'Cliente insatisfeito (nota de 0 a 6) nas minhas filiais'),
+            notif('reports', 'Relatório semanal em PowerPoint'),
+            notif('offline', 'Tablet sem sinal nas minhas filiais')))),
       h('div', { class: 'card' }, h('h2', {}, 'Trocar senha'), h('div', { class: 'form-grid' },
         h('label', { class: 'f' }, 'Senha atual', cur), h('label', { class: 'f' }, 'Nova senha', pw), h('label', { class: 'f' }, 'Repita a nova senha', pw2)),
       h('div', { class: 'row' }, h('button', { class: 'btn', onclick: async () => {

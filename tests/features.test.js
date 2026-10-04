@@ -98,7 +98,7 @@ test('configurações válidas aplicam marca pública, favicon e manifesto do ap
     logoMediaId: pngId, faviconMediaId: pngId, appIconMediaId: pngId, ratingIcon: 'heart', menuIcons: { dashboard: 'gauge' }, faceStyle: 'mono' } });
   assert.equal(r.status, 200, r.text);
   const pub = (await new Client().req('GET', '/api/public/branding')).json;
-  assert.deepEqual(Object.keys(pub).sort(), ['accentColor', 'colorScheme', 'companyName', 'defaultDisplay', 'faceStyle', 'logoUrl', 'primaryColor', 'ratingIcon']);
+  assert.deepEqual(Object.keys(pub).sort(), ['accentColor', 'colorScheme', 'companyName', 'defaultDisplay', 'faceStyle', 'logoUrl', 'primaryColor', 'privacyText', 'ratingIcon']);
   assert.equal(pub.logoUrl, '/media/' + pngId);
   const fav = await new Client().req('GET', '/favicon');
   assert.equal(fav.headers.get('content-type'), 'image/png');

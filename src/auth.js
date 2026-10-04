@@ -23,14 +23,14 @@ function cookieString(value, maxAgeSec) {
     SECURE_COOKIE ? 'Secure' : null, `Max-Age=${maxAgeSec}`].filter(Boolean).join('; ');
 }
 
-function createSession(res, user, req) {
+function createSession(res, user, req, { setupRequired = false } = {}) {
   const token = randomToken(32);
   const csrf = randomToken(24);
   const now = Date.now();
   // Sessões antigas do mesmo usuário continuam válidas (vários computadores),
   // mas o token novo sempre é gerado no login (evita fixação de sessão).
-  run('INSERT INTO sessions (token_hash, user_id, csrf, created_at, last_seen_at, ip, user_agent) VALUES (?,?,?,?,?,?,?)',
-    sha256(token), user.id, csrf, now, now, req.ip, String(req.get('user-agent') || '').slice(0, 300));
+  run('INSERT INTO sessions (token_hash, user_id, csrf, created_at, last_seen_at, ip, user_agent, mfa_setup_required) VALUES (?,?,?,?,?,?,?,?)',
+    sha256(token), user.id, csrf, now, now, req.ip, String(req.get('user-agent') || '').slice(0, 300), setupRequired ? 1 : 0);
   res.append('Set-Cookie', cookieString(token, ABSOLUTE_MS / 1000));
   return csrf;
 }
@@ -44,6 +44,7 @@ function destroySession(req, res) {
 function destroyUserSessions(userId) { run('DELETE FROM sessions WHERE user_id = ?', userId); }
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+const MFA_SETUP_ALLOWED = new Set(['GET /me', 'POST /mfa/setup', 'POST /mfa/enable', 'POST /logout']);
 
 // Middleware: exige sessão válida; em métodos que alteram dados exige CSRF + Origin.
 function requireUser(req, res, next) {
@@ -62,7 +63,11 @@ function requireUser(req, res, next) {
     if (!safeEqual(req.get('x-csrf-token'), s.csrf)) throw new HttpError(403, 'Token CSRF inválido.');
   }
   if (now - s.last_seen_at > 60_000) run('UPDATE sessions SET last_seen_at = ? WHERE token_hash = ?', now, s.token_hash);
-  req.user = { id: s.user_id, name: s.name, email: s.email, role: s.role, csrf: s.csrf };
+  req.user = { id: s.user_id, name: s.name, email: s.email, role: s.role, csrf: s.csrf, mfaSetupRequired: !!s.mfa_setup_required, sessionHash: s.token_hash };
+  // Administrador sem 2FA (quando obrigatório): só pode configurar o 2FA, ver seus dados ou sair.
+  if (req.user.mfaSetupRequired && !MFA_SETUP_ALLOWED.has(`${req.method} ${req.path}`)) {
+    return res.status(403).json({ error: 'Ative a autenticação em duas etapas para continuar.', code: 'MFA_SETUP_REQUIRED' });
+  }
   next();
 }
 

@@ -182,3 +182,10 @@ label.chk input { width: 18px; height: 18px; accent-color: var(--brand); }
 .mini-scale { display: grid; grid-template-columns: repeat(11, 1fr); gap: 3px; padding: 10px 8px; border-radius: 10px; align-items: center; justify-items: center; margin-bottom: 4px; }
 .mini-scale svg { width: 100%; max-width: 20px; height: auto; color: #fff; }
 .mini-num { width: 100%; aspect-ratio: 1; border-radius: 5px; color: #fff; font-size: 10px; font-weight: 800; display: grid; place-items: center; }
+.code-input { font: 700 26px ui-monospace, monospace; letter-spacing: .3em; text-align: center; }
+.qr { width: 200px; height: 200px; display: block; margin: 12px 0; border-radius: 12px; border: 1px solid var(--line); background: #fff; padding: 6px; }
+.secret { word-break: break-all; }
+.steps { padding-left: 18px; color: var(--muted); }
+.recovery { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin: 14px 0; }
+.recovery code { font: 700 16px ui-monospace, monospace; background: var(--surface-2); border: 1px solid var(--line); padding: 8px; border-radius: 8px; text-align: center; letter-spacing: .08em; }
+.login a.small { display: inline-block; margin-top: 14px; }
