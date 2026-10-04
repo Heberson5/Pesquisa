@@ -18,6 +18,8 @@ const TICKET_MAX_MS = 2 * 3_600_000;
 const TOKEN_RE = /^[A-Za-z0-9_-]{20,64}$/;
 
 const configLimiter = rateLimiter({ windowMs: 60_000, max: 30 });
+// Limite global por link: impede encher o banco de "bilhetes" com muitos IPs diferentes.
+const configPerLink = rateLimiter({ windowMs: 60_000, max: 600, keyFn: (req) => 'cfg:' + req.params.token, message: 'Muitos acessos no momento. Tente em instantes.' });
 const perIp = rateLimiter({ windowMs: 60 * 60_000, max: 10, message: 'Limite de avaliações deste aparelho atingido. Obrigado!' });
 const perBranch = rateLimiter({ windowMs: 60 * 60_000, max: 300, keyFn: (req) => 'b:' + req.params.token, message: 'Muitas avaliações no momento. Tente mais tarde.' });
 
@@ -28,7 +30,7 @@ function branchByToken(token) {
   return b;
 }
 
-router.get('/:token/config', configLimiter, (req, res) => {
+router.get('/:token/config', configLimiter, configPerLink, (req, res) => {
   const b = branchByToken(req.params.token);
   const nonce = crypto.randomBytes(16).toString('base64url');
   const issued = Date.now();

@@ -11,7 +11,9 @@ const DETRACTOR_MAX = 6;
 const parseList = (json) => { try { const v = JSON.parse(json || '[]'); return Array.isArray(v) ? v : []; } catch { return []; } };
 
 // Destinatários de e-mail de uma filial: lista da filial + gestores da filial e admins que querem o aviso.
+const PREF_COLUMNS = new Set(['notify_detractors', 'notify_reports', 'notify_offline']);
 function branchRecipients(branchId, prefColumn) {
+  if (!PREF_COLUMNS.has(prefColumn)) throw new Error('Preferência inválida.');
   const b = get('SELECT alert_emails FROM branches WHERE id = ?', branchId);
   const users = all(`SELECT DISTINCT u.email FROM users u LEFT JOIN user_branches ub ON ub.user_id = u.id
       WHERE u.active = 1 AND u.${prefColumn} = 1 AND (u.role = 'admin' OR ub.branch_id = ?)`, branchId).map((r) => r.email);

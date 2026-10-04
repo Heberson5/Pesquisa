@@ -90,7 +90,7 @@ test('2FA obrigatório: admin sem 2FA só consegue configurar o 2FA', async () =
   run("UPDATE settings SET value = 'true' WHERE key = 'requireAdminMfa'");
   const c = new Client(); const r = await c.login('obrig@t.local', PW);
   assert.equal(r.json.mfaSetupRequired, true);
-  for (const [m, u] of [['GET', '/api/admin/stats'], ['GET', '/api/admin/users'], ['GET', '/api/admin/responses.csv'], ['PUT', '/api/admin/settings'], ['POST', '/api/admin/branches']]) {
+  for (const [m, u] of [['GET', '/api/admin/cases'], ['POST', '/api/admin/privacy/search'], ['GET', '/api/admin/report.pptx'], ['GET', '/api/admin/stats'], ['GET', '/api/admin/users'], ['GET', '/api/admin/responses.csv'], ['PUT', '/api/admin/settings'], ['POST', '/api/admin/branches']]) {
     const x = await c.req(m, u, { body: {} });
     assert.equal(x.status, 403, `${m} ${u}`);
     assert.equal(x.json?.code, 'MFA_SETUP_REQUIRED');

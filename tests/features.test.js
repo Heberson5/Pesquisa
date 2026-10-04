@@ -74,6 +74,16 @@ test('estilo/ícone inválidos na pergunta são recusados', async () => {
   }
 });
 
+test('gestor não recebe integrações nem destinatários das configurações (menor privilégio)', async () => {
+  await admin.req('PUT', '/api/admin/settings', { body: { alerts: { webhookUrl: 'https://hooks.exemplo.com/segredo' }, weeklyReport: { extraEmails: ['diretoria@empresa.com'] } } });
+  for (const url of ['/api/admin/settings', '/api/admin/me']) {
+    const txt = (await gestor.req('GET', url)).text;
+    assert.doesNotMatch(txt, /hooks\.exemplo|diretoria@|privacyText|retention|requireAdminMfa/, url);
+  }
+  assert.match((await admin.req('GET', '/api/admin/settings')).text, /hooks\.exemplo/);
+  await admin.req('PUT', '/api/admin/settings', { body: { alerts: { webhookUrl: null }, weeklyReport: { extraEmails: [] } } });
+});
+
 test('configurações: só administrador altera; exige CSRF', async () => {
   assert.equal((await gestor.req('PUT', '/api/admin/settings', { body: { companyName: 'Hacker' } })).status, 403);
   assert.equal((await new Client().req('PUT', '/api/admin/settings', { body: { companyName: 'Hacker' } })).status, 401);

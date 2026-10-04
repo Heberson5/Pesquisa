@@ -5,16 +5,25 @@ Sistema de coleta de pesquisa de satisfação para **tablets em modo quiosque**,
 - **Painel:** `/admin` — NPS geral/por filial/por pergunta, respostas, exportação CSV, pesquisas, filiais, tablets, usuários, auditoria.
 - **Configurações:** logo, favicon, ícone do app, cores, ícones do menu e estilo das respostas (números coloridos, carinhas coloridas, estrelas, corações…).
 - **PowerPoint:** relatório com gráficos nativos, logo e cores da empresa.
+- **Casos:** cada nota de 0 a 6 vira um caso para tratar; alerta por e-mail, webhook ou WhatsApp.
+- **Segurança:** 2FA, recuperação de senha, LGPD (consentimento, criptografia, retenção, pedidos do titular).
+- **Coleta:** tablet em modo quiosque e QR Code por filial, perguntas condicionais, campanhas agendadas, PT/EN/ES.
 - **Tablet:** `/kiosk` — sem login; ativado uma vez com código gerado no painel; respostas sempre gravadas na filial do tablet.
 
 ```bash
 npm install
 npm run create-admin -- voce@empresa.com "Seu Nome"
 npm start          # http://127.0.0.1:3000/admin
-npm test           # 39 testes de segurança
+npm test           # 75 testes de segurança
 ```
 
-Requer Node.js 22.13+. Planejamento completo, arquitetura e segurança: [docs/PLANEJAMENTO.md](docs/PLANEJAMENTO.md).
+Requer Node.js 22.13+.
+
+| Documento | Para quê |
+|---|---|
+| [docs/DEPLOY.md](docs/DEPLOY.md) | Colocar no ar na VPS (Docker, HTTPS, backup) |
+| [docs/INSTALACAO-TABLET.md](docs/INSTALACAO-TABLET.md) | Instalar e travar os tablets nas filiais |
+| [docs/PLANEJAMENTO.md](docs/PLANEJAMENTO.md) | Arquitetura, segurança e testes |
 
 ## Telas
 

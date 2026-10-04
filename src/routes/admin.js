@@ -41,8 +41,16 @@ router.get('/me', (req, res) => {
   res.json({ user: { id: req.user.id, name: req.user.name, email: req.user.email, role: req.user.role, mfaEnabled: !!u.totp_enabled,
     notify: { detractors: !!u.notify_detractors, reports: !!u.notify_reports, offline: !!u.notify_offline } },
   mfaSetupRequired: req.user.mfaSetupRequired, csrf: req.user.csrf,
-  questionTypes: QUESTION_TYPES, displays: DISPLAYS, langs: LANG_LABELS, contactModes: CONTACT_MODES, settings: req.user.mfaSetupRequired ? null : getSettings() });
+  questionTypes: QUESTION_TYPES, displays: DISPLAYS, langs: LANG_LABELS, contactModes: CONTACT_MODES, settings: req.user.mfaSetupRequired ? null : settingsFor(req.user) });
 });
+
+// Menor privilégio: gestor recebe só o que a interface usa (marca, ícones, meta), sem integrações e destinatários.
+function settingsFor(user) {
+  const s = getSettings();
+  if (user.role === 'admin') return s;
+  const { companyName, primaryColor, accentColor, logoMediaId, menuIcons, defaultDisplay, ratingIcon, colorScheme, faceStyle, defaultNpsGoal } = s;
+  return { companyName, primaryColor, accentColor, logoMediaId, menuIcons, defaultDisplay, ratingIcon, colorScheme, faceStyle, defaultNpsGoal };
+}
 
 // Preferências de notificação do próprio usuário.
 router.put('/me/notifications', (req, res) => {
@@ -543,7 +551,7 @@ router.put('/users/:id', requireAdmin, (req, res) => {
 });
 
 // ---------------------------------------------------------------- configurações (somente admin)
-router.get('/settings', (req, res) => res.json(getSettings()));
+router.get('/settings', (req, res) => res.json(settingsFor(req.user)));
 
 router.get('/settings/notifications', requireAdmin, (req, res) => {
   const recent = all("SELECT id, kind, channel, status, attempts, last_error, created_at, sent_at FROM outbox ORDER BY id DESC LIMIT 30");
