@@ -189,3 +189,31 @@ label.chk input { width: 18px; height: 18px; accent-color: var(--brand); }
 .recovery { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin: 14px 0; }
 .recovery code { font: 700 16px ui-monospace, monospace; background: var(--surface-2); border: 1px solid var(--line); padding: 8px; border-radius: 8px; text-align: center; letter-spacing: .08em; }
 .login a.small { display: inline-block; margin-top: 14px; }
+.contact-box { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; margin: 12px 0; background: color-mix(in srgb, var(--good) 8%, var(--surface)); display: grid; gap: 4px; }
+.timeline { list-style: none; padding: 0; margin: 0 0 14px; border-left: 2px solid var(--line); }
+.timeline li { padding: 6px 0 8px 14px; position: relative; }
+.timeline li::before { content: ""; position: absolute; left: -6px; top: 12px; width: 10px; height: 10px; border-radius: 50%; background: var(--brand); }
+.q-editor .row.cond { background: var(--brand-soft); border-radius: 10px; padding: 8px 10px; }
+.q-editor .row.cond > * { flex: 0 1 auto; }
+.q-editor .row.cond select { min-width: 200px; }
+.q-editor .row.cond input[type=number] { width: 80px; }
+details.tr { margin-top: 10px; } details.tr summary { cursor: pointer; font-weight: 600; color: var(--muted); font-size: 14px; }
+details.tr .form-grid { margin-top: 10px; }
+.mt { margin-top: 18px; }
+.hours { display: grid; gap: 6px; margin-top: 8px; }
+.hours-row { display: grid; grid-template-columns: 130px 110px auto 110px; gap: 8px; align-items: center; }
+.poster { text-align: center; border: 1px solid var(--line); border-radius: 16px; padding: 20px; background: #fff; color: #0f172a; }
+.poster.off { opacity: .45; }
+.poster-logo { max-height: 60px; max-width: 220px; }
+.poster-title { font-size: 26px; font-weight: 800; margin: 10px 0; }
+.poster-qr { width: 240px; height: 240px; }
+.poster-sub { font-size: 14px; color: #475569; } .poster-branch { font-size: 12px; color: #94a3b8; margin-top: 6px; }
+@media print {
+  body.printing-poster > *:not(.modal-bg) { display: none !important; }
+  body.printing-poster .modal-bg { position: static; background: none; padding: 0; }
+  body.printing-poster .modal { box-shadow: none; width: 100%; max-height: none; }
+  body.printing-poster .modal > *:not(div), body.printing-poster .modal .actions, body.printing-poster .modal p, body.printing-poster .modal .row { display: none !important; }
+  body.printing-poster .poster { border: 0; padding-top: 60px; }
+  body.printing-poster .poster-title { font-size: 44px; } body.printing-poster .poster-qr { width: 420px; height: 420px; } body.printing-poster .poster-sub { font-size: 22px; }
+}
+.guide ol { padding-left: 20px; line-height: 1.6; } .guide h2 { margin-top: 16px; }

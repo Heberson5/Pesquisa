@@ -151,6 +151,8 @@ test('horário de funcionamento: tablet recebe "fechado" fora do expediente', as
   run('UPDATE branches SET hours_json = ? WHERE id = ?', JSON.stringify(closedAll), branch);
   const cfg = (await new Client().req('GET', '/api/kiosk/config', { headers: { Authorization: 'Bearer ' + devTok } })).json;
   assert.equal(cfg.open, false);
+  const link = (await new Client().req('GET', `/api/link/${token}/config`)).json;
+  assert.equal(link.open, true, 'QR Code continua aceitando fora do horário (cliente responde em casa)');
   run('UPDATE branches SET hours_json = NULL WHERE id = ?', branch);
   assert.equal((await new Client().req('GET', '/api/kiosk/config', { headers: { Authorization: 'Bearer ' + devTok } })).json.open, true);
 });

@@ -33,7 +33,10 @@ router.get('/:token/config', configLimiter, (req, res) => {
   const nonce = crypto.randomBytes(16).toString('base64url');
   const issued = Date.now();
   run('INSERT INTO link_tickets (nonce, branch_id, issued_at) VALUES (?,?,?)', nonce, b.id, issued);
-  res.json(buildConfig(b, { ticket: `${nonce}.${issued}.${sign(`${b.id}.${nonce}.${issued}`)}` }));
+  const cfg = buildConfig(b, { ticket: `${nonce}.${issued}.${sign(`${b.id}.${nonce}.${issued}`)}` });
+  // O horário de funcionamento vale para o tablet da loja; pelo QR o cliente pode responder depois, em casa.
+  cfg.open = true; delete cfg.reopens;
+  res.json(cfg);
 });
 
 router.post('/:token/responses', perIp, perBranch, (req, res) => {

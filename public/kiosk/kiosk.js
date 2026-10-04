@@ -390,7 +390,8 @@
     const email = h('input', { class: 'field', type: 'email', inputmode: 'email', maxlength: '254', autocomplete: 'off' });
     const consent = h('input', { type: 'checkbox', class: 'consent-box' });
     const err = h('p', { class: 'form-error', role: 'alert' });
-    [name, phone, email].forEach((i) => i.addEventListener('input', bumpIdle));
+    [name, phone, email].forEach((i) => i.addEventListener('input', () => { bumpIdle(); err.textContent = ''; }));
+    consent.addEventListener('change', () => { err.textContent = ''; });
     render('contact', h('div', { class: 'contact' },
       h('h1', { class: 'q-text' }, t('contactAsk')),
       h('div', { class: 'contact-form' },

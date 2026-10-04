@@ -21,6 +21,9 @@ every('retencao-lgpd', 6 * 3_600_000, () => {
   if (r.contacts || r.comments || r.audit) require('./db').audit(null, 'lgpd.retention', r, null);
 });
 
+every('relatorio-semanal', 10 * 60_000, () => require('./scheduled').sendWeeklyReport());
+every('tablets-sem-sinal', 5 * 60_000, () => require('./scheduled').checkOfflineTablets());
+
 async function tick() {
   const now = Date.now();
   for (const j of jobs) {
