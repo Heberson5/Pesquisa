@@ -53,7 +53,7 @@ function anonymize(ids) {
   const ph = ids.map(() => '?').join(',');
   tx(() => {
     run(`UPDATE responses SET contact_name_enc = NULL, contact_phone_enc = NULL, contact_email_enc = NULL, contact_phone_lookup = NULL,
-      contact_email_lookup = NULL, anonymized_at = ? WHERE id IN (${ph})`, Date.now(), ...ids);
+      contact_email_lookup = NULL, geo_lat = NULL, geo_lng = NULL, anonymized_at = ? WHERE id IN (${ph})`, Date.now(), ...ids);
     run(`DELETE FROM answers WHERE response_id IN (${ph}) AND question_id IN (SELECT id FROM questions WHERE type = 'text')`, ...ids);
     run(`UPDATE case_notes SET text = '[removido a pedido do titular]' WHERE text IS NOT NULL AND case_id IN (SELECT id FROM cases WHERE response_id IN (${ph}))`, ...ids);
   });

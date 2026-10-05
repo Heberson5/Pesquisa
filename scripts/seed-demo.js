@@ -14,6 +14,9 @@ if (err) { console.error(err); process.exit(1); }
 
 const now = Date.now();
 const rnd = (a, b) => a + Math.floor(Math.random() * (b - a + 1));
+const PLACES = [['Campinas', 'SP', 'Sudeste', -22.91, -47.06], ['São Paulo', 'SP', 'Sudeste', -23.55, -46.63], ['Belo Horizonte', 'MG', 'Sudeste', -19.92, -43.94],
+  ['Rio de Janeiro', 'RJ', 'Sudeste', -22.91, -43.17], ['Salvador', 'BA', 'Nordeste', -12.97, -38.51], ['Recife', 'PE', 'Nordeste', -8.05, -34.88],
+  ['Curitiba', 'PR', 'Sul', -25.43, -49.27], ['Porto Alegre', 'RS', 'Sul', -30.03, -51.23], ['Brasília', 'DF', 'Centro-Oeste', -15.78, -47.93], ['Manaus', 'AM', 'Norte', -3.12, -60.02]];
 const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
 
 tx(() => {
@@ -58,8 +61,13 @@ tx(() => {
     const n = rnd(110, 170);
     for (let i = 0; i < n; i++) {
       const t = now - rnd(0, 29) * 86_400_000 - rnd(0, 36_000_000);
-      const rid = run('INSERT INTO responses (uuid, survey_id, branch_id, device_id, started_at, submitted_at, received_at) VALUES (?,?,?,?,?,?,?)',
-        crypto.randomUUID(), surveyId, b.id, devId, t - rnd(20, 90) * 1000, t, t).lastInsertRowid;
+      // ~30% das respostas vieram pelo QR Code; a maioria autorizou a localização (cidade/UF/região).
+      const viaQr = Math.random() < 0.3;
+      const place = viaQr && Math.random() < 0.75 ? PLACES[rnd(0, PLACES.length - 1)] : null;
+      const rid = run(`INSERT INTO responses (uuid, survey_id, branch_id, device_id, started_at, submitted_at, received_at, channel, geo_city, geo_uf, geo_region, geo_lat, geo_lng)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      crypto.randomUUID(), surveyId, b.id, viaQr ? null : devId, t - rnd(20, 90) * 1000, t, t, viaQr ? 'link' : 'tablet',
+      place?.[0] ?? null, place?.[1] ?? null, place?.[2] ?? null, place?.[3] ?? null, place?.[4] ?? null).lastInsertRowid;
       const happy = Math.random() * 100 < b.bias + 30;
       const score = happy ? rnd(8, 10) : rnd(2, 8);
       const nps0 = Math.max(0, Math.min(10, score + rnd(-1, 1)));

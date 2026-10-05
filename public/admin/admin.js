@@ -326,14 +326,18 @@
     sv.value = state.surveyId || '';
     const ch = h('select', {}, h('option', { value: '' }, 'Tablet e QR Code'), h('option', { value: 'tablet' }, 'Só tablet'), h('option', { value: 'link' }, 'Só QR Code / link'));
     ch.value = state.channel || '';
-    const apply = () => { Object.assign(state, { from: from.value, to: to.value, branchId: br.value, surveyId: sv.value, channel: ch.value }); onChange(); };
-    [from, to, br, sv, ch].forEach((el) => el.addEventListener('change', apply));
+    const uf = h('select', {}, h('option', { value: '' }, 'Todos os estados'), UFS.map((u) => h('option', { value: u }, u)),
+      h('option', { value: '_fora' }, 'Fora do Brasil'), h('option', { value: '_sem' }, 'QR Code sem localização'));
+    uf.value = state.uf || '';
+    const apply = () => { Object.assign(state, { from: from.value, to: to.value, branchId: br.value, surveyId: sv.value, channel: ch.value, uf: uf.value }); onChange(); };
+    [from, to, br, sv, ch, uf].forEach((el) => el.addEventListener('change', apply));
     return h('div', { class: 'filters card' },
       h('label', { class: 'f' }, 'De', from), h('label', { class: 'f' }, 'Até', to),
-      h('label', { class: 'f' }, 'Filial', br), withSurvey ? h('label', { class: 'f' }, 'Pesquisa', sv) : null, h('label', { class: 'f' }, 'Canal', ch));
+      h('label', { class: 'f' }, 'Filial', br), withSurvey ? h('label', { class: 'f' }, 'Pesquisa', sv) : null, h('label', { class: 'f' }, 'Canal', ch), h('label', { class: 'f' }, 'Estado do cliente', uf));
   }
   const qs = (state) => new URLSearchParams(Object.entries(state).filter(([, v]) => v)).toString();
-  const filterState = { from: isoDay(new Date(Date.now() - 29 * 86400000)), to: isoDay(new Date()), branchId: '', surveyId: '', channel: '' };
+  const UFS = ['AC', 'AL', 'AM', 'AP', 'BA', 'CE', 'DF', 'ES', 'GO', 'MA', 'MG', 'MS', 'MT', 'PA', 'PB', 'PE', 'PI', 'PR', 'RJ', 'RN', 'RO', 'RR', 'RS', 'SC', 'SE', 'SP', 'TO'];
+  const filterState = { from: isoDay(new Date(Date.now() - 29 * 86400000)), to: isoDay(new Date()), branchId: '', surveyId: '', channel: '', uf: '' };
 
   // ------------------------------------------------------------ dashboard
   async function pageDashboard() {
@@ -397,7 +401,7 @@
       h('div', { class: 'grid c2' },
         h('div', { class: 'card' }, h('h2', {}, 'Evolução diária'), trendChart(s.trend)),
         h('div', { class: 'card' }, h('h2', {}, 'Distribuição das notas (0 a 10)'), dist)),
-      rankingCard(s),
+      rankingCard(s), regionCard(s),
       h('div', { class: 'card' }, h('h2', {}, 'NPS por filial'), byBranch,
         h('div', { class: 'legend' }, h('span', {}, h('i', { class: 'lp' }), 'Promotores'), h('span', {}, h('i', { class: 'ln' }), 'Neutros'), h('span', {}, h('i', { class: 'ld' }), 'Detratores'))),
       h('div', { class: 'grid c2' },
@@ -405,6 +409,20 @@
         h('div', { class: 'card comments-card' }, h('h2', {}, 'Comentários recentes'), s.comments.length ? s.comments.map((c) => h('div', { class: 'comment' },
           h('span', { class: 'comment-icon' }, icon('message', 16)),
           h('div', {}, h('div', {}, c.comment), h('div', { class: 'small muted' }, `${c.branch} · ${fmtDate(c.submitted_at)}`)))) : h('p', { class: 'muted' }, 'Sem comentários.'))));
+  }
+
+  // De onde vieram as respostas do QR Code (somente quem autorizou a localização).
+  function regionCard(s) {
+    if (!s.byRegion?.length && !s.linkNoGeo) return null;
+    const table = (head, rows, empty) => h('div', { class: 'table-wrap' }, h('table', {},
+      h('thead', {}, h('tr', {}, head.map((t) => h('th', {}, t)))),
+      h('tbody', {}, rows.length ? rows : h('tr', {}, h('td', { colspan: String(head.length), class: 'empty' }, empty)))));
+    const nps = (r) => h('td', { class: npsClass(r.nps) }, h('b', {}, fmtNps(r.nps)));
+    return h('div', { class: 'card' }, h('h2', {}, 'Origem das respostas pelo QR Code'),
+      h('div', { class: 'grid c2' },
+        table(['Estado', 'Região', 'Respostas', 'NPS'], (s.byRegion || []).map((r) => h('tr', {}, h('td', {}, h('b', {}, r.place)), h('td', {}, r.region), h('td', {}, r.responses), nps(r))), 'Sem localização no período.'),
+        table(['Cidade (mais próxima)', 'UF', 'Respostas', 'NPS'], (s.byCity || []).map((r) => h('tr', {}, h('td', {}, h('b', {}, r.city)), h('td', {}, r.uf), h('td', {}, r.responses), nps(r))), 'Sem cidades identificadas.')),
+      h('p', { class: 'small muted' }, `${s.linkNoGeo || 0} respostas do QR Code sem localização (o cliente não autorizou ou o aparelho não informou). Cidade = município do IBGE mais próximo do ponto informado; o ponto é guardado com ~1 km de precisão.`));
   }
 
   // Ranking das filiais com a meta de NPS de cada uma.
@@ -527,6 +545,17 @@
   }
 
   // ------------------------------------------------------------ respostas
+  // Onde a resposta foi dada: QR Code = região informada pelo cliente (se ele autorizou); tablet = cidade da filial.
+  function locationBadge(x) {
+    if (x.channel !== 'link') return x.branch_city ? h('div', { class: 'small muted loc' }, icon('map-pin', 13), `${x.branch_city} (loja)`) : null;
+    if (!x.geo_region) return h('div', { class: 'small muted loc' }, icon('map-pin', 13), 'Local não informado');
+    const place = x.geo_region === 'Fora do Brasil' ? 'Fora do Brasil' : [x.geo_city, x.geo_uf].filter(Boolean).join('/') + ` · ${x.geo_region}`;
+    const link = x.geo_lat !== null && x.geo_lat !== undefined
+      ? h('a', { class: 'small', target: '_blank', rel: 'noopener noreferrer', title: 'Abrir no mapa (ponto aproximado, ~1 km)',
+        href: `https://www.openstreetmap.org/?mlat=${x.geo_lat}&mlon=${x.geo_lng}#map=11/${x.geo_lat}/${x.geo_lng}` }, ' mapa') : null;
+    return h('div', { class: 'small loc' }, icon('map-pin', 13), place, link);
+  }
+
   async function pageResponses() {
     await Promise.all([branches(), surveys()]);
     const isAdmin = me.role === 'admin'; // só administrador exclui respostas (o servidor também confere)
@@ -556,6 +585,7 @@
           h('thead', {}, h('tr', {}, h('th', {}, 'Data'), h('th', {}, 'Filial'), h('th', {}, 'Pesquisa'), h('th', {}, 'Respostas'), isAdmin ? h('th', {}) : null)),
           h('tbody', {}, r.rows.length ? r.rows.map((x) => h('tr', {},
             h('td', {}, fmtDate(x.submitted_at), h('div', { class: 'small muted' }, x.channel === 'link' ? 'via QR Code' : (x.device || '')),
+              locationBadge(x),
               x.lang && x.lang !== 'pt' ? h('span', { class: 'badge' }, x.lang.toUpperCase()) : null),
             h('td', {}, x.branch), h('td', {}, x.survey),
             h('td', {}, h('ul', { class: 'answers' }, (x.answers || []).map((a) => h('li', {},
@@ -572,7 +602,7 @@
     };
     await load();
     return h('div', {},
-      pageHead('Respostas', 'Todas as pesquisas recebidas dos tablets', exportButtons()),
+      pageHead('Respostas', 'Todas as pesquisas recebidas, dos tablets e dos QR Codes', exportButtons()),
       filterBar(filterState, () => { page = 1; load(); }), body);
   }
 

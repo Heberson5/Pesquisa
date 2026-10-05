@@ -149,3 +149,10 @@ body.mode-link .question { height: auto; min-height: calc(100dvh - 40px); }
 /* escurecimento para economizar bateria (opacidade definida pelo kiosk.js) */
 #dim { position: fixed; inset: 0; background: #000; opacity: 0; pointer-events: none; z-index: 9999; transition: opacity 1.2s ease; }
 video.nap { position: fixed; width: 2px; height: 2px; opacity: .01; pointer-events: none; left: 0; top: 0; }
+
+/* opção de compartilhar localização (somente QR/link) */
+.welcome-wrap > .geo-box { position: absolute; left: 0; right: 0; bottom: 34px; display: flex; flex-direction: column; align-items: center; gap: 4px; text-align: center; z-index: 2; }
+.geo-box small { opacity: .6; font-size: 12px; max-width: 320px; }
+.geo-chip { font: inherit; font-size: 14px; padding: 9px 14px; border-radius: 99px; border: 1px solid currentColor; background: transparent; color: inherit; opacity: .85; cursor: pointer; }
+.geo-chip.on { background: var(--accent); color: #1f2937; border-color: transparent; opacity: 1; font-weight: 700; }
+body.mode-link .welcome-wrap { min-height: calc(100dvh - 40px); }

@@ -236,6 +236,12 @@ for (const [table, column, ddl] of [
   ['responses', 'contact_email_lookup', 'contact_email_lookup TEXT'],
   ['responses', 'contact_consent_at', 'contact_consent_at INTEGER'],
   ['responses', 'anonymized_at', 'anonymized_at INTEGER'],
+  // Localização aproximada (só QR/link, com autorização do cliente): coordenadas ~1 km + cidade/UF/região do IBGE.
+  ['responses', 'geo_lat', 'geo_lat REAL'],
+  ['responses', 'geo_lng', 'geo_lng REAL'],
+  ['responses', 'geo_city', 'geo_city TEXT'],
+  ['responses', 'geo_uf', 'geo_uf TEXT'],
+  ['responses', 'geo_region', 'geo_region TEXT'],
   ['branches', 'alert_emails', 'alert_emails TEXT'],
   ['branches', 'alert_phones', 'alert_phones TEXT'],
   ['branches', 'nps_goal', 'nps_goal INTEGER'],

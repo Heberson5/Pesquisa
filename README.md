@@ -8,6 +8,7 @@ Sistema de coleta de pesquisa de satisfação para **tablets em modo quiosque**,
 - **Casos:** cada nota de 0 a 6 vira um caso para tratar; alerta por e-mail, webhook ou WhatsApp.
 - **Segurança:** 2FA, recuperação de senha, LGPD (consentimento, criptografia, retenção, pedidos do titular).
 - **Coleta:** tablet em modo quiosque e QR Code por filial, perguntas condicionais, campanhas agendadas, PT/EN/ES.
+- **Localização das respostas (QR Code):** o cliente pode autorizar a localização; o sistema grava cidade (município do IBGE mais próximo), UF e região, com o ponto arredondado a ~1 km. Tudo offline, sem serviços externos; o ponto é apagado pela política de retenção e a cidade/UF ficam só como estatística. Aparece em Respostas, no filtro por estado, no quadro "Origem das respostas" e no CSV. Nos tablets o local é a cidade da filial.
 - **Tablet:** `/kiosk` — sem login; ativado uma vez com código gerado no painel; respostas sempre gravadas na filial do tablet.
 
 ```bash

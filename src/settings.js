@@ -21,7 +21,7 @@ const DEFAULTS = {
   colorScheme: 'bands', // cores por nível: faixas do NPS (vermelho/amarelo/verde) ou gradiente
   faceStyle: 'color', // carinhas coloridas ou monocromáticas
   requireAdminMfa: true, // 2FA obrigatório para administradores
-  privacyText: 'Suas respostas são usadas apenas para melhorar nosso atendimento. Dados de contato só são coletados com sua autorização, ficam protegidos e podem ser excluídos a qualquer momento a seu pedido.',
+  privacyText: 'Suas respostas são usadas apenas para melhorar nosso atendimento. Dados de contato e localização (cidade e estado aproximados, apenas pelo QR Code) só são coletados com sua autorização, ficam protegidos e podem ser excluídos a qualquer momento a seu pedido.',
   retention: { commentsMonths: 24, contactsMonths: 12, auditMonths: 24 },
   alerts: { detractorEmail: true, webhookUrl: null, whatsappTemplate: null, whatsappLanguage: 'pt_BR' },
   weeklyReport: { enabled: false, weekday: 1, hour: 8, extraEmails: [] },

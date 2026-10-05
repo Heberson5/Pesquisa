@@ -34,6 +34,7 @@
       contactAsk: 'Gostaria que entrássemos em contato com você?', contactWhy: 'Queremos entender melhor e resolver o que aconteceu.',
       contactYes: 'Sim, quero contato', contactNo: 'Não, obrigado', name: 'Nome (opcional)', phone: 'Telefone / WhatsApp', email: 'E-mail',
       consent: 'Autorizo o uso destes dados somente para contato sobre esta avaliação.', needOne: 'Informe telefone ou e-mail.', needConsent: 'Marque a autorização para continuar.',
+      geoAsk: 'Compartilhar minha localização aproximada (opcional)', geoOn: 'Localização compartilhada ✓ — toque para remover', geoDenied: 'Localização não autorizada neste aparelho', geoWhy: 'Usada só para saber de qual região veio a avaliação. Guardamos apenas cidade e estado.',
       close: 'Fechar', closed: 'Estamos fechados no momento', unavailable: 'Pesquisa indisponível no momento', noSurvey: 'Nenhuma pesquisa ativa para esta filial.',
       once: 'Esta avaliação já foi enviada. Obrigado!', error: 'Não foi possível enviar. Verifique a internet e tente de novo.', retry: 'Tentar de novo' },
     en: { start: 'Tap to start', of: 'of', back: 'Back', next: 'Next', skip: 'Skip', send: 'Send', low: 'Not likely', high: 'Extremely likely',
@@ -41,6 +42,7 @@
       contactAsk: 'Would you like us to contact you?', contactWhy: 'We want to understand and fix what happened.',
       contactYes: 'Yes, contact me', contactNo: 'No, thanks', name: 'Name (optional)', phone: 'Phone / WhatsApp', email: 'E-mail',
       consent: 'I authorize the use of this data only to contact me about this feedback.', needOne: 'Enter a phone or e-mail.', needConsent: 'Please check the authorization to continue.',
+      geoAsk: 'Share my approximate location (optional)', geoOn: 'Location shared ✓ — tap to remove', geoDenied: 'Location not allowed on this device', geoWhy: 'Used only to know which region the feedback came from. We keep only city and state.',
       close: 'Close', closed: 'We are closed right now', unavailable: 'Survey unavailable right now', noSurvey: 'No active survey for this location.',
       once: 'This feedback was already sent. Thank you!', error: 'Could not send. Check your connection and try again.', retry: 'Try again' },
     es: { start: 'Toque para empezar', of: 'de', back: 'Volver', next: 'Siguiente', skip: 'Omitir', send: 'Enviar', low: 'Nada probable', high: 'Muy probable',
@@ -48,6 +50,7 @@
       contactAsk: '¿Desea que nos pongamos en contacto?', contactWhy: 'Queremos entender y resolver lo que pasó.',
       contactYes: 'Sí, quiero contacto', contactNo: 'No, gracias', name: 'Nombre (opcional)', phone: 'Teléfono / WhatsApp', email: 'Correo',
       consent: 'Autorizo el uso de estos datos solo para contactarme sobre esta evaluación.', needOne: 'Ingrese teléfono o correo.', needConsent: 'Marque la autorización para continuar.',
+      geoAsk: 'Compartir mi ubicación aproximada (opcional)', geoOn: 'Ubicación compartida ✓ — toque para quitar', geoDenied: 'Ubicación no autorizada en este dispositivo', geoWhy: 'Solo para saber de qué región viene la evaluación. Guardamos solo ciudad y estado.',
       close: 'Cerrar', closed: 'Estamos cerrados en este momento', unavailable: 'Encuesta no disponible', noSurvey: 'No hay encuesta activa para esta tienda.',
       once: 'Esta evaluación ya fue enviada. ¡Gracias!', error: 'No se pudo enviar. Verifique la conexión e intente de nuevo.', retry: 'Intentar de nuevo' },
   };
@@ -227,7 +230,25 @@
           (s.i18n?.[lang]?.welcome_text || s.welcomeText) ? h('p', { class: 'welcome-text' }, s.i18n?.[lang]?.welcome_text || s.welcomeText) : null,
           h('span', { class: 'btn btn-primary btn-xl pulse' }, t('start'))),
         MODE === 'tablet' ? h('div', { class: 'branch-tag' }, config.branch.name) : null),
-      privacyLink()));
+      geoOption(), privacyLink()));
+  }
+
+  // Localização (só QR/link): o cliente escolhe compartilhar; o navegador ainda pede a permissão.
+  let geo = null; let geoState = 'idle'; // idle | asking | ok | denied
+  function geoOption() {
+    if (MODE !== 'link' || !('geolocation' in navigator)) return null;
+    const label = geoState === 'ok' ? t('geoOn') : geoState === 'denied' ? t('geoDenied') : t('geoAsk');
+    return h('div', { class: 'geo-box' },
+      h('button', { class: 'geo-chip' + (geoState === 'ok' ? ' on' : ''), disabled: geoState === 'asking', onclick: (e) => {
+        e.stopPropagation();
+        if (geoState === 'ok') { geo = null; geoState = 'idle'; return showWelcome(); }
+        geoState = 'asking';
+        navigator.geolocation.getCurrentPosition(
+          (pos) => { geo = { lat: pos.coords.latitude, lng: pos.coords.longitude }; geoState = 'ok'; showWelcome(); },
+          () => { geo = null; geoState = 'denied'; showWelcome(); },
+          { enableHighAccuracy: false, timeout: 10_000, maximumAge: 600_000 });
+      } }, '📍 ' + label),
+      h('small', {}, t('geoWhy')));
   }
 
   function showUnavailable() {
@@ -419,6 +440,7 @@
       lang,
       ticket: state.ticket,
       contact: state.contact || undefined,
+      geo: MODE === 'link' && geoState === 'ok' && geo ? { lat: geo.lat, lng: geo.lng, consent: true } : undefined,
       // Só envia respostas de perguntas visíveis (condicionais escondidas são descartadas).
       answers: s.questions
         .filter((q, i) => visible(i) && state.answers[q.id] !== undefined && !(q.type === 'text' && !String(state.answers[q.id]).trim()))

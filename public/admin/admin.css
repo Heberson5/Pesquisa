@@ -277,3 +277,6 @@ details.tr .form-grid { margin-top: 10px; }
 }
 .guide ol { padding-left: 20px; line-height: 1.6; } .guide h2 { margin-top: 16px; }
 .row.between { justify-content: space-between; }
+
+.loc { margin-top: 3px; line-height: 1.35; }
+.loc svg { vertical-align: -2px; margin-right: 4px; }

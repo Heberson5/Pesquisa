@@ -2,6 +2,7 @@
 // Gravação de respostas (tablet e link/QR Code) e montagem da configuração enviada ao aparelho.
 // Toda regra de validação fica aqui, para os dois canais serem igualmente rígidos.
 const { get, run, tx } = require('./db');
+const geoLib = require('./geo');
 const { HttpError, bad, int, str, UUID_RE } = require('./validate');
 const { loadSurvey, normalizeAnswer, isVisible, LANGS } = require('./surveys');
 const { encrypt, lookup, normPhone, normEmail } = require('./vault');
@@ -144,16 +145,24 @@ function saveResponse({ branch, deviceId = null, channel, body }) {
   const npsScores = normalized.filter((x) => x.q.is_nps).map((x) => x.v.num);
   const minNps = npsScores.length ? Math.min(...npsScores) : null;
   const contact = parseContact(body.contact, survey, minNps);
+  // Localização: só pelo QR/link, só com autorização explícita; o tablet usa a cidade da própria filial.
+  let geo = null;
+  if (body.geo !== undefined && body.geo !== null) {
+    if (channel !== 'link') throw bad('Localização não é coletada neste canal.');
+    geo = geoLib.fromClient(body.geo);
+    if (geo?.error) throw bad(geo.error);
+  }
   const lang = typeof body.lang === 'string' && survey.languages.includes(body.lang) && LANGS.includes(body.lang) ? body.lang : null;
 
   const result = tx(() => {
     if (get('SELECT 1 FROM responses WHERE uuid = ?', body.uuid.toLowerCase())) return { created: false };
     const r = run(`INSERT INTO responses (uuid, survey_id, branch_id, device_id, started_at, submitted_at, received_at, channel, lang,
-        contact_name_enc, contact_phone_enc, contact_email_enc, contact_phone_lookup, contact_email_lookup, contact_consent_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        contact_name_enc, contact_phone_enc, contact_email_enc, contact_phone_lookup, contact_email_lookup, contact_consent_at, geo_lat, geo_lng, geo_city, geo_uf, geo_region)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     body.uuid.toLowerCase(), survey.id, branch.id, deviceId, startedAt, submittedAt, now, channel, lang,
     contact ? encrypt(contact.name) : null, contact ? encrypt(contact.phone) : null, contact ? encrypt(contact.email) : null,
-    contact?.phone ? lookup('phone:' + contact.phone) : null, contact?.email ? lookup('email:' + contact.email) : null, contact ? now : null);
+    contact?.phone ? lookup('phone:' + contact.phone) : null, contact?.email ? lookup('email:' + contact.email) : null, contact ? now : null,
+    geo?.lat ?? null, geo?.lng ?? null, geo?.city ?? null, geo?.uf ?? null, geo?.region ?? null);
     for (const { q, v } of normalized) {
       run('INSERT INTO answers (response_id, question_id, value_num, value_text) VALUES (?,?,?,?)', r.lastInsertRowid, q.id, v.num, v.text);
     }

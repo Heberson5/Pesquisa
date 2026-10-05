@@ -92,7 +92,8 @@ function securityHeaders(req, res, next) {
     'X-Content-Type-Options': 'nosniff',
     'X-Frame-Options': 'DENY',
     'Referrer-Policy': 'no-referrer',
-    'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=(), usb=()',
+    // Localização só na página pública do QR Code (/r/…), e mesmo assim depende da autorização do cliente.
+    'Permissions-Policy': `camera=(), microphone=(), geolocation=${req.path.startsWith('/r/') ? '(self)' : '()'}, payment=(), usb=()`,
     'Cross-Origin-Opener-Policy': 'same-origin',
     'Cross-Origin-Resource-Policy': 'same-origin',
   });

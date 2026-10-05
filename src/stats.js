@@ -1,4 +1,5 @@
 'use strict';
+const { UFS } = require('./geo');
 // Estatísticas e relatório: usados pelo painel, pela exportação PowerPoint e pelo relatório semanal por e-mail.
 // O escopo do usuário (admin: todas as filiais; gestor: as dele) é aplicado em todas as consultas.
 const { get, all } = require('./db');
@@ -23,6 +24,12 @@ function responseFilter(user, q) {
     const bid = id(q.branchId, 'filial');
     assertBranch(user, bid);
     where.push('r.branch_id = ?'); params.push(bid);
+  }
+  if (q.uf) {
+    if (q.uf === '_sem') where.push("r.channel = 'link' AND r.geo_region IS NULL");
+    else if (q.uf === '_fora') where.push("r.geo_region = 'Fora do Brasil'");
+    else if (UFS.includes(q.uf)) { where.push('r.geo_uf = ?'); params.push(q.uf); }
+    else throw bad('Estado inválido.');
   }
   const s = scope(user);
   if (s) { where.push(s.length ? `r.branch_id IN (${placeholders(s)})` : '0'); params.push(...s); }
@@ -63,7 +70,17 @@ function computeStats(user, query) {
       FROM responses r JOIN answers a ON a.response_id = r.id JOIN questions q ON q.id = a.question_id AND q.type = 'text'
       JOIN branches b ON b.id = r.branch_id ${f.sql} ORDER BY r.submitted_at DESC LIMIT 15`, ...f.params);
   const channels = all(`SELECT r.channel, COUNT(*) AS n FROM responses r ${f.sql} GROUP BY r.channel`, ...f.params);
-  return { totalResponses, overall, byBranch, ranking, defaultGoal, byQuestion, trend, scoreDist, comments, channels };
+  // Regiões de onde vieram as respostas do QR/link (somente quem autorizou a localização).
+  const geoWhere = `${f.sql ? f.sql + ' AND' : 'WHERE'} r.geo_region IS NOT NULL`;
+  const geoJoin = 'LEFT JOIN answers a ON a.response_id = r.id AND a.question_id IN (SELECT id FROM questions WHERE is_nps = 1)';
+  const byRegion = all(`SELECT COALESCE(r.geo_uf, r.geo_region) AS place, r.geo_region AS region, COUNT(DISTINCT r.id) AS responses, ${NPS_AGG}
+      FROM responses r ${geoJoin} ${geoWhere} GROUP BY place, region ORDER BY responses DESC LIMIT 30`, ...f.params)
+    .map((r) => ({ place: r.place, region: r.region, responses: r.responses, ...npsRow(r) }));
+  const byCity = all(`SELECT r.geo_city AS city, r.geo_uf AS uf, COUNT(DISTINCT r.id) AS responses, ${NPS_AGG}
+      FROM responses r ${geoJoin} ${geoWhere} AND r.geo_city IS NOT NULL GROUP BY city, uf ORDER BY responses DESC LIMIT 10`, ...f.params)
+    .map((r) => ({ city: r.city, uf: r.uf, responses: r.responses, ...npsRow(r) }));
+  const linkNoGeo = get(`SELECT COUNT(*) AS n FROM responses r ${f.sql ? f.sql + ' AND' : 'WHERE'} r.channel = 'link' AND r.geo_region IS NULL`, ...f.params).n;
+  return { totalResponses, overall, byBranch, ranking, defaultGoal, byQuestion, trend, scoreDist, comments, channels, byRegion, byCity, linkNoGeo };
 }
 
 // Distribuição de respostas por pergunta de UMA pesquisa.
