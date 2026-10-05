@@ -293,6 +293,22 @@
   }
   window.addEventListener('hashchange', route);
 
+  // No celular as linhas das tabelas viram cartões; cada célula ganha o nome da coluna (CSS usa data-label).
+  let labelPending = false;
+  const labelTables = () => {
+    labelPending = false;
+    document.querySelectorAll('table').forEach((t) => {
+      const heads = [...t.querySelectorAll('thead th')].map((th) => th.textContent.trim());
+      if (!heads.length) return;
+      t.querySelectorAll('tbody tr').forEach((tr) => [...tr.children].forEach((td, i) => {
+        if (td.colSpan > 1 || td.dataset.label !== undefined) return;
+        td.dataset.label = heads[i] || '';
+      }));
+    });
+  };
+  new MutationObserver(() => { if (!labelPending) { labelPending = true; requestAnimationFrame(labelTables); } })
+    .observe(document.body, { childList: true, subtree: true });
+
   // Cabeçalho padrão das páginas: título, subtítulo e botões.
   const pageHead = (title, sub, ...actions) => h('div', { class: 'topbar' },
     h('div', {}, h('h1', {}, title), sub ? h('div', { class: 'sub' }, sub) : null), h('div', { class: 'row' }, ...actions));
