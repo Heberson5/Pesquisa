@@ -6,7 +6,7 @@ const net = require('node:net');
 const https = require('node:https');
 const crypto = require('node:crypto');
 const nodemailer = require('nodemailer');
-const config = require('./config');
+const delivery = require('./delivery');
 const { get, all, run } = require('./db');
 const { sign } = require('./vault');
 
@@ -113,25 +113,30 @@ function postJson(url, body, headers, { lookup } = {}) {
 const webhookSecret = () => sign('webhook-secret-v1');
 
 // ------------------------------------------------------------------ envio
-let transport = null;
-function mailer() {
-  if (!config.smtp) return null;
-  if (!transport) {
+let transport = null; let transportKey = ''; let transportAt = 0;
+// O servidor SMTP é resolvido para um IP público e esse IP é "fixado" (evita apontar para a rede interna / rebinding).
+async function mailer() {
+  const c = delivery.smtp();
+  if (!c) return null;
+  const key = JSON.stringify([c.host, c.port, c.secure, c.auth?.user, c.auth?.pass]);
+  if (!transport || key !== transportKey || Date.now() - transportAt > 10 * 60_000) {
+    const ip = await delivery.resolvePublic(c.host);
     transport = nodemailer.createTransport({
-      host: config.smtp.host, port: config.smtp.port, secure: config.smtp.secure, auth: config.smtp.auth,
-      requireTLS: !config.smtp.secure, tls: { minVersion: 'TLSv1.2' },
+      host: ip, port: c.port, secure: c.secure, auth: c.auth, name: 'pesquisa',
+      requireTLS: !c.secure, tls: { minVersion: 'TLSv1.2', servername: c.host },
       disableFileAccess: true, disableUrlAccess: true, connectionTimeout: 10000, socketTimeout: 20000,
     });
+    transportKey = key; transportAt = Date.now();
   }
-  return transport;
+  return { t: transport, from: c.from };
 }
 
 async function deliver(item) {
   if (item.channel === 'email') {
-    const t = mailer();
-    if (!t) throw new Error('SMTP não configurado (defina SMTP_HOST, SMTP_USER, SMTP_PASS e SMTP_FROM).');
-    await t.sendMail({
-      from: config.smtp.from, to: item.recipient, subject: item.subject, text: item.body_text, html: item.body_html,
+    const m = await mailer();
+    if (!m) throw new Error('E-mail não configurado. Configure em Configurações → Alertas e envios.');
+    await m.t.sendMail({
+      from: m.from, to: item.recipient, subject: item.subject, text: item.body_text, html: item.body_html,
       disableFileAccess: true, disableUrlAccess: true,
       attachments: item.attachment ? [{ filename: item.attachment_name || 'anexo', content: Buffer.from(item.attachment) }] : [],
     });
@@ -142,14 +147,15 @@ async function deliver(item) {
     const sig = crypto.createHmac('sha256', webhookSecret()).update(`${ts}.${item.payload}`).digest('hex');
     await postJson(item.recipient, item.payload, { 'X-Pesquisa-Timestamp': ts, 'X-Pesquisa-Signature': `sha256=${sig}` }, { lookup: safeLookup });
   } else if (item.channel === 'whatsapp') {
-    if (!config.whatsapp) throw new Error('WhatsApp não configurado (WHATSAPP_TOKEN e WHATSAPP_PHONE_ID).');
+    const wa = delivery.whatsapp();
+    if (!wa) throw new Error('WhatsApp não configurado. Configure em Configurações → Alertas e envios.');
     const p = JSON.parse(item.payload);
     const body = JSON.stringify({
       messaging_product: 'whatsapp', to: item.recipient, type: 'template',
       template: { name: p.template, language: { code: p.language || 'pt_BR' },
         components: [{ type: 'body', parameters: p.params.map((t) => ({ type: 'text', text: oneLine(t, 300) })) }] },
     });
-    await postJson(`https://graph.facebook.com/v21.0/${config.whatsapp.phoneId}/messages`, body, { Authorization: `Bearer ${config.whatsapp.token}` });
+    await postJson(`https://graph.facebook.com/v21.0/${wa.phoneId}/messages`, body, { Authorization: `Bearer ${wa.token}` });
   }
 }
 
@@ -178,14 +184,35 @@ async function processOutbox(limit = 20) {
   return sent;
 }
 
+// Confere o token e o número do WhatsApp na Meta (não envia mensagem nenhuma).
+function whatsappCheck() {
+  const wa = delivery.whatsapp();
+  if (!wa) return Promise.reject(new Error('WhatsApp não configurado.'));
+  return new Promise((resolve, reject) => {
+    const req = https.request(`https://graph.facebook.com/v21.0/${wa.phoneId}?fields=display_phone_number,verified_name,quality_rating`,
+      { method: 'GET', timeout: 8000, headers: { Authorization: `Bearer ${wa.token}`, 'User-Agent': 'PesquisaSatisfacao' } }, (res) => {
+        let data = '';
+        res.on('data', (c) => { if (data.length < 20000) data += c; });
+        res.on('end', () => {
+          let j = {}; try { j = JSON.parse(data); } catch { /* */ }
+          if (res.statusCode === 200 && j.display_phone_number) return resolve({ number: j.display_phone_number, name: j.verified_name || null, quality: j.quality_rating || null });
+          reject(new Error(oneLine(j.error?.message || `A Meta recusou (HTTP ${res.statusCode}). Confira o token e o identificador do número.`, 200)));
+        });
+      });
+    req.on('timeout', () => req.destroy(new Error('Tempo esgotado ao falar com a Meta.')));
+    req.on('error', reject);
+    req.end();
+  });
+}
+
 const outboxStatus = () => ({
-  smtpConfigured: !!config.smtp,
-  whatsappConfigured: !!config.whatsapp,
+  smtpConfigured: !!delivery.smtp(),
+  whatsappConfigured: !!delivery.whatsapp(),
   pending: get("SELECT COUNT(*) AS n FROM outbox WHERE status = 'pending'").n,
   failed: get("SELECT COUNT(*) AS n FROM outbox WHERE status = 'failed' AND created_at > ?", Date.now() - 7 * 86_400_000).n,
 });
 
 module.exports = {
-  isEmail, escapeHtml, oneLine, renderEmail, queueEmail, queueWebhook, queueWhatsApp, processOutbox, outboxStatus,
+  isEmail, escapeHtml, oneLine, renderEmail, queueEmail, queueWebhook, queueWhatsApp, processOutbox, outboxStatus, whatsappCheck,
   validateWebhookUrl, isPublicIp, safeLookup, webhookSecret,
 };

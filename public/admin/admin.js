@@ -1081,8 +1081,8 @@
       } catch (ex) { toast(ex.message, true); }
     };
     const tabs = [['identidade', 'Identidade visual', 'palette'], ['menu', 'Ícones do menu', 'layout'], ['respostas', 'Ícones das respostas', 'star'],
-      ['alertas', 'Alertas e relatórios', 'bell'], ['seguranca', 'Segurança e LGPD', 'shield']];
-    const TAB = { identidade: identityTab, menu: menuTab, respostas: ratingTab, alertas: alertsTab, seguranca: securityTab };
+      ['envios', 'E-mail e WhatsApp', 'mail'], ['alertas', 'Alertas e relatórios', 'bell'], ['seguranca', 'Segurança e LGPD', 'shield']];
+    const TAB = { identidade: identityTab, menu: menuTab, respostas: ratingTab, envios: deliveryTab, alertas: alertsTab, seguranca: securityTab };
     const renderTab = async () => {
       const content = await (TAB[settingsTab] || identityTab)(st, renderTab);
       body.replaceChildren(h('div', { class: 'tabs' }, tabs.map(([k, label, ic]) => h('button', { class: settingsTab === k ? 'active' : '',
@@ -1204,7 +1204,7 @@
           h('label', { class: 'f mt' }, 'Webhook (opcional — integra com n8n, Zapier, Make, Slack…)', webhook),
           h('p', { class: 'small muted' }, 'Envia filial, nota e link do caso (sem dados pessoais), assinado com HMAC-SHA256 no cabeçalho X-Pesquisa-Signature. Segredo: ', h('code', { class: 'secret' }, n.webhookSecret)),
           h('div', { class: 'form-grid mt' }, h('label', { class: 'f' }, 'Modelo aprovado do WhatsApp (Meta)', waTpl), h('label', { class: 'f' }, 'Idioma do modelo', waLang)),
-          h('p', { class: 'small muted' }, 'WhatsApp: ', status(n.whatsappConfigured, 'configurado no servidor', 'não configurado (WHATSAPP_TOKEN)'), ' · parâmetros do modelo: {{1}} filial, {{2}} nota, {{3}} link.')),
+          h('p', { class: 'small muted' }, 'WhatsApp: ', status(n.whatsappConfigured, 'configurado', 'não configurado — veja a aba "E-mail e WhatsApp"'), ' · parâmetros do modelo: {{1}} filial, {{2}} nota, {{3}} link.')),
         h('div', { class: 'card' }, h('h2', {}, 'Relatório semanal por e-mail'),
           chk(st.weeklyReport.enabled, (v) => { st.weeklyReport.enabled = v; }, 'Enviar automaticamente o PowerPoint da semana'),
           h('div', { class: 'form-grid mt' }, h('label', { class: 'f' }, 'Dia', day), h('label', { class: 'f' }, 'Hora (Brasília)', hour)),
@@ -1223,16 +1223,97 @@
         h('div', { class: 'card' }, h('h2', {}, 'Metas e alertas'),
           h('div', { class: 'form-grid' }, h('label', { class: 'f' }, 'Meta de NPS padrão (cada filial pode ter a sua)', goal)),
           chk(st.offlineAlert.enabled, (v) => { st.offlineAlert.enabled = v; }, 'Avisar quando um tablet ficar sem sinal no horário de funcionamento'),
-          h('div', { class: 'form-grid' }, h('label', { class: 'f' }, 'Minutos sem sinal para avisar', offMin))),
-        h('div', { class: 'card' }, h('h2', {}, 'Envio de e-mails'),
-          h('p', {}, 'Servidor de e-mail: ', status(n.smtpConfigured, 'configurado', 'não configurado (SMTP_HOST…)')),
-          h('p', { class: 'small muted' }, `Na fila: ${n.pending} · com falha (7 dias): ${n.failed}`),
-          h('button', { class: 'btn secondary sm', onclick: async () => {
-            try { const r = await api('/settings/test-email', { method: 'POST' }); r.sent ? toast('E-mail de teste enviado para ' + me.email) : toast('Falhou: ' + (r.error || 'erro'), true); renderAgain(); } catch (ex) { toast(ex.message, true); }
-          } }, 'Enviar e-mail de teste para mim'),
-          n.recent.length ? h('details', { class: 'tr' }, h('summary', {}, 'Últimos envios'), h('table', { class: 'small' }, h('tbody', {}, n.recent.map((o) => h('tr', {},
-            h('td', {}, fmtDate(o.created_at)), h('td', {}, o.kind), h('td', {}, o.channel),
-            h('td', {}, h('span', { class: 'badge ' + (o.status === 'sent' ? 'ok' : o.status === 'failed' ? 'off' : 'warn') }, o.status)), h('td', { class: 'muted' }, o.last_error || '')))))) : null)));
+          h('div', { class: 'form-grid' }, h('label', { class: 'f' }, 'Minutos sem sinal para avisar', offMin)))));
+  }
+
+  // ------------------------------------------------------------ aba: e-mail (SMTP) e WhatsApp
+  const SMTP_PRESETS = [
+    ['', 'Escolha o provedor (opcional)', null],
+    ['gmail', 'Gmail / Google Workspace', { host: 'smtp.gmail.com', port: 587 }],
+    ['m365', 'Microsoft 365 / Outlook', { host: 'smtp.office365.com', port: 587 }],
+    ['locaweb', 'Locaweb', { host: 'email-ssl.com.br', port: 587 }],
+    ['brevo', 'Brevo (Sendinblue)', { host: 'smtp-relay.brevo.com', port: 587 }],
+    ['sendgrid', 'SendGrid', { host: 'smtp.sendgrid.net', port: 587 }],
+  ];
+  async function deliveryTab(st, rerender) {
+    const [d, n] = await Promise.all([api('/settings/delivery'), api('/settings/notifications')]);
+    const origin = (x) => x.source === 'painel' ? h('span', { class: 'badge ok' }, 'Configurado aqui no painel')
+      : x.source === 'servidor' ? h('span', { class: 'badge ok' }, 'Configurado no servidor (.env)') : h('span', { class: 'badge warn' }, 'Não configurado');
+    const field = (label, el, hint) => h('label', { class: 'f' }, label, el, hint ? h('span', { class: 'small muted' }, hint) : null);
+
+    // ----- e-mail
+    const preset = h('select', {}, SMTP_PRESETS.map(([v, l]) => h('option', { value: v }, l)));
+    const host = h('input', { value: d.smtp.host, placeholder: 'smtp.gmail.com', autocomplete: 'off' });
+    const port = h('select', {}, [587, 465, 25, 2525].map((p) => h('option', { value: String(p) }, String(p) + (p === 587 ? ' (recomendada)' : p === 465 ? ' (SSL)' : ''))));
+    port.value = String(d.smtp.port);
+    const user = h('input', { value: d.smtp.user, placeholder: 'pesquisa@suaempresa.com.br', autocomplete: 'off' });
+    const pass = h('input', { type: 'password', autocomplete: 'new-password', placeholder: d.smtp.passwordSet ? '•••••••• (cadastrada — deixe em branco para manter)' : 'Senha ou senha de aplicativo' });
+    const from = h('input', { value: d.smtp.from, placeholder: 'Pesquisa Empresa <pesquisa@suaempresa.com.br>', autocomplete: 'off' });
+    preset.addEventListener('change', () => { const p = SMTP_PRESETS.find((x) => x[0] === preset.value)?.[2]; if (p) { host.value = p.host; port.value = String(p.port); } });
+    const saveMail = async () => {
+      try {
+        await api('/settings/delivery', { method: 'PUT', body: { smtp: { host: host.value, port: Number(port.value), user: user.value, password: pass.value, from: from.value } } });
+        toast('E-mail salvo. Use "Enviar e-mail de teste" para conferir.'); rerender();
+      } catch (ex) { toast(ex.message, true); }
+    };
+    const mailCard = h('div', { class: 'card' }, h('h2', {}, 'Envio de e-mails (SMTP)'),
+      h('p', {}, origin(d.smtp)),
+      h('p', { class: 'small muted' }, 'Usado para alertas de cliente insatisfeito, relatório semanal, recuperação de senha e aviso de tablet sem sinal. A senha fica criptografada e nunca é mostrada de volta.'),
+      h('div', { class: 'form-grid' }, field('Provedor', preset), field('Servidor SMTP', host), field('Porta', port), field('Usuário (login)', user),
+        field('Senha', pass), field('Remetente (De)', from, 'Aparece como quem enviou. Ex.: Pesquisa Empresa <pesquisa@empresa.com.br>')),
+      h('p', { class: 'small muted' }, h('b', {}, 'Gmail: '), 'ative a verificação em duas etapas na conta Google e crie uma "Senha de app" (myaccount.google.com/apppasswords); use essa senha aqui, não a senha normal. ',
+        h('b', {}, 'Microsoft 365: '), 'o SMTP autenticado precisa estar liberado para a caixa.'),
+      h('div', { class: 'row' },
+        h('button', { class: 'btn', onclick: saveMail }, 'Salvar e-mail'),
+        h('button', { class: 'btn secondary', onclick: async () => {
+          try { const r = await api('/settings/test-email', { method: 'POST' }); r.sent ? toast('E-mail de teste enviado para ' + me.email) : toast('Falhou: ' + (r.error || 'erro'), true); rerender(); } catch (ex) { toast(ex.message, true); }
+        } }, icon('mail', 16), 'Enviar e-mail de teste para mim'),
+        d.smtp.source === 'painel' ? h('button', { class: 'btn danger', onclick: async () => {
+          if (!confirm('Remover a configuração de e-mail feita no painel?')) return;
+          try { await api('/settings/delivery', { method: 'PUT', body: { smtp: { clear: true } } }); toast('Configuração removida.'); rerender(); } catch (ex) { toast(ex.message, true); }
+        } }, 'Remover') : null));
+
+    // ----- WhatsApp
+    const phoneId = h('input', { value: d.whatsapp.phoneId, placeholder: 'Ex.: 109876543210987', inputmode: 'numeric', autocomplete: 'off' });
+    const token = h('input', { type: 'password', autocomplete: 'new-password', placeholder: d.whatsapp.tokenSet ? '•••••••• (cadastrado — deixe em branco para manter)' : 'Token de acesso permanente' });
+    const testPhone = h('input', { placeholder: '5511999990000 (opcional, para enviar um teste)', inputmode: 'numeric' });
+    const waCard = h('div', { class: 'card' }, h('h2', {}, 'WhatsApp (API oficial da Meta)'),
+      h('p', {}, origin(d.whatsapp)),
+      h('p', { class: 'small muted' }, 'Avisa por WhatsApp quando chega uma nota baixa. Os números que recebem são cadastrados em Filiais (campo WhatsApp) e, para cada pessoa, em Minha conta. O modelo da mensagem fica na aba "Alertas e relatórios".'),
+      h('div', { class: 'form-grid' }, field('Identificador do número (Phone number ID)', phoneId, 'Painel da Meta → WhatsApp → Configuração da API.'),
+        field('Token de acesso', token, 'Use um token permanente (usuário do sistema), não o temporário de 24 h.')),
+      h('ol', { class: 'small muted steps' },
+        h('li', {}, 'Em developers.facebook.com crie um app do tipo "Empresa" e adicione o produto WhatsApp.'),
+        h('li', {}, 'Cadastre e verifique o número da empresa e copie o Identificador do número.'),
+        h('li', {}, 'Em "Usuários do sistema" gere um token permanente com a permissão whatsapp_business_messaging.'),
+        h('li', {}, 'Crie e aprove um modelo de mensagem com 3 variáveis ({{1}} filial, {{2}} nota, {{3}} link) e informe o nome dele na aba "Alertas e relatórios".')),
+      h('div', { class: 'row' },
+        h('button', { class: 'btn', onclick: async () => {
+          try { await api('/settings/delivery', { method: 'PUT', body: { whatsapp: { phoneId: phoneId.value, token: token.value } } }); toast('WhatsApp salvo. Use "Testar conexão".'); rerender(); } catch (ex) { toast(ex.message, true); }
+        } }, 'Salvar WhatsApp'),
+        d.whatsapp.source === 'painel' ? h('button', { class: 'btn danger', onclick: async () => {
+          if (!confirm('Remover a configuração de WhatsApp feita no painel?')) return;
+          try { await api('/settings/delivery', { method: 'PUT', body: { whatsapp: { clear: true } } }); toast('Configuração removida.'); rerender(); } catch (ex) { toast(ex.message, true); }
+        } }, 'Remover') : null),
+      d.whatsapp.configured ? h('div', { class: 'row mt' }, testPhone,
+        h('button', { class: 'btn secondary', onclick: async () => {
+          try {
+            const r = await api('/settings/test-whatsapp', { method: 'POST', body: { phone: testPhone.value } });
+            if (r.ok) toast(`Conexão OK: ${r.number}${r.name ? ' (' + r.name + ')' : ''}${r.sentTest ? ' — mensagem de teste enviada.' : ''}`);
+            else toast('Falhou: ' + (r.error || 'erro'), true);
+          } catch (ex) { toast(ex.message, true); }
+        } }, 'Testar conexão' + '')) : null);
+
+    // ----- fila
+    const queue = h('div', { class: 'card' }, h('h2', {}, 'Fila de envios'),
+      h('p', { class: 'small muted' }, `Na fila: ${n.pending} · com falha nos últimos 7 dias: ${n.failed}. Se o servidor de e-mail cair, as mensagens ficam guardadas e são reenviadas sozinhas.`),
+      n.recent.length ? h('div', { class: 'table-wrap' }, h('table', { class: 'small' },
+        h('thead', {}, h('tr', {}, ['Quando', 'Tipo', 'Canal', 'Situação', 'Erro'].map((t) => h('th', {}, t)))),
+        h('tbody', {}, n.recent.map((o) => h('tr', {}, h('td', {}, fmtDate(o.created_at)), h('td', {}, ({ detractor: 'Cliente insatisfeito', report: 'Relatório', offline: 'Tablet sem sinal', test: 'Teste', reset: 'Senha' })[o.kind] || o.kind),
+          h('td', {}, ({ email: 'E-mail', whatsapp: 'WhatsApp', webhook: 'Webhook' })[o.channel] || o.channel),
+          h('td', {}, h('span', { class: 'badge ' + (o.status === 'sent' ? 'ok' : o.status === 'failed' ? 'off' : 'warn') }, ({ sent: 'Enviado', failed: 'Falhou', pending: 'Na fila' })[o.status] || o.status)),
+          h('td', { class: 'muted' }, o.last_error || '')))))) : h('p', { class: 'muted' }, 'Nenhum envio ainda.'));
+    return h('div', {}, h('div', { class: 'grid c2' }, mailCard, waCard), queue);
   }
   const renderAgain = () => { if (location.hash.startsWith('#/configuracoes')) route(); };
 
@@ -1278,13 +1359,118 @@
   }
 
   // ------------------------------------------------------------ auditoria
+  // ------------------------------------------------------------ auditoria (histórico em português simples)
+  const CASE_STATUS = { aberto: 'Aberto', em_contato: 'Em contato', resolvido: 'Resolvido', sem_retorno: 'Sem retorno' };
+  const ROLE = { admin: 'Administrador', gestor: 'Gestor' };
+  const CHANNEL = { tablet: 'tablet', link: 'QR Code' };
+  const AUDIT_CATS = { acesso: 'Acesso ao sistema', conta: 'Senhas e segurança da conta', usuarios: 'Usuários', cadastros: 'Filiais, pesquisas e configurações',
+    tablets: 'Tablets', dados: 'Respostas, casos e relatórios', lgpd: 'Privacidade (LGPD)', sistema: 'Rotinas automáticas' };
+  const dayBR = (iso) => (/^\d{4}-\d{2}-\d{2}$/.test(iso || '') ? iso.split('-').reverse().join('/') : iso);
+
+  // Cada ação vira uma frase. ctx traz nomes de filiais, pesquisas, usuários e tablets para trocar números por nomes.
+  function auditEvent(r, ctx) {
+    const d = (() => { try { return r.detail ? JSON.parse(r.detail) : {}; } catch { return {}; } })() || {};
+    const br = (i) => (i ? `a filial "${ctx.branches.get(Number(i)) || '#' + i}"` : '');
+    const brName = (i) => ctx.branches.get(Number(i)) || (i ? '#' + i : '');
+    const sv = (i) => ctx.surveys.get(Number(i)) || (i ? '#' + i : '');
+    const filt = (f = {}) => {
+      const p = [];
+      if (f.from || f.to) p.push(`período ${dayBR(f.from) || '…'} a ${dayBR(f.to) || '…'}`);
+      if (f.branchId) p.push(`filial ${brName(f.branchId)}`);
+      if (f.surveyId) p.push(`pesquisa ${sv(f.surveyId)}`);
+      if (f.channel) p.push(`canal ${CHANNEL[f.channel] || f.channel}`);
+      if (f.uf) p.push(`estado ${({ _fora: 'fora do Brasil', _sem: 'QR sem localização' })[f.uf] || f.uf}`);
+      return p.length ? p.join(', ') : 'sem filtros (todos os dados)';
+    };
+    const plural = (n, a1, a2) => `${n} ${n === 1 ? a1 : a2}`;
+    const E = (cat, tone, title, detail) => ({ cat, tone, title, detail: detail || '' });
+    switch (r.action) {
+      case 'login.ok': return E('acesso', 'ok', 'Entrou no sistema', d.mfa ? 'Com verificação em duas etapas.' : 'Só com senha (sem verificação em duas etapas).');
+      case 'logout': return E('acesso', '', 'Saiu do sistema');
+      case 'login.failed': return E('acesso', 'warn', 'Tentativa de entrada recusada', `Senha ou e-mail incorretos${d.email ? ' (e-mail digitado: ' + d.email + ')' : ''}.`);
+      case 'login.mfa_failed': return E('acesso', 'warn', 'Código da verificação em duas etapas errado', 'A senha estava certa, mas o código do aplicativo não.');
+      case 'mfa.bad_password': return E('conta', 'warn', 'Senha errada ao mexer na verificação em duas etapas');
+      case 'login.locked': return E('acesso', 'bad', 'Conta bloqueada por 15 minutos', 'Muitas senhas erradas seguidas.');
+      case 'mfa.enabled': return E('conta', 'ok', 'Ativou a verificação em duas etapas');
+      case 'mfa.disabled': return E('conta', 'warn', 'Desativou a verificação em duas etapas', 'Atenção: a conta ficou protegida só pela senha.');
+      case 'mfa.recovery_code_used': return E('conta', 'warn', 'Entrou usando um código de recuperação', 'Costuma indicar que o celular com o aplicativo não estava à mão.');
+      case 'mfa.recovery_regenerated': return E('conta', '', 'Gerou novos códigos de recuperação', 'Os códigos antigos deixaram de valer.');
+      case 'password.reset_requested': return E('conta', '', 'Pediu para redefinir a senha', 'Um link foi enviado por e-mail.');
+      case 'password.reset_unknown': return E('conta', 'warn', 'Pedido de nova senha para e-mail não cadastrado', d.email ? `E-mail digitado: ${d.email}.` : '');
+      case 'password.reset_done': return E('conta', 'ok', 'Definiu uma nova senha pelo link do e-mail');
+      case 'user.password_changed': return E('conta', 'ok', 'Trocou a própria senha');
+      case 'user.create': return E('usuarios', '', `Criou o usuário ${d.email || ''}`, `Perfil: ${ROLE[d.role] || d.role}${d.role === 'gestor' ? ` · ${plural((d.branches || []).length, 'filial', 'filiais')}: ${(d.branches || []).map(brName).join(', ') || 'nenhuma'}` : ''}.`);
+      case 'user.update': {
+        const bits = [`Perfil: ${ROLE[d.role] || d.role}`, d.active === 0 || d.active === false ? 'usuário DESATIVADO' : 'usuário ativo'];
+        if (d.passwordReset) bits.push('senha redefinida pelo administrador');
+        if (d.resetMfa) bits.push('verificação em duas etapas reiniciada');
+        return E('usuarios', d.active === 0 || d.active === false || d.resetMfa ? 'warn' : '', `Alterou o usuário ${d.email || '#' + d.id}`, bits.join(' · ') + '.');
+      }
+      case 'branch.create': return E('cadastros', '', `Cadastrou a filial "${d.name || d.code || '#' + d.id}"`, [d.code && `Código ${d.code}`, d.city].filter(Boolean).join(' · '));
+      case 'branch.update': return E('cadastros', '', `Alterou a filial "${d.name || brName(d.id)}"`, d.active === 0 || d.active === false ? 'Filial DESATIVADA.' : '');
+      case 'branch.set_survey': return E('cadastros', '', `Definiu a pesquisa padrão da filial "${brName(d.branchId)}"`, d.surveyId ? `Pesquisa: ${sv(d.surveyId)}.` : 'Sem pesquisa padrão.');
+      case 'branch.public_link': return E('cadastros', d.regenerated ? 'warn' : '', `${d.regenerated ? 'Gerou um novo QR Code/link' : d.enabled ? 'Ativou o QR Code/link' : 'Desativou o QR Code/link'} da filial "${brName(d.branchId)}"`, d.regenerated ? 'O QR Code antigo parou de funcionar.' : '');
+      case 'schedule.create': return E('cadastros', '', `Agendou uma campanha${d.branchId ? ' na filial "' + brName(d.branchId) + '"' : ' em todas as filiais'}`, `Pesquisa: ${sv(d.surveyId)} · de ${d.startsAt ? new Date(d.startsAt).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : '…'} a ${d.endsAt ? new Date(d.endsAt).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : '…'}.`);
+      case 'schedule.delete': return E('cadastros', '', 'Excluiu uma campanha agendada');
+      case 'survey.create': return E('cadastros', '', `Criou a pesquisa "${d.title || sv(d.id)}"`);
+      case 'survey.update': return E('cadastros', '', `Alterou a pesquisa "${d.title || sv(d.id)}"`);
+      case 'survey.duplicate': return E('cadastros', '', `Duplicou a pesquisa "${sv(d.from)}"`, 'Criou uma cópia para editar.');
+      case 'media.upload': return E('cadastros', '', `Enviou ${String(d.mime || '').startsWith('video/') ? 'um vídeo' : 'uma imagem'}`, d.size ? `Tamanho: ${d.size > 1048576 ? (d.size / 1048576).toFixed(1) + ' MB' : Math.round(d.size / 1024) + ' KB'}.` : '');
+      case 'settings.update': return E('cadastros', '', 'Alterou as configurações do sistema', d.companyName ? `Empresa: ${d.companyName}.` : '');
+      case 'settings.delivery': return E('cadastros', 'warn', 'Alterou a configuração de e-mail/WhatsApp', [d.smtp && `E-mail: ${d.smtp}`, d.whatsapp && `WhatsApp: ${d.whatsapp}`].filter(Boolean).join(' · ') + '. (senhas e tokens não são registrados)');
+      case 'device.create': return E('tablets', '', `Cadastrou o tablet "${d.name || '#' + d.id}"`, d.branchId ? `Filial: ${brName(d.branchId)}.` : '');
+      case 'device.new_code': return E('tablets', 'warn', `Gerou um novo código de pareamento para o tablet "${ctx.devices.get(Number(d.id)) || '#' + d.id}"`, 'O tablet atual perdeu o acesso até ser pareado de novo.');
+      case 'device.revoke': return E('tablets', 'warn', `Revogou o acesso do tablet "${ctx.devices.get(Number(d.id)) || '#' + d.id}"`, 'Ele não coleta mais respostas.');
+      case 'device.paired': return E('tablets', 'ok', `Um tablet foi pareado${d.deviceId ? ': "' + (ctx.devices.get(Number(d.deviceId)) || '#' + d.deviceId) + '"' : ''}`);
+      case 'device.pair_failed': return E('tablets', 'warn', 'Tentativa de parear tablet com código errado ou vencido');
+      case 'response.delete': return E('dados', 'bad', 'Excluiu uma resposta', `Filial ${brName(d.branchId)} · pesquisa ${sv(d.surveyId)}.`);
+      case 'responses.delete_filtered': return E('dados', 'bad', `Excluiu ${plural(d.count ?? 0, 'resposta', 'respostas')} de uma vez`, `Filtro usado: ${filt(d.filter)}.`);
+      case 'responses.export': return E('dados', '', `Exportou ${plural(d.count ?? 0, 'resposta', 'respostas')} em planilha (CSV)`, `Filtro: ${filt(d.filter)}.`);
+      case 'report.pptx': return E('dados', '', 'Gerou o relatório em PowerPoint', `Filtro: ${filt(d.filter)}.`);
+      case 'report.weekly_manual': return E('dados', '', 'Enviou o relatório semanal manualmente', d.sent !== undefined ? `Enviado a ${plural(d.sent, 'pessoa', 'pessoas')}.` : '');
+      case 'report.weekly_queued': return E('sistema', '', 'Relatório semanal enviado automaticamente', d.sent !== undefined ? `Enviado a ${plural(d.sent, 'pessoa', 'pessoas')}.` : '');
+      case 'case.update': return E('dados', '', `Atualizou o caso #${d.id}`, `Situação: ${CASE_STATUS[d.status] || d.status || '—'}${d.assignee ? ' · responsável: ' + (ctx.users.get(Number(d.assignee)) || '#' + d.assignee) : ''}.`);
+      case 'contact.view': return E('lgpd', 'warn', `Viu os dados de contato de um cliente (caso #${d.caseId})`, 'Todo acesso a dado pessoal fica registrado.');
+      case 'privacy.search': return E('lgpd', '', 'Buscou dados de um cliente (LGPD)', `Encontrou ${plural(d.found ?? 0, 'registro', 'registros')}.`);
+      case 'privacy.export': return E('lgpd', 'warn', 'Exportou os dados de um cliente (LGPD)', `${plural(d.count ?? 0, 'registro', 'registros')}.`);
+      case 'privacy.erase': return E('lgpd', 'bad', 'Excluiu os dados pessoais de um cliente (LGPD)', `${plural(d.count ?? 0, 'registro anonimizado', 'registros anonimizados')}.`);
+      case 'lgpd.retention': return E('sistema', '', 'Limpeza automática de dados antigos (LGPD)', [d.contacts && `${d.contacts} contatos`, d.comments && `${d.comments} comentários`, d.audit && `${d.audit} registros de auditoria`, d.coordinates && `${d.coordinates} localizações`].filter(Boolean).join(' · ') + ' apagados pelo prazo de retenção.');
+      default: return E('sistema', '', r.action);
+    }
+  }
+  const TONE_LABEL = { ok: 'Normal', warn: 'Atenção', bad: 'Importante' };
+
   async function pageAudit() {
-    const rows = await api('/audit');
-    return h('div', {}, pageHead('Auditoria', 'Últimas 200 ações registradas'),
-      h('div', { class: 'card table-wrap' }, h('table', {},
-        h('thead', {}, h('tr', {}, h('th', {}, 'Quando'), h('th', {}, 'Usuário'), h('th', {}, 'Ação'), h('th', {}, 'Detalhes'), h('th', {}, 'IP'))),
-        h('tbody', {}, rows.map((r) => h('tr', {}, h('td', {}, fmtDate(r.at)), h('td', {}, r.email || '—'), h('td', {}, h('code', {}, r.action)),
-          h('td', { class: 'small muted' }, r.detail || ''), h('td', { class: 'small' }, r.ip || '')))))));
+    const [rows, brs, svs, users, devs] = await Promise.all([api('/audit?limit=500'), branches(), surveys(), api('/users'), api('/devices')]);
+    const ctx = { branches: new Map(brs.map((b) => [b.id, b.name])), surveys: new Map(svs.map((x) => [x.id, x.title])),
+      users: new Map(users.map((u) => [u.id, u.name])), devices: new Map(devs.map((x) => [x.id, x.name])) };
+    const events = rows.map((r) => ({ r, e: auditEvent(r, ctx) }));
+    const cat = h('select', {}, h('option', { value: '' }, 'Todos os tipos'), Object.entries(AUDIT_CATS).map(([k, l]) => h('option', { value: k }, l)));
+    const search = h('input', { type: 'search', placeholder: 'Buscar por pessoa, filial, palavra…' });
+    const onlyAlerts = h('input', { type: 'checkbox' });
+    const list = h('div', { class: 'card table-wrap' });
+    const ago = (t) => { const m = Math.round((Date.now() - t) / 60000); return m < 1 ? 'agora' : m < 60 ? `há ${m} min` : m < 1440 ? `há ${Math.round(m / 60)} h` : ''; };
+    const draw = () => {
+      const q = search.value.trim().toLowerCase();
+      const shown = events.filter(({ r, e }) => (!cat.value || e.cat === cat.value) && (!onlyAlerts.checked || e.tone === 'warn' || e.tone === 'bad')
+        && (!q || `${e.title} ${e.detail} ${r.name || ''} ${r.email || ''} ${r.ip || ''}`.toLowerCase().includes(q)));
+      list.replaceChildren(h('table', {},
+        h('thead', {}, h('tr', {}, ['Quando', 'Quem', 'O que aconteceu', 'De onde'].map((t) => h('th', {}, t)))),
+        h('tbody', {}, shown.length ? shown.map(({ r, e }) => h('tr', { class: e.tone ? 'tone-' + e.tone : '' },
+          h('td', {}, h('div', {}, fmtDate(r.at)), h('div', { class: 'small muted' }, ago(r.at))),
+          h('td', {}, r.name ? h('div', {}, h('b', {}, r.name), h('div', { class: 'small muted' }, r.email)) : h('span', { class: 'muted' }, r.action.startsWith('login.') || r.action.startsWith('password.') || r.action === 'device.pair_failed' || r.action === 'device.paired' ? 'Visitante / aparelho' : 'Sistema (automático)')),
+          h('td', {}, h('div', {}, e.tone && e.tone !== '' && e.tone !== 'ok' ? h('span', { class: 'badge ' + (e.tone === 'bad' ? 'off' : 'warn') }, TONE_LABEL[e.tone]) : null, e.tone && e.tone !== 'ok' ? ' ' : '', h('b', {}, e.title)),
+            e.detail ? h('div', { class: 'small muted' }, e.detail) : null, h('div', { class: 'small muted' }, AUDIT_CATS[e.cat])),
+          h('td', { class: 'small' }, r.ip || '—')))
+          : h('tr', {}, h('td', { colspan: '4', class: 'empty' }, 'Nenhum registro com esses filtros.')))));
+    };
+    [cat, onlyAlerts].forEach((el) => el.addEventListener('change', draw));
+    search.addEventListener('input', draw);
+    draw();
+    return h('div', {}, pageHead('Auditoria', 'Quem fez o quê no sistema — as últimas 500 ações, em linguagem simples'),
+      h('div', { class: 'card filters' }, h('label', { class: 'f' }, 'Tipo', cat), h('label', { class: 'f' }, 'Buscar', search),
+        h('label', { class: 'chk' }, onlyAlerts, 'Mostrar só o que merece atenção')),
+      list);
   }
 
   // ------------------------------------------------------------ minha conta
@@ -1302,6 +1488,7 @@
     const notif = (key, label) => h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: me.notify[key], onchange: async (e) => {
       try { await api('/me/notifications', { method: 'PUT', body: { [key]: e.target.checked } }); me.notify[key] = e.target.checked; toast('Preferência salva.'); } catch (ex) { toast(ex.message, true); }
     } }), label);
+    const wa = h('input', { value: me.whatsapp || '', placeholder: '5511999990000', inputmode: 'numeric', autocomplete: 'tel' });
     return h('div', {}, pageHead('Minha conta', me.email),
       h('div', { class: 'grid c2' },
         h('div', { class: 'card' }, h('h2', {}, 'Verificação em duas etapas (2FA)'),
@@ -1317,11 +1504,16 @@
               await api('/mfa/disable', { method: 'POST', body: { password: p, code: c } }); close(); toast('2FA desativado.'); route();
             }) }, 'Desativar') : null),
           mfa.required ? h('p', { class: 'small muted' }, 'Obrigatório para administradores nesta empresa.') : null),
-        h('div', { class: 'card' }, h('h2', {}, 'Notificações por e-mail'),
+        h('div', { class: 'card' }, h('h2', {}, 'Minhas notificações'),
           h('div', { class: 'grid' },
             notif('detractors', 'Cliente insatisfeito (nota de 0 a 6) nas minhas filiais'),
             notif('reports', 'Relatório semanal em PowerPoint'),
-            notif('offline', 'Tablet sem sinal nas minhas filiais')))),
+            notif('offline', 'Tablet sem sinal nas minhas filiais'),
+            h('label', { class: 'f mt' }, 'Meu WhatsApp para receber o alerta de cliente insatisfeito (opcional)', wa,
+              h('span', { class: 'small muted' }, 'DDD + número, ex.: 11 99999-0000. Só funciona se o WhatsApp estiver configurado em Configurações → E-mail e WhatsApp. Deixe em branco para não receber.')),
+            h('div', { class: 'row' }, h('button', { class: 'btn secondary sm', onclick: async () => {
+              try { await api('/me/notifications', { method: 'PUT', body: { whatsapp: wa.value } }); toast('WhatsApp salvo.'); me = null; await loadMe(); } catch (ex) { toast(ex.message, true); }
+            } }, 'Salvar WhatsApp'))))),
       h('div', { class: 'card' }, h('h2', {}, 'Trocar senha'), h('div', { class: 'form-grid' },
         h('label', { class: 'f' }, 'Senha atual', cur), h('label', { class: 'f' }, 'Nova senha', pw), h('label', { class: 'f' }, 'Repita a nova senha', pw2)),
       h('div', { class: 'row' }, h('button', { class: 'btn', onclick: async () => {

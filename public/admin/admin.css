@@ -280,3 +280,8 @@ details.tr .form-grid { margin-top: 10px; }
 
 .loc { margin-top: 3px; line-height: 1.35; }
 .loc svg { vertical-align: -2px; margin-right: 4px; }
+
+/* auditoria: faixa colorida conforme a importância */
+tr.tone-warn td:first-child { box-shadow: inset 3px 0 0 var(--mid); }
+tr.tone-bad td:first-child { box-shadow: inset 3px 0 0 var(--bad); }
+label.f > .small { font-weight: 400; }

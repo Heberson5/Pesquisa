@@ -11,7 +11,8 @@ const { destroySession, destroyUserSessions, requireUser, requireAdmin } = requi
 const { HttpError, bad, str, int, bool, id, email, dateParam } = require('../validate');
 const { QUESTION_TYPES, DISPLAYS, LANGS, LANG_LABELS, CONTACT_MODES, loadSurvey, normalizeQuestions, normalizeI18n, npsFromCounts } = require('../surveys');
 const { getSettings, saveSettings, emailList } = require('../settings');
-const { queueEmail, renderEmail, processOutbox, outboxStatus, webhookSecret } = require('../notify');
+const { queueEmail, queueWhatsApp, renderEmail, processOutbox, outboxStatus, webhookSecret, whatsappCheck } = require('../notify');
+const delivery = require('../delivery');
 const { responseFilter, computeStats, computeBreakdown, reportFor, NPS_AGG, NPS_JOIN, npsRow } = require('../stats');
 const { resetUserMfa } = require('./auth');
 const QRCode = require('qrcode');
@@ -37,8 +38,8 @@ router.post('/logout', (req, res) => {
 });
 
 router.get('/me', (req, res) => {
-  const u = get('SELECT totp_enabled, notify_detractors, notify_reports, notify_offline FROM users WHERE id = ?', req.user.id);
-  res.json({ user: { id: req.user.id, name: req.user.name, email: req.user.email, role: req.user.role, mfaEnabled: !!u.totp_enabled,
+  const u = get('SELECT totp_enabled, notify_detractors, notify_reports, notify_offline, whatsapp FROM users WHERE id = ?', req.user.id);
+  res.json({ user: { id: req.user.id, name: req.user.name, email: req.user.email, role: req.user.role, mfaEnabled: !!u.totp_enabled, whatsapp: u.whatsapp || '',
     notify: { detractors: !!u.notify_detractors, reports: !!u.notify_reports, offline: !!u.notify_offline } },
   mfaSetupRequired: req.user.mfaSetupRequired, csrf: req.user.csrf,
   questionTypes: QUESTION_TYPES, displays: DISPLAYS, langs: LANG_LABELS, contactModes: CONTACT_MODES, settings: req.user.mfaSetupRequired ? null : settingsFor(req.user) });
@@ -59,6 +60,14 @@ router.put('/me/notifications', (req, res) => {
   const u = get('SELECT notify_detractors, notify_reports, notify_offline FROM users WHERE id = ?', req.user.id);
   run('UPDATE users SET notify_detractors = ?, notify_reports = ?, notify_offline = ? WHERE id = ?',
     f(b.detractors, u.notify_detractors), f(b.reports, u.notify_reports), f(b.offline, u.notify_offline), req.user.id);
+  if (b.whatsapp !== undefined) {
+    // WhatsApp pessoal (opcional): só números, com DDI. 10–11 dígitos = Brasil, o 55 é acrescentado.
+    if (typeof b.whatsapp !== 'string') throw bad('WhatsApp inválido.');
+    let digits = b.whatsapp.replace(/[\s().+-]/g, '');
+    if (digits && !/^\d{10,15}$/.test(digits)) throw bad('WhatsApp inválido. Digite DDD + número (ex.: 11 99999-0000).');
+    if (/^\d{10,11}$/.test(digits)) digits = '55' + digits;
+    run('UPDATE users SET whatsapp = ? WHERE id = ?', digits || null, req.user.id);
+  }
   res.json({ ok: true });
 });
 
@@ -580,7 +589,7 @@ router.get('/settings/notifications', requireAdmin, (req, res) => {
   res.json({ ...outboxStatus(), webhookSecret: webhookSecret(), recent });
 });
 
-const testLimiter = rateLimiter({ windowMs: 60 * 60_000, max: 5, keyFn: (req) => 'test:' + req.user.id, message: 'Limite de e-mails de teste atingido. Aguarde.' });
+const testLimiter = rateLimiter({ windowMs: 60 * 60_000, max: 5, keyFn: (req) => 'test:' + req.user.id, message: 'Limite de testes atingido. Aguarde um pouco.' });
 router.post('/settings/test-email', requireAdmin, testLimiter, async (req, res) => {
   const s = getSettings();
   const { html, text } = renderEmail({ brand: s, title: 'E-mail de teste', intro: 'Se você recebeu esta mensagem, o envio de e-mails do sistema de pesquisa está funcionando.' });
@@ -614,8 +623,40 @@ router.get('/report.pptx', async (req, res) => {
 });
 
 router.get('/audit', requireAdmin, (req, res) => {
-  res.json(all(`SELECT l.at, l.action, l.detail, l.ip, u.email FROM audit_log l LEFT JOIN users u ON u.id = l.user_id
-    ORDER BY l.id DESC LIMIT 200`));
+  const limit = int(req.query.limit || '300', { field: 'limite', min: 1, max: 1000 });
+  res.json(all(`SELECT l.id, l.at, l.action, l.detail, l.ip, l.user_id, u.email, u.name FROM audit_log l LEFT JOIN users u ON u.id = l.user_id
+    ORDER BY l.id DESC LIMIT ?`, limit));
+});
+
+// ---------------------------------------------------------------- envio: e-mail (SMTP) e WhatsApp, configurados pelo painel (somente admin)
+router.get('/settings/delivery', requireAdmin, (req, res) => res.json(delivery.publicView()));
+router.put('/settings/delivery', requireAdmin, async (req, res) => {
+  const b = req.body || {};
+  const view = await delivery.save({ smtp: b.smtp, whatsapp: b.whatsapp });
+  // Auditoria sem segredos: só registra o que foi alterado.
+  audit(req.user.id, 'settings.delivery', { smtp: b.smtp === undefined ? undefined : (b.smtp?.clear ? 'removido' : 'alterado'), whatsapp: b.whatsapp === undefined ? undefined : (b.whatsapp?.clear ? 'removido' : 'alterado') }, req.ip);
+  res.json(view);
+});
+router.post('/settings/test-whatsapp', requireAdmin, testLimiter, async (req, res) => {
+  try {
+    const info = await whatsappCheck();
+    let queued = false;
+    const phone = String(req.body?.phone || '').replace(/[\s().+-]/g, '');
+    const s = getSettings();
+    if (phone) {
+      if (!/^\d{10,15}$/.test(phone)) throw bad('Número inválido. Digite DDI + DDD + número (ex.: 5511999990000).');
+      if (!s.alerts.whatsappTemplate) throw bad('Informe o "Modelo aprovado do WhatsApp" para enviar uma mensagem de teste.');
+      queueWhatsApp(/^\d{10,11}$/.test(phone) ? '55' + phone : phone, { template: s.alerts.whatsappTemplate, language: s.alerts.whatsappLanguage, params: ['Teste', '10', 'Mensagem de teste'] }, 'test');
+      await processOutbox(5);
+      const last = get("SELECT status, last_error FROM outbox WHERE kind = 'test' AND channel = 'whatsapp' ORDER BY id DESC LIMIT 1");
+      if (last.status !== 'sent') return res.json({ ok: false, ...info, error: last.last_error || 'Falha no envio.' });
+      queued = true;
+    }
+    res.json({ ok: true, ...info, sentTest: queued });
+  } catch (e) {
+    if (e instanceof HttpError) throw e;
+    res.json({ ok: false, error: e.message });
+  }
 });
 
 module.exports = router;

@@ -61,7 +61,10 @@ function notifyDetractor(r, score, caseId) {
   }
   if (s.alerts.whatsappTemplate) {
     const phones = parseList(get('SELECT alert_phones FROM branches WHERE id = ?', r.branch_id)?.alert_phones);
-    for (const p of phones) queueWhatsApp(p, { template: s.alerts.whatsappTemplate, language: s.alerts.whatsappLanguage, params: [r.branch_name, String(score), url] }, 'detractor');
+    // + WhatsApp pessoal dos usuários (gestores da filial e administradores) que quiserem o aviso
+    const mine = all(`SELECT DISTINCT u.whatsapp FROM users u LEFT JOIN user_branches ub ON ub.user_id = u.id
+        WHERE u.active = 1 AND u.notify_detractors = 1 AND u.whatsapp IS NOT NULL AND (u.role = 'admin' OR ub.branch_id = ?)`, r.branch_id).map((x) => x.whatsapp);
+    for (const p of [...new Set([...phones, ...mine])]) queueWhatsApp(p, { template: s.alerts.whatsappTemplate, language: s.alerts.whatsappLanguage, params: [r.branch_name, String(score), url] }, 'detractor');
   }
 }
 
