@@ -58,16 +58,18 @@ tx(() => {
   for (const b of branches) {
     const devId = run('INSERT INTO devices (branch_id, name, token_hash, paired_at, last_seen_at, created_at) VALUES (?,?,?,?,?,?)',
       b.id, 'Tablet recepção', crypto.randomBytes(32).toString('hex'), now, now, now).lastInsertRowid;
+    const devName = 'Tablet recepção';
     const n = rnd(110, 170);
     for (let i = 0; i < n; i++) {
       const t = now - rnd(0, 29) * 86_400_000 - rnd(0, 36_000_000);
       // ~30% das respostas vieram pelo QR Code; a maioria autorizou a localização (cidade/UF/região).
       const viaQr = Math.random() < 0.3;
       const place = viaQr && Math.random() < 0.75 ? PLACES[rnd(0, PLACES.length - 1)] : null;
-      const rid = run(`INSERT INTO responses (uuid, survey_id, branch_id, device_id, started_at, submitted_at, received_at, channel, geo_city, geo_uf, geo_region, geo_lat, geo_lng)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      const rid = run(`INSERT INTO responses (uuid, survey_id, branch_id, device_id, started_at, submitted_at, received_at, channel, geo_city, geo_uf, geo_region, geo_lat, geo_lng, device_label)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       crypto.randomUUID(), surveyId, b.id, viaQr ? null : devId, t - rnd(20, 90) * 1000, t, t, viaQr ? 'link' : 'tablet',
-      place?.[0] ?? null, place?.[1] ?? null, place?.[2] ?? null, place?.[3] ?? null, place?.[4] ?? null).lastInsertRowid;
+      place?.[0] ?? null, place?.[1] ?? null, place?.[2] ?? null, place?.[3] ?? null, place?.[4] ?? null,
+      viaQr ? ['iPhone · Safari', 'Android (celular) · Chrome', 'Android (celular) · Samsung Internet', 'iPhone · Instagram'][rnd(0, 3)] : (devName || null)).lastInsertRowid;
       const happy = Math.random() * 100 < b.bias + 30;
       const score = happy ? rnd(8, 10) : rnd(2, 8);
       const nps0 = Math.max(0, Math.min(10, score + rnd(-1, 1)));

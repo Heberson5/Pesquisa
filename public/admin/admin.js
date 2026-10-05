@@ -547,13 +547,20 @@
   // ------------------------------------------------------------ respostas
   // Onde a resposta foi dada: QR Code = região informada pelo cliente (se ele autorizou); tablet = cidade da filial.
   function locationBadge(x) {
-    if (x.channel !== 'link') return x.branch_city ? h('div', { class: 'small muted loc' }, icon('map-pin', 13), `${x.branch_city} (loja)`) : null;
+    if (x.channel !== 'link') return h('div', { class: 'small muted loc' }, icon('map-pin', 13), x.branch_city ? `${x.branch_city} (loja)` : 'Cidade da filial não cadastrada');
     if (!x.geo_region) return h('div', { class: 'small muted loc' }, icon('map-pin', 13), 'Local não informado');
     const place = x.geo_region === 'Fora do Brasil' ? 'Fora do Brasil' : [x.geo_city, x.geo_uf].filter(Boolean).join('/') + ` · ${x.geo_region}`;
     const link = x.geo_lat !== null && x.geo_lat !== undefined
       ? h('a', { class: 'small', target: '_blank', rel: 'noopener noreferrer', title: 'Abrir no mapa (ponto aproximado, ~1 km)',
         href: `https://www.openstreetmap.org/?mlat=${x.geo_lat}&mlon=${x.geo_lng}#map=11/${x.geo_lat}/${x.geo_lng}` }, ' mapa') : null;
     return h('div', { class: 'small loc' }, icon('map-pin', 13), place, link);
+  }
+
+  // Dispositivo: tablet = nome cadastrado; QR Code = tipo de aparelho e navegador do cliente.
+  function deviceBadge(x) {
+    const name = x.device_label || x.device;
+    return h('div', {}, h('div', {}, icon(x.channel === 'link' ? 'phone' : 'tablet', 14), ' ', h('b', {}, name || (x.channel === 'link' ? 'Aparelho não identificado' : 'Tablet removido'))),
+      h('div', { class: 'small muted' }, x.channel === 'link' ? 'QR Code (celular do cliente)' : 'Tablet da loja'));
   }
 
   async function pageResponses() {
@@ -582,19 +589,19 @@
         h('div', { class: 'row between' }, h('p', { class: 'muted' }, `${r.total} respostas encontradas`),
           isAdmin && r.total ? h('button', { class: 'btn danger sm', onclick: () => deleteFiltered(r.total) }, icon('trash', 14), 'Excluir todas as filtradas') : null),
         h('div', { class: 'table-wrap' }, h('table', {},
-          h('thead', {}, h('tr', {}, h('th', {}, 'Data'), h('th', {}, 'Filial'), h('th', {}, 'Pesquisa'), h('th', {}, 'Respostas'), isAdmin ? h('th', {}) : null)),
+          h('thead', {}, h('tr', {}, h('th', {}, 'Data'), h('th', {}, 'Filial'), h('th', {}, 'Localização'), h('th', {}, 'Dispositivo'), h('th', {}, 'Pesquisa'), h('th', {}, 'Respostas'), isAdmin ? h('th', {}) : null)),
           h('tbody', {}, r.rows.length ? r.rows.map((x) => h('tr', {},
-            h('td', {}, fmtDate(x.submitted_at), h('div', { class: 'small muted' }, x.channel === 'link' ? 'via QR Code' : (x.device || '')),
-              locationBadge(x),
-              x.lang && x.lang !== 'pt' ? h('span', { class: 'badge' }, x.lang.toUpperCase()) : null),
-            h('td', {}, x.branch), h('td', {}, x.survey),
+            h('td', {}, fmtDate(x.submitted_at), x.lang && x.lang !== 'pt' ? h('div', {}, h('span', { class: 'badge' }, x.lang.toUpperCase())) : null),
+            h('td', {}, x.branch),
+            h('td', {}, locationBadge(x)),
+            h('td', {}, deviceBadge(x)), h('td', {}, x.survey),
             h('td', {}, h('ul', { class: 'answers' }, (x.answers || []).map((a) => h('li', {},
               h('b', {}, qLabel(a.question)), a.value, a.is_nps ? h('span', { class: 'badge nps' }, ' NPS') : null)))),
             isAdmin ? h('td', {}, h('button', { class: 'btn danger sm', onclick: async () => {
               if (!confirm('Excluir esta resposta definitivamente? Isso não pode ser desfeito.')) return;
               try { await api(`/responses/${x.id}`, { method: 'DELETE' }); toast('Resposta excluída.'); load(); } catch (ex) { toast(ex.message, true); }
             } }, icon('trash', 14), 'Excluir')) : null))
-            : h('tr', {}, h('td', { colspan: '5', class: 'empty' }, 'Nenhuma resposta.'))))),
+            : h('tr', {}, h('td', { colspan: '7', class: 'empty' }, 'Nenhuma resposta.'))))),
         h('div', { class: 'row' },
           h('button', { class: 'btn secondary sm', disabled: page <= 1, onclick: () => { page--; load(); } }, '‹ Anterior'),
           h('span', { class: 'small muted' }, `Página ${page} de ${pages}`),

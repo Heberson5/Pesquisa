@@ -11,6 +11,7 @@ const { rateLimiter } = require('../security');
 const { HttpError, bad } = require('../validate');
 const { lookup, sign } = require('../vault');
 const { buildConfig, saveResponse } = require('../responses');
+const { deviceLabel } = require('../ua');
 
 const router = express.Router();
 const TICKET_MIN_MS = 3_000;
@@ -54,7 +55,7 @@ router.post('/:token/responses', perIp, perBranch, (req, res) => {
   // Uso único: a atualização só acontece se o bilhete ainda não foi usado.
   const used = run('UPDATE link_tickets SET used_at = ? WHERE nonce = ? AND branch_id = ? AND used_at IS NULL', Date.now(), nonce, b.id);
   if (!used.changes) throw new HttpError(409, 'Esta avaliação já foi enviada. Obrigado!');
-  const r = saveResponse({ branch: b, channel: 'link', body: req.body });
+  const r = saveResponse({ branch: b, channel: 'link', deviceLabel: deviceLabel(req.get('user-agent')), body: req.body });
   res.status(r.created ? 201 : 200).json({ ok: true });
 });
 

@@ -238,6 +238,8 @@ for (const [table, column, ddl] of [
   ['responses', 'contact_consent_at', 'contact_consent_at INTEGER'],
   ['responses', 'anonymized_at', 'anonymized_at INTEGER'],
   // Localização aproximada (só QR/link, com autorização do cliente): coordenadas ~1 km + cidade/UF/região do IBGE.
+  // Nome do dispositivo no momento da resposta: tablet = nome cadastrado; QR = tipo de aparelho/navegador do cliente.
+  ['responses', 'device_label', 'device_label TEXT'],
   ['responses', 'geo_lat', 'geo_lat REAL'],
   ['responses', 'geo_lng', 'geo_lng REAL'],
   ['responses', 'geo_city', 'geo_city TEXT'],
@@ -257,6 +259,8 @@ for (const [table, column, ddl] of [
   ['questions', 'show_if', 'show_if TEXT'],
   ['questions', 'i18n', 'i18n TEXT'],
 ]) addColumnIfMissing(table, column, ddl);
+// Respostas antigas de tablet: copia o nome atual do tablet (depois disso, renomear não muda o histórico).
+db.exec("UPDATE responses SET device_label = (SELECT name FROM devices WHERE devices.id = responses.device_id) WHERE device_label IS NULL AND device_id IS NOT NULL");
 db.exec(`CREATE INDEX IF NOT EXISTS idx_resp_phone ON responses(contact_phone_lookup);
 CREATE INDEX IF NOT EXISTS idx_resp_email ON responses(contact_email_lookup);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_branch_public ON branches(public_token_hash);`);

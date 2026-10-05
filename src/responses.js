@@ -100,7 +100,7 @@ function parseContact(raw, survey, minNps) {
 }
 
 // ---------------------------------------------------------------- gravação
-function saveResponse({ branch, deviceId = null, channel, body }) {
+function saveResponse({ branch, deviceId = null, deviceLabel = null, channel, body }) {
   if (!body || typeof body !== 'object') throw bad('Resposta inválida.');
   if (typeof body.uuid !== 'string' || !UUID_RE.test(body.uuid)) throw bad('Identificador inválido.');
   const surveyId = int(body.surveyId, { field: 'pesquisa', min: 1 });
@@ -157,12 +157,12 @@ function saveResponse({ branch, deviceId = null, channel, body }) {
   const result = tx(() => {
     if (get('SELECT 1 FROM responses WHERE uuid = ?', body.uuid.toLowerCase())) return { created: false };
     const r = run(`INSERT INTO responses (uuid, survey_id, branch_id, device_id, started_at, submitted_at, received_at, channel, lang,
-        contact_name_enc, contact_phone_enc, contact_email_enc, contact_phone_lookup, contact_email_lookup, contact_consent_at, geo_lat, geo_lng, geo_city, geo_uf, geo_region)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        contact_name_enc, contact_phone_enc, contact_email_enc, contact_phone_lookup, contact_email_lookup, contact_consent_at, geo_lat, geo_lng, geo_city, geo_uf, geo_region, device_label)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     body.uuid.toLowerCase(), survey.id, branch.id, deviceId, startedAt, submittedAt, now, channel, lang,
     contact ? encrypt(contact.name) : null, contact ? encrypt(contact.phone) : null, contact ? encrypt(contact.email) : null,
     contact?.phone ? lookup('phone:' + contact.phone) : null, contact?.email ? lookup('email:' + contact.email) : null, contact ? now : null,
-    geo?.lat ?? null, geo?.lng ?? null, geo?.city ?? null, geo?.uf ?? null, geo?.region ?? null);
+    geo?.lat ?? null, geo?.lng ?? null, geo?.city ?? null, geo?.uf ?? null, geo?.region ?? null, deviceLabel ? String(deviceLabel).slice(0, 80) : null);
     for (const { q, v } of normalized) {
       run('INSERT INTO answers (response_id, question_id, value_num, value_text) VALUES (?,?,?,?)', r.lastInsertRowid, q.id, v.num, v.text);
     }

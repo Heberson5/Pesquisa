@@ -41,7 +41,7 @@ const branchOf = (d) => get('SELECT * FROM branches WHERE id = ?', d.branch_id);
 
 // Recebe uma resposta completa. Idempotente pelo uuid (o tablet reenvia se cair a internet).
 router.post('/responses', requireDevice, submitLimiter, (req, res) => {
-  const r = saveResponse({ branch: branchOf(req.device), deviceId: req.device.id, channel: 'tablet', body: req.body });
+  const r = saveResponse({ branch: branchOf(req.device), deviceId: req.device.id, deviceLabel: req.device.name, channel: 'tablet', body: req.body });
   res.status(r.created ? 201 : 200).json({ ok: true, duplicate: !r.created });
 });
 

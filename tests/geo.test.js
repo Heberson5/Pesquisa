@@ -92,7 +92,7 @@ test('lista, filtro por estado, estatísticas por região e CSV trazem o local',
   assert.ok(st.byCity.find((r) => r.city === 'Campinas' && r.uf === 'SP'));
   const csv = (await admin.req('GET', '/api/admin/responses.csv')).text;
   assert.match(csv, /Cidade \(cliente\)";"UF \(cliente\)";"Região \(cliente\)";"Latitude aprox\./);
-  assert.match(csv, /"QR Code";"Belo Horizonte";"MG";"Sudeste";"-19,92";"-43,94"/);
+  assert.match(csv, /"QR Code";"Campinas";"Belo Horizonte";"MG";"Sudeste";"-19,92";"-43,94"/);
   // gestor de outra filial não enxerga a região das respostas da filial A
   const g = (await gestor.req('GET', '/api/admin/stats')).json;
   assert.deepEqual(g.byRegion, []); assert.equal(g.linkNoGeo, 0);
