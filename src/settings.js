@@ -27,9 +27,11 @@ const DEFAULTS = {
   weeklyReport: { enabled: false, weekday: 1, hour: 8, extraEmails: [] },
   defaultNpsGoal: 50,
   offlineAlert: { enabled: true, minutes: 30 },
+  // Tela do tablet: mantém acesa e escurece (economiza bateria) depois de um tempo sem toque.
+  screen: { keepAwake: true, dim: true, dimAfterSeconds: 30, dimLevel: 70 },
 };
 
-const OBJECT_KEYS = ['menuIcons', 'retention', 'alerts', 'weeklyReport', 'offlineAlert'];
+const OBJECT_KEYS = ['menuIcons', 'retention', 'alerts', 'weeklyReport', 'offlineAlert', 'screen'];
 
 // Aceita somente texto (recusa listas/objetos que virariam texto por conversão automática).
 function text(v, fallback, field) {
@@ -144,6 +146,15 @@ function saveSettings(input) {
     if (input.offlineAlert.enabled !== undefined) next.offlineAlert.enabled = flag(input.offlineAlert.enabled);
     if (input.offlineAlert.minutes !== undefined) next.offlineAlert.minutes = int(input.offlineAlert.minutes, { field: 'minutos sem sinal', min: 10, max: 1440 });
   }
+  next.screen = { ...DEFAULTS.screen, ...cur.screen };
+  if (input.screen !== undefined) {
+    obj(input.screen, 'tela do tablet');
+    const sc = input.screen;
+    if (sc.keepAwake !== undefined) next.screen.keepAwake = flag(sc.keepAwake);
+    if (sc.dim !== undefined) next.screen.dim = flag(sc.dim);
+    if (sc.dimAfterSeconds !== undefined) next.screen.dimAfterSeconds = int(sc.dimAfterSeconds, { field: 'segundos para escurecer', min: 5, max: 3600 });
+    if (sc.dimLevel !== undefined) next.screen.dimLevel = int(sc.dimLevel, { field: 'nível de escurecimento', min: 20, max: 90 });
+  }
   for (const [k, v] of Object.entries(next)) {
     run('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', k, JSON.stringify(v));
   }
@@ -163,6 +174,7 @@ function publicBranding() {
     colorScheme: s.colorScheme,
     faceStyle: s.faceStyle,
     privacyText: s.privacyText,
+    screen: s.screen,
   };
 }
 

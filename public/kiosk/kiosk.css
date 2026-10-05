@@ -145,3 +145,7 @@ body.mode-link .question { height: auto; min-height: calc(100dvh - 40px); }
   .contact-form { padding: 16px; }
   .field { font-size: 18px; }
 }
+
+/* escurecimento para economizar bateria (opacidade definida pelo kiosk.js) */
+#dim { position: fixed; inset: 0; background: #000; opacity: 0; pointer-events: none; z-index: 9999; transition: opacity 1.2s ease; }
+video.nap { position: fixed; width: 2px; height: 2px; opacity: .01; pointer-events: none; left: 0; top: 0; }

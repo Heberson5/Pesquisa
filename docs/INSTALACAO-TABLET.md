@@ -48,3 +48,13 @@ O Fully Kiosk impede que o cliente saia da pesquisa, reinicia sozinho se travar 
 - **Tablet perdido ou roubado:** no painel, Tablets → **Revogar**. Ele para de funcionar na hora.
 - **Trocar de aparelho:** no painel, Tablets → **Novo código** e ative o tablet novo.
 - **Alerta "tablet sem sinal":** verifique tomada, Wi-Fi e se a pesquisa está aberta na tela.
+
+## Tela sempre acesa e economia de bateria
+
+O próprio sistema mantém a tela acesa (Wake Lock; em iPad antigo usa um vídeo mudo minúsculo como reserva, que só começa depois do primeiro toque) e, depois de um tempo sem toque, **escurece a tela** para poupar bateria. Um toque volta ao brilho normal na hora.
+
+Ajuste em **Configurações → Alertas → Tela do tablet e bateria** (tempo para escurecer e nível de escurecimento). A mudança chega ao tablet em até 1 minuto.
+
+- **Android com Fully Kiosk:** ligue *Other Settings → Enable JavaScript Interface (PLUS)* para o sistema reduzir o brilho de verdade do aparelho.
+- **iPad / demais:** uma camada escura reduz a claridade (em tela OLED isso poupa bateria). Deixe também *Bloqueio Automático = Nunca* e, de preferência, o tablet na tomada em horário de funcionamento.
+- Um navegador não consegue alterar o brilho do aparelho sozinho; por isso o escurecimento é feito dentro da página.

@@ -461,6 +461,26 @@ router.get('/responses', (req, res) => {
   res.json({ page, pageSize: 25, ...listResponses(req.user, req.query, 25, (page - 1) * 25) });
 });
 
+// Exclusão de respostas: SOMENTE administrador (gestor nunca apaga). Respostas, casos e
+// anotações ligados a ela saem juntos (ON DELETE CASCADE). Fica registrado na auditoria.
+router.delete('/responses/:id', requireAdmin, (req, res) => {
+  const rid = id(req.params.id);
+  const r = get('SELECT id, branch_id, survey_id, submitted_at FROM responses WHERE id = ?', rid);
+  if (!r) throw new HttpError(404, 'Resposta não encontrada.');
+  run('DELETE FROM responses WHERE id = ?', rid);
+  audit(req.user.id, 'response.delete', { id: rid, branchId: r.branch_id, surveyId: r.survey_id }, req.ip);
+  res.json({ ok: true });
+});
+
+// Exclusão em lote do que está filtrado na tela (útil para limpar os testes). Exige digitar a palavra EXCLUIR.
+router.post('/responses/delete-filtered', requireAdmin, (req, res) => {
+  if (req.body?.confirm !== 'EXCLUIR') throw new HttpError(400, 'Digite EXCLUIR para confirmar.');
+  const f = responseFilter(req.user, req.body?.filter && typeof req.body.filter === 'object' ? req.body.filter : {});
+  const n = tx(() => run(`DELETE FROM responses WHERE id IN (SELECT r.id FROM responses r ${f.sql})`, ...f.params).changes);
+  audit(req.user.id, 'responses.delete_filtered', { count: Number(n), filter: req.body?.filter || {} }, req.ip);
+  res.json({ ok: true, deleted: Number(n) });
+});
+
 // Exportação CSV (protege contra "CSV injection" ao abrir no Excel).
 function csvCell(v) {
   let s = v === null || v === undefined ? '' : String(v);

@@ -276,3 +276,4 @@ details.tr .form-grid { margin-top: 10px; }
   body.printing-poster .poster-title { font-size: 44px; } body.printing-poster .poster-qr { width: 420px; height: 420px; } body.printing-poster .poster-sub { font-size: 22px; }
 }
 .guide ol { padding-left: 20px; line-height: 1.6; } .guide h2 { margin-top: 16px; }
+.row.between { justify-content: space-between; }

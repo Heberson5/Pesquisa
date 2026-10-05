@@ -505,11 +505,57 @@
     document.body.classList.add('mode-link');
   }
 
-  let wakeLock = null;
+  // ------------------------------------------------------------ tela sempre acesa + economia de bateria
+  // 1) Wake Lock da própria página; 2) vídeo mudo em laço (reserva para iPad/Safari antigos, exige 1 toque);
+  // 3) depois de alguns segundos sem toque, escurece a tela com uma camada preta (e usa o brilho real no Fully Kiosk).
+  const SCREEN_DEFAULTS = { keepAwake: true, dim: true, dimAfterSeconds: 30, dimLevel: 70 };
+  const screenCfg = () => ({ ...SCREEN_DEFAULTS, ...(config?.branding?.screen || {}) });
+  let wakeLock = null, napVideo = null, dimTimer = null, dimmed = false, fullyBrightness = null;
+  const dimEl = h('div', { id: 'dim', 'aria-hidden': 'true' });
+  document.body.append(dimEl);
+
   async function keepAwake() {
-    try { if ('wakeLock' in navigator && !wakeLock) { wakeLock = await navigator.wakeLock.request('screen'); wakeLock.addEventListener('release', () => { wakeLock = null; }); } } catch { /* */ }
+    if (MODE !== 'tablet' || !screenCfg().keepAwake) return;
+    try {
+      if ('wakeLock' in navigator && !wakeLock && document.visibilityState === 'visible') {
+        wakeLock = await navigator.wakeLock.request('screen');
+        wakeLock.addEventListener('release', () => { wakeLock = null; });
+      }
+    } catch { /* sem suporte ou negado: o vídeo abaixo cobre */ }
+    if (!wakeLock && !napVideo) {
+      napVideo = h('video', { muted: true, loop: true, playsinline: true, 'aria-hidden': 'true', class: 'nap', src: '/kiosk/nosleep.mp4' });
+      napVideo.muted = true;
+      document.body.append(napVideo);
+    }
+    if (!wakeLock && napVideo && napVideo.paused) napVideo.play().catch(() => { /* precisa de um toque; tenta de novo no próximo */ });
   }
-  if (MODE === 'tablet') document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') keepAwake(); });
+
+  function setDim(on) {
+    if (on === dimmed) return;
+    dimmed = on;
+    dimEl.style.opacity = on ? String(screenCfg().dimLevel / 100) : '0';
+    try { // Fully Kiosk Browser: brilho de verdade (precisa do "JavaScript Interface" ligado)
+      const f = window.fully;
+      if (f && typeof f.setScreenBrightness === 'function') {
+        if (on) { if (fullyBrightness === null) fullyBrightness = Number(f.getScreenBrightness()); f.setScreenBrightness(Math.max(10, Math.round(255 * (1 - screenCfg().dimLevel / 100)))); }
+        else if (fullyBrightness !== null) { f.setScreenBrightness(fullyBrightness); fullyBrightness = null; }
+      }
+    } catch { /* */ }
+  }
+  function armDim() {
+    clearTimeout(dimTimer);
+    const c = screenCfg();
+    if (!c.dim || screen === 'pairing') return;
+    dimTimer = setTimeout(() => setDim(true), c.dimAfterSeconds * 1000);
+  }
+  function onTouch() { setDim(false); keepAwake(); armDim(); }
+
+  if (MODE === 'tablet') {
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { wakeLock = null; keepAwake(); armDim(); } });
+    ['pointerdown', 'touchstart', 'keydown'].forEach((ev) => document.addEventListener(ev, onTouch, { passive: true, capture: true }));
+    setInterval(() => { keepAwake(); if (!dimmed) armDim(); }, 60_000); // reaplica se a configuração mudou
+    armDim();
+  }
 
   // Menu técnico oculto: 7 toques rápidos no canto superior esquerdo.
   let taps = [];

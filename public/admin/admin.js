@@ -529,22 +529,42 @@
   // ------------------------------------------------------------ respostas
   async function pageResponses() {
     await Promise.all([branches(), surveys()]);
+    const isAdmin = me.role === 'admin'; // só administrador exclui respostas (o servidor também confere)
     let page = 1;
     const body = h('div');
+    // Apaga tudo o que o filtro atual mostra (limpeza dos testes). Exige digitar EXCLUIR.
+    const deleteFiltered = (total) => {
+      const word = h('input', { placeholder: 'EXCLUIR', autocomplete: 'off' });
+      modal('Excluir respostas filtradas', h('div', {},
+        h('p', {}, `Serão excluídas definitivamente ${total} respostas (com os casos e anotações ligados a elas), conforme os filtros da tela: período, filial, pesquisa e canal.`),
+        h('p', { class: 'small muted' }, 'Isso não pode ser desfeito. Faça um backup antes se tiver dúvida. Digite EXCLUIR para confirmar.'), word),
+      [{ label: 'Excluir definitivamente', cls: 'danger', onClick: async (close) => {
+        try {
+          const f = Object.fromEntries(Object.entries(filterState).filter(([, v]) => v));
+          const r = await api('/responses/delete-filtered', { method: 'POST', body: { confirm: word.value.trim(), filter: f } });
+          close(); toast(`${r.deleted} respostas excluídas.`); page = 1; load();
+        } catch (ex) { toast(ex.message, true); }
+      } }]);
+    };
     const load = async () => {
       const r = await api(`/responses?${qs(filterState)}&page=${page}`);
       const pages = Math.max(1, Math.ceil(r.total / r.pageSize));
       body.replaceChildren(h('div', { class: 'card' },
-        h('p', { class: 'muted' }, `${r.total} respostas encontradas`),
+        h('div', { class: 'row between' }, h('p', { class: 'muted' }, `${r.total} respostas encontradas`),
+          isAdmin && r.total ? h('button', { class: 'btn danger sm', onclick: () => deleteFiltered(r.total) }, icon('trash', 14), 'Excluir todas as filtradas') : null),
         h('div', { class: 'table-wrap' }, h('table', {},
-          h('thead', {}, h('tr', {}, h('th', {}, 'Data'), h('th', {}, 'Filial'), h('th', {}, 'Pesquisa'), h('th', {}, 'Respostas'))),
+          h('thead', {}, h('tr', {}, h('th', {}, 'Data'), h('th', {}, 'Filial'), h('th', {}, 'Pesquisa'), h('th', {}, 'Respostas'), isAdmin ? h('th', {}) : null)),
           h('tbody', {}, r.rows.length ? r.rows.map((x) => h('tr', {},
             h('td', {}, fmtDate(x.submitted_at), h('div', { class: 'small muted' }, x.channel === 'link' ? 'via QR Code' : (x.device || '')),
               x.lang && x.lang !== 'pt' ? h('span', { class: 'badge' }, x.lang.toUpperCase()) : null),
             h('td', {}, x.branch), h('td', {}, x.survey),
             h('td', {}, h('ul', { class: 'answers' }, (x.answers || []).map((a) => h('li', {},
-              h('b', {}, qLabel(a.question)), a.value, a.is_nps ? h('span', { class: 'badge nps' }, ' NPS') : null))))))
-            : h('tr', {}, h('td', { colspan: '4', class: 'empty' }, 'Nenhuma resposta.'))))),
+              h('b', {}, qLabel(a.question)), a.value, a.is_nps ? h('span', { class: 'badge nps' }, ' NPS') : null)))),
+            isAdmin ? h('td', {}, h('button', { class: 'btn danger sm', onclick: async () => {
+              if (!confirm('Excluir esta resposta definitivamente? Isso não pode ser desfeito.')) return;
+              try { await api(`/responses/${x.id}`, { method: 'DELETE' }); toast('Resposta excluída.'); load(); } catch (ex) { toast(ex.message, true); }
+            } }, icon('trash', 14), 'Excluir')) : null))
+            : h('tr', {}, h('td', { colspan: '5', class: 'empty' }, 'Nenhuma resposta.'))))),
         h('div', { class: 'row' },
           h('button', { class: 'btn secondary sm', disabled: page <= 1, onclick: () => { page--; load(); } }, '‹ Anterior'),
           h('span', { class: 'small muted' }, `Página ${page} de ${pages}`),
@@ -1142,6 +1162,10 @@
     const extra = h('textarea', { rows: '2', placeholder: 'diretoria@empresa.com (um por linha)', value: st.weeklyReport.extraEmails.join('\n'), oninput: (e) => { st.weeklyReport.extraEmails = lines(e.target); } });
     const goal = h('input', { type: 'number', min: '-100', max: '100', value: st.defaultNpsGoal ?? '', oninput: (e) => { st.defaultNpsGoal = e.target.value === '' ? null : Number(e.target.value); } });
     const offMin = h('input', { type: 'number', min: '10', max: '1440', value: st.offlineAlert.minutes, oninput: (e) => { st.offlineAlert.minutes = Number(e.target.value); } });
+    const dimAfter = h('input', { type: 'number', min: '5', max: '3600', value: st.screen.dimAfterSeconds, oninput: (e) => { st.screen.dimAfterSeconds = Number(e.target.value); } });
+    const dimLevel = h('input', { type: 'range', min: '20', max: '90', step: '5', value: st.screen.dimLevel });
+    const dimLabel = h('span', { class: 'small muted' }, `${st.screen.dimLevel}%`);
+    dimLevel.addEventListener('input', () => { st.screen.dimLevel = Number(dimLevel.value); dimLabel.textContent = `${dimLevel.value}%`; });
     return h('div', {},
       h('div', { class: 'grid c2' },
         h('div', { class: 'card' }, h('h2', {}, 'Cliente insatisfeito (nota 0 a 6)'),
@@ -1160,7 +1184,13 @@
             try { const r = await api('/settings/weekly-report/send-now', { method: 'POST' }); toast(`Relatório enviado para ${r.sent} destinatário(s).`); renderAgain(); } catch (ex) { toast(ex.message, true); }
           } }, 'Enviar agora (teste)'))),
       h('div', { class: 'grid c2' },
-        h('div', { class: 'card' }, h('h2', {}, 'Metas e tablets'),
+        h('div', { class: 'card' }, h('h2', {}, 'Tela do tablet e bateria'),
+          chk(st.screen.keepAwake, (v) => { st.screen.keepAwake = v; }, 'Manter a tela sempre acesa'),
+          chk(st.screen.dim, (v) => { st.screen.dim = v; }, 'Escurecer a tela quando ninguém estiver usando (economiza bateria)'),
+          h('div', { class: 'form-grid mt' }, h('label', { class: 'f' }, 'Escurecer após (segundos sem toque)', dimAfter),
+            h('label', { class: 'f' }, h('span', {}, 'Escurecimento ', dimLabel), dimLevel)),
+          h('p', { class: 'small muted' }, 'Um toque na tela volta ao brilho normal na hora. No Fully Kiosk (Android) o brilho do aparelho é reduzido de verdade, se a opção "JavaScript Interface" estiver ligada; nos demais, uma camada escura reduz o brilho (em telas OLED/iPad isso também poupa bateria). O tablet pega a mudança em até 1 minuto. No iPad, deixe também Ajustes → Tela e Brilho → Bloqueio Automático em "Nunca".')),
+        h('div', { class: 'card' }, h('h2', {}, 'Metas e alertas'),
           h('div', { class: 'form-grid' }, h('label', { class: 'f' }, 'Meta de NPS padrão (cada filial pode ter a sua)', goal)),
           chk(st.offlineAlert.enabled, (v) => { st.offlineAlert.enabled = v; }, 'Avisar quando um tablet ficar sem sinal no horário de funcionamento'),
           h('div', { class: 'form-grid' }, h('label', { class: 'f' }, 'Minutos sem sinal para avisar', offMin))),
