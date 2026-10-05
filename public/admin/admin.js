@@ -909,7 +909,7 @@
       const name = h('input', { placeholder: 'Ex.: Tablet recepção', maxlength: '60' });
       modal('Novo tablet', h('div', { class: 'form-grid' }, h('label', { class: 'f' }, 'Filial', br), h('label', { class: 'f' }, 'Identificação', name)),
         [{ label: 'Gerar código', onClick: async (close) => {
-          try { const r = await api('/devices', { method: 'POST', body: { branchId: Number(br.value), name: name.value } }); close(); showCode(r, name.value); route(); } catch (ex) { toast(ex.message, true); }
+          try { const r = await api('/devices', { method: 'POST', body: { branchId: Number(br.value), name: name.value } }); close(); await route(); showCode(r, name.value); } catch (ex) { toast(ex.message, true); }
         } }]);
     };
     return h('div', {},
@@ -923,7 +923,7 @@
           h('td', {}, h('div', { class: 'row' },
             h('button', { class: 'btn secondary sm', onclick: async () => {
               if (d.paired && !confirm('Gerar novo código desconecta o tablet atual até ele ser pareado de novo. Continuar?')) return;
-              try { const r = await api(`/devices/${d.id}/pairing-code`, { method: 'POST' }); showCode(r, d.name); route(); } catch (ex) { toast(ex.message, true); }
+              try { const r = await api(`/devices/${d.id}/pairing-code`, { method: 'POST' }); await route(); showCode(r, d.name); } catch (ex) { toast(ex.message, true); }
             } }, 'Novo código'),
             d.active ? h('button', { class: 'btn danger sm', onclick: async () => {
               if (!confirm(`Revogar o acesso do tablet "${d.name}"? Ele deixará de coletar respostas imediatamente.`)) return;
