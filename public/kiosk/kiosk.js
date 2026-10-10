@@ -125,12 +125,15 @@
   }
 
   // ------------------------------------------------------------ API
+  // Fuso configurado no próprio tablet (o servidor só aceita fusos do Brasil e usa o relógio dele, não o do tablet).
+  function deviceZone() { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch { return ''; } }
+
   async function api(path, opts = {}) {
     const base = MODE === 'link' ? `/api/link/${LINK[1]}` : '/api/kiosk';
     const token = MODE === 'tablet' ? store.get(TOKEN_KEY) : null;
     const res = await fetch(base + path, {
       method: opts.method || 'GET',
-      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}) },
+      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token, 'X-Timezone': deviceZone() } : {}) },
       body: opts.body ? JSON.stringify(opts.body) : undefined,
       cache: 'no-store',
       credentials: 'omit',

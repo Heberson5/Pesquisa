@@ -13,11 +13,12 @@ const { QUESTION_TYPES, DISPLAYS, LANGS, LANG_LABELS, CONTACT_MODES, loadSurvey,
 const { getSettings, saveSettings, emailList } = require('../settings');
 const { queueEmail, queueWhatsApp, renderEmail, processOutbox, outboxStatus, webhookSecret, whatsappCheck } = require('../notify');
 const delivery = require('../delivery');
+const zones = require('../zones');
 const { responseFilter, computeStats, computeBreakdown, reportFor, NPS_AGG, NPS_JOIN, npsRow } = require('../stats');
 const { resetUserMfa } = require('./auth');
 const QRCode = require('qrcode');
 const { encrypt, decrypt, lookup } = require('../vault');
-const { publicUrl } = require('../config');
+const { publicUrl, timezone: companyTz } = require('../config');
 const { parseLocal } = require('../time');
 
 const router = express.Router();
@@ -90,10 +91,20 @@ const { scope, assertBranch, placeholders } = require('../scope');
 router.get('/branches', (req, res) => {
   const s = scope(req.user);
   const where = s ? `WHERE b.id IN (${placeholders(s)})` : '';
-  res.json(all(`SELECT b.id, b.code, b.name, b.city, b.active, b.survey_id, s.title AS survey_title, b.alert_emails, b.alert_phones, b.nps_goal, b.hours_json, b.public_enabled,
+  const rows = all(`SELECT b.id, b.code, b.name, b.city, b.active, b.survey_id, s.title AS survey_title, b.alert_emails, b.alert_phones, b.nps_goal, b.hours_json, b.timezone, b.public_enabled,
       (SELECT COUNT(*) FROM devices d WHERE d.branch_id = b.id AND d.active = 1) AS devices
-    FROM branches b LEFT JOIN surveys s ON s.id = b.survey_id ${where} ORDER BY b.name`, ...(s || [])));
+    FROM branches b LEFT JOIN surveys s ON s.id = b.survey_id ${where} ORDER BY b.name`, ...(s || []));
+  // Fuso em uso agora (escolhido ou informado pelo tablet) e as opções do cadastro.
+  res.json(rows.map((b) => ({ ...b, effective_tz: zones.forBranch(b) })));
 });
+router.get('/timezones', (req, res) => res.json({ company: companyTz, choices: zones.ZONE_CHOICES }));
+
+// Fuso da filial: null = Automático (usa o do tablet); senão um fuso do Brasil.
+function timezoneInput(v) {
+  if (v === undefined || v === null || v === '' || v === 'auto') return null;
+  if (typeof v !== 'string' || !zones.usable(v)) throw bad('Fuso horário inválido.');
+  return v;
+}
 
 function branchInput(body) {
   const code = str(body?.code, { field: 'código', min: 1, max: 20 }).toUpperCase();
@@ -107,6 +118,7 @@ function branchInput(body) {
     alert_phones: JSON.stringify(phoneList(body?.alert_phones)),
     nps_goal: body?.nps_goal === undefined || body.nps_goal === null || body.nps_goal === '' ? null : int(body.nps_goal, { field: 'meta de NPS', min: -100, max: 100 }),
     hours_json: hoursInput(body?.hours),
+    timezone: timezoneInput(body?.timezone),
   };
 }
 
@@ -137,8 +149,8 @@ function hoursInput(v) {
 router.post('/branches', requireAdmin, (req, res) => {
   const b = branchInput(req.body);
   if (get('SELECT 1 FROM branches WHERE code = ?', b.code)) throw new HttpError(409, 'Já existe uma filial com esse código.');
-  const r = run('INSERT INTO branches (code, name, city, active, alert_emails, alert_phones, nps_goal, hours_json, created_at) VALUES (?,?,?,?,?,?,?,?,?)',
-    b.code, b.name, b.city, b.active, b.alert_emails, b.alert_phones, b.nps_goal, b.hours_json, Date.now());
+  const r = run('INSERT INTO branches (code, name, city, active, alert_emails, alert_phones, nps_goal, hours_json, timezone, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)',
+    b.code, b.name, b.city, b.active, b.alert_emails, b.alert_phones, b.nps_goal, b.hours_json, b.timezone, Date.now());
   audit(req.user.id, 'branch.create', { id: r.lastInsertRowid, ...b }, req.ip);
   res.status(201).json({ id: Number(r.lastInsertRowid) });
 });
@@ -148,8 +160,8 @@ router.put('/branches/:id', requireAdmin, (req, res) => {
   assertBranch(req.user, bid);
   const b = branchInput(req.body);
   if (get('SELECT 1 FROM branches WHERE code = ? AND id <> ?', b.code, bid)) throw new HttpError(409, 'Já existe uma filial com esse código.');
-  run('UPDATE branches SET code = ?, name = ?, city = ?, active = ?, alert_emails = ?, alert_phones = ?, nps_goal = ?, hours_json = ? WHERE id = ?',
-    b.code, b.name, b.city, b.active, b.alert_emails, b.alert_phones, b.nps_goal, b.hours_json, bid);
+  run('UPDATE branches SET code = ?, name = ?, city = ?, active = ?, alert_emails = ?, alert_phones = ?, nps_goal = ?, hours_json = ?, timezone = ? WHERE id = ?',
+    b.code, b.name, b.city, b.active, b.alert_emails, b.alert_phones, b.nps_goal, b.hours_json, b.timezone, bid);
   audit(req.user.id, 'branch.update', { id: bid, ...b }, req.ip);
   res.json({ ok: true });
 });
@@ -198,9 +210,11 @@ router.post('/branches/:id/public-link', requireAdmin, async (req, res) => {
 router.get('/schedules', (req, res) => {
   const s = scope(req.user);
   const where = s ? `WHERE (c.branch_id IS NULL OR c.branch_id IN (${placeholders(s)}))` : '';
-  res.json(all(`SELECT c.id, c.survey_id, v.title AS survey, c.branch_id, b.name AS branch, c.starts_at, c.ends_at
+  const rows = all(`SELECT c.id, c.survey_id, v.title AS survey, c.branch_id, b.name AS branch, c.starts_at, c.ends_at
     FROM schedules c JOIN surveys v ON v.id = c.survey_id LEFT JOIN branches b ON b.id = c.branch_id ${where}
-    ORDER BY c.starts_at DESC LIMIT 200`, ...(s || [])));
+    ORDER BY c.starts_at DESC LIMIT 200`, ...(s || []));
+  // Cada campanha é mostrada no fuso da filial dela (ou da empresa, quando vale para todas).
+  res.json(rows.map((c) => ({ ...c, tz: c.branch_id ? zones.forBranch(get('SELECT id, timezone FROM branches WHERE id = ?', c.branch_id)) : companyTz })));
 });
 
 router.post('/schedules', requireAdmin, (req, res) => {
@@ -208,8 +222,10 @@ router.post('/schedules', requireAdmin, (req, res) => {
   if (!get('SELECT 1 FROM surveys WHERE id = ? AND active = 1', surveyId)) throw bad('Pesquisa inexistente ou inativa.');
   const branchId = req.body?.branchId === null || req.body?.branchId === undefined || req.body?.branchId === '' ? null : id(req.body.branchId, 'filial');
   if (branchId !== null) assertBranch(req.user, branchId);
-  const startsAt = parseLocal(req.body?.startsAt);
-  const endsAt = parseLocal(req.body?.endsAt);
+  // Data e hora digitadas valem no fuso da filial escolhida (ou no da empresa, se for para todas).
+  const tz = branchId !== null ? zones.forBranch(get('SELECT id, timezone FROM branches WHERE id = ?', branchId)) : companyTz;
+  const startsAt = parseLocal(req.body?.startsAt, tz);
+  const endsAt = parseLocal(req.body?.endsAt, tz);
   if (startsAt === null || endsAt === null) throw bad('Datas inválidas (use dia e hora).');
   if (endsAt <= startsAt) throw bad('O fim precisa ser depois do início.');
   if (endsAt - startsAt > 366 * 86_400_000) throw bad('Campanha de no máximo 1 ano.');
@@ -390,7 +406,7 @@ router.get('/devices', (req, res) => {
   const s = scope(req.user);
   const where = s ? `WHERE d.branch_id IN (${placeholders(s)})` : '';
   const rows = all(`SELECT d.id, d.name, d.branch_id, b.name AS branch_name, d.active, d.paired_at, d.last_seen_at,
-      d.pair_expires_at, (d.token_hash IS NOT NULL) AS paired
+      d.pair_expires_at, d.timezone, d.timezone_at, (d.token_hash IS NOT NULL) AS paired
     FROM devices d JOIN branches b ON b.id = d.branch_id ${where} ORDER BY b.name, d.name`, ...(s || []));
   res.json(rows.map((r) => ({ ...r, paired: !!r.paired, pairing_pending: !!(r.pair_expires_at && r.pair_expires_at > Date.now()) })));
 });

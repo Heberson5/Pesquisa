@@ -5,6 +5,7 @@ const { getSettings } = require('./settings');
 const { queueEmail, renderEmail } = require('./notify');
 const { reportFor } = require('./stats');
 const { localNow, formatLocal } = require('./time');
+const zones = require('./zones');
 const { hoursStatus } = require('./responses');
 const { branchRecipients } = require('./alerts');
 const { publicUrl } = require('./config');
@@ -70,11 +71,11 @@ function checkOfflineTablets(now = Date.now()) {
   let alerted = 0;
   for (const d of devices) {
     const branch = get('SELECT * FROM branches WHERE id = ?', d.branch_id);
-    if (!hoursStatus(branch, now).open) continue; // fora do expediente, tablet desligado é esperado
+    if (!hoursStatus(branch, now, zones.forBranch(branch, d)).open) continue; // fora do expediente, tablet desligado é esperado
     const { html, text } = renderEmail({
       brand: s, title: `Tablet sem sinal — ${d.branch_name}`,
       intro: `O tablet "${d.name}" não se comunica com o sistema há mais de ${s.offlineAlert.minutes} minutos, durante o horário de funcionamento. Verifique se está ligado, conectado ao Wi-Fi e com a pesquisa aberta.`,
-      rows: [['Filial', d.branch_name], ['Tablet', d.name], ['Último contato', formatLocal(d.last_seen_at)]],
+      rows: [['Filial', d.branch_name], ['Tablet', d.name], ['Último contato', formatLocal(d.last_seen_at, zones.forBranch(branch, d))]],
       button: { label: 'Ver tablets no painel', url: `${publicUrl}/admin/#/dispositivos` },
     });
     for (const to of branchRecipients(d.branch_id, 'notify_offline')) {

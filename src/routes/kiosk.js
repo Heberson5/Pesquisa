@@ -7,6 +7,7 @@ const { randomToken, sha256, rateLimiter } = require('../security');
 const { requireDevice } = require('../auth');
 const { HttpError, str } = require('../validate');
 const { buildConfig, saveResponse } = require('../responses');
+const zones = require('../zones');
 
 const router = express.Router();
 
@@ -34,7 +35,12 @@ router.post('/pair', pairLimiter, (req, res) => {
 // Configuração atual: filial + pesquisa vigente (padrão ou campanha agendada) + marca + horário.
 router.get('/config', configLimiter, requireDevice, (req, res) => {
   const d = req.device;
-  res.json(buildConfig(branchOf(d), { device: { name: d.name } }));
+  // O tablet informa o fuso dele; só fusos do Brasil valem (senão usa o da filial/empresa). O relógio é sempre o do servidor.
+  const reported = zones.clean(req.get('x-timezone'));
+  if (reported && reported !== d.timezone) run('UPDATE devices SET timezone = ?, timezone_at = ? WHERE id = ?', reported, Date.now(), d.id);
+  else if (reported) run('UPDATE devices SET timezone_at = ? WHERE id = ?', Date.now(), d.id);
+  const branch = branchOf(d);
+  res.json(buildConfig(branch, { device: { name: d.name } }, zones.forBranch(branch, { timezone: reported || d.timezone })));
 });
 
 const branchOf = (d) => get('SELECT * FROM branches WHERE id = ?', d.branch_id);

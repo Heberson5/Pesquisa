@@ -5,7 +5,8 @@ const { get, all, run } = require('./db');
 const { getSettings } = require('./settings');
 const { queueEmail, queueWebhook, queueWhatsApp, renderEmail } = require('./notify');
 const { decrypt } = require('./vault');
-const { publicUrl, timezone } = require('./config');
+const { publicUrl } = require('./config');
+const zones = require('./zones');
 
 const DETRACTOR_MAX = 6;
 const parseList = (json) => { try { const v = JSON.parse(json || '[]'); return Array.isArray(v) ? v : []; } catch { return []; } };
@@ -21,7 +22,7 @@ function branchRecipients(branchId, prefColumn) {
 }
 
 function onResponse(responseId) {
-  const r = get(`SELECT r.*, b.name AS branch_name FROM responses r JOIN branches b ON b.id = r.branch_id WHERE r.id = ?`, responseId);
+  const r = get(`SELECT r.*, b.name AS branch_name, b.timezone AS branch_tz FROM responses r JOIN branches b ON b.id = r.branch_id WHERE r.id = ?`, responseId);
   if (!r) return null;
   const score = get(`SELECT MIN(a.value_num) AS m FROM answers a JOIN questions q ON q.id = a.question_id AND q.is_nps = 1 WHERE a.response_id = ?`, responseId).m;
   if (score === null || score > DETRACTOR_MAX) return null;
@@ -40,7 +41,7 @@ function notifyDetractor(r, score, caseId) {
       WHERE a.response_id = ? AND q.type = 'text' AND a.value_text IS NOT NULL`, r.id);
   const hasContact = !!r.contact_consent_at && !r.anonymized_at;
   if (s.alerts.detractorEmail) {
-    const rows = [['Filial', r.branch_name], ['Nota', String(score)], ['Quando', new Date(r.submitted_at).toLocaleString('pt-BR', { timeZone: timezone })]];
+    const rows = [['Filial', r.branch_name], ['Nota', String(score)], ['Quando', new Date(r.submitted_at).toLocaleString('pt-BR', { timeZone: zones.forBranch({ id: r.branch_id, timezone: r.branch_tz }) })]];
     for (const c of comments) rows.push([c.text, c.value_text]);
     if (hasContact) {
       rows.push(['Cliente pediu contato', decrypt(r.contact_name_enc) || '(sem nome)']);

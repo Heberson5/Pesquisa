@@ -23,6 +23,7 @@
     return el;
   }
   const fmtDate = (t) => (t ? new Date(t).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : '—');
+  const fmtDateTz = (t, tz) => { try { return t ? new Date(t).toLocaleString('pt-BR', { timeZone: tz || undefined, dateStyle: 'short', timeStyle: 'short' }) : '—'; } catch { return fmtDate(t); } };
   const fmtNps = (n) => (n === null || n === undefined ? '—' : (n > 0 ? '+' : '') + n.toLocaleString('pt-BR'));
   const npsClass = (n) => (n === null ? '' : n >= 50 ? 'good' : n >= 0 ? 'midc' : 'bad');
   const qLabel = (q) => (/[?:!.]$/.test(q) ? q + ' ' : q + ': ');
@@ -645,7 +646,8 @@
       const br = h('select', {}, h('option', { value: '' }, 'Todas as filiais'), brs.map((b) => h('option', { value: String(b.id) }, b.name)));
       const st = h('input', { type: 'datetime-local' }); const en = h('input', { type: 'datetime-local' });
       modal('Agendar campanha', h('div', { class: 'form-grid' }, h('label', { class: 'f' }, 'Pesquisa', sv), h('label', { class: 'f' }, 'Filial', br),
-        h('label', { class: 'f' }, 'Início (horário de Brasília)', st), h('label', { class: 'f' }, 'Fim', en)),
+        h('label', { class: 'f' }, 'Início', st), h('label', { class: 'f' }, 'Fim', en),
+        h('p', { class: 'small muted' }, 'O dia e a hora valem no fuso da filial escolhida (ou no da empresa, quando for "Todas as filiais").')),
       [{ label: 'Agendar', onClick: async (close) => {
         try { await api('/schedules', { method: 'POST', body: { surveyId: Number(sv.value), branchId: br.value ? Number(br.value) : null, startsAt: st.value, endsAt: en.value } }); close(); toast('Campanha agendada.'); route(); } catch (ex) { toast(ex.message, true); }
       } }]);
@@ -654,7 +656,7 @@
       h('div', { class: 'topbar' }, h('div', {}, h('h2', {}, 'Campanhas agendadas'), h('div', { class: 'small muted' }, 'Durante o período, a pesquisa da campanha substitui a padrão; depois, tudo volta sozinho.')),
         me.role === 'admin' ? h('button', { class: 'btn secondary', onclick: add }, icon('calendar', 16), 'Agendar campanha') : null),
       rows.length ? h('div', { class: 'table-wrap' }, h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, 'Pesquisa'), h('th', {}, 'Filial'), h('th', {}, 'Período'), h('th', {}, 'Situação'), h('th', {}))),
-        h('tbody', {}, rows.map((c) => h('tr', {}, h('td', {}, c.survey), h('td', {}, c.branch || 'Todas'), h('td', { class: 'small' }, `${fmtDate(c.starts_at)} → ${fmtDate(c.ends_at)}`),
+        h('tbody', {}, rows.map((c) => h('tr', {}, h('td', {}, c.survey), h('td', {}, c.branch || 'Todas'), h('td', { class: 'small' }, `${fmtDateTz(c.starts_at, c.tz)} → ${fmtDateTz(c.ends_at, c.tz)}`),
           h('td', {}, status(c)), h('td', {}, me.role === 'admin' ? h('button', { class: 'btn secondary sm', onclick: async () => {
             if (!confirm('Excluir esta campanha?')) return;
             try { await api('/schedules/' + c.id, { method: 'DELETE' }); route(); } catch (ex) { toast(ex.message, true); }
@@ -876,9 +878,12 @@
   const lines = (el) => el.value.split(/[\n,;]+/).map((x) => x.trim()).filter(Boolean);
 
   async function pageBranches() {
-    const [list, svs] = await Promise.all([branches(true), surveys(true)]);
+    const [list, svs, tzInfo] = await Promise.all([branches(true), surveys(true), api('/timezones')]);
     const isAdmin = me.role === 'admin';
+    const tzName = (tz) => (tzInfo.choices.find((c) => c.value === tz)?.label) || tz;
     const edit = (b = {}) => {
+      const tzSel = h('select', {}, h('option', { value: 'auto' }, 'Automático — usar o fuso do tablet'), tzInfo.choices.map((c) => h('option', { value: c.value }, c.label)));
+      tzSel.value = b.timezone || 'auto';
       const code = h('input', { value: b.code || '', maxlength: '20', placeholder: 'Ex.: SP01' });
       const name = h('input', { value: b.name || '', maxlength: '100' });
       const city = h('input', { value: b.city || '', maxlength: '100' });
@@ -905,12 +910,15 @@
         h('h2', { class: 'mt' }, 'Alertas de cliente insatisfeito'),
         h('div', { class: 'form-grid' }, h('label', { class: 'f' }, 'E-mails da filial', emails), h('label', { class: 'f' }, 'WhatsApp (se configurado)', phones)),
         h('h2', { class: 'mt' }, 'Horário de funcionamento'),
+        h('label', { class: 'f' }, 'Fuso horário da filial', tzSel,
+          h('span', { class: 'small muted' }, b.id ? `Em uso agora: ${tzName(b.effective_tz)}${b.timezone ? '' : ' (informado pelo tablet)'}. ` : '',
+            `Em "Automático" o horário abaixo vale no fuso configurado no tablet; se o tablet informar algo fora do Brasil, vale o da empresa (${tzName(tzInfo.company)}).`)),
         h('label', { class: 'chk' }, useHours, 'Definir horário (fora dele o tablet mostra tela de descanso e não gera alerta de "sem sinal")'),
         hoursBox),
       [{ label: 'Salvar', onClick: async (close) => {
         try {
           const body = { code: code.value, name: name.value, city: city.value, active: active.checked, nps_goal: goal.value === '' ? null : Number(goal.value),
-            alert_emails: lines(emails), alert_phones: lines(phones), hours: useHours.checked ? dayRows.map((r) => r.get()) : null };
+            alert_emails: lines(emails), alert_phones: lines(phones), timezone: tzSel.value === 'auto' ? null : tzSel.value, hours: useHours.checked ? dayRows.map((r) => r.get()) : null };
           await api(b.id ? '/branches/' + b.id : '/branches', { method: b.id ? 'PUT' : 'POST', body });
           close(); toast('Filial salva.'); route();
         } catch (ex) { toast(ex.message, true); }
@@ -925,7 +933,7 @@
             try { await api(`/branches/${b.id}/survey`, { method: 'PUT', body: { surveyId: e.target.value ? Number(e.target.value) : null } }); toast('Pesquisa da filial atualizada. Os tablets recebem em até 1 minuto.'); cache.branches = null; } catch (ex) { toast(ex.message, true); }
           } }, h('option', { value: '' }, '— nenhuma —'), svs.filter((s) => s.active).map((s) => h('option', { value: String(s.id) }, s.title)));
           sel.value = b.survey_id ? String(b.survey_id) : '';
-          return h('tr', {}, h('td', {}, h('code', {}, b.code)), h('td', {}, h('b', {}, b.name), h('div', { class: 'small muted' }, b.city || '')),
+          return h('tr', {}, h('td', {}, h('code', {}, b.code)), h('td', {}, h('b', {}, b.name), h('div', { class: 'small muted' }, b.city || ''), h('div', { class: 'small muted' }, `Fuso: ${tzName(b.effective_tz)}`)),
             h('td', {}, sel), h('td', {}, b.nps_goal ?? h('span', { class: 'muted small' }, 'padrão')), h('td', {}, b.devices),
             h('td', {}, h('span', { class: 'badge ' + (b.active ? 'ok' : 'off') }, b.active ? 'Ativa' : 'Inativa'), b.public_enabled ? h('span', { class: 'badge ok' }, 'QR ativo') : null),
             h('td', {}, h('div', { class: 'row' },
@@ -992,7 +1000,7 @@
       h('div', { class: 'card table-wrap' }, h('table', {},
         h('thead', {}, h('tr', {}, h('th', {}, 'Tablet'), h('th', {}, 'Filial'), h('th', {}, 'Status'), h('th', {}, 'Último contato'), h('th', {}))),
         h('tbody', {}, devs.length ? devs.map((d) => h('tr', {},
-          h('td', {}, h('b', {}, d.name)), h('td', {}, d.branch_name), h('td', {}, status(d)), h('td', {}, fmtDate(d.last_seen_at)),
+          h('td', {}, h('b', {}, d.name), h('div', { class: 'small muted' }, d.timezone ? `Fuso do tablet: ${d.timezone}` : 'Fuso ainda não informado')), h('td', {}, d.branch_name), h('td', {}, status(d)), h('td', {}, fmtDate(d.last_seen_at)),
           h('td', {}, h('div', { class: 'row' },
             h('button', { class: 'btn secondary sm', onclick: async () => {
               if (d.paired && !confirm('Gerar novo código desconecta o tablet atual até ele ser pareado de novo. Continuar?')) return;

@@ -56,18 +56,18 @@ function surveyPayload(survey) {
 // ---------------------------------------------------------------- horário de funcionamento
 const WEEKDAYS = ['domingo', 'segunda', 'terça', 'quarta', 'quinta', 'sexta', 'sábado'];
 const WD_EN = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-function localParts(at) {
-  const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: timezone, weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+function localParts(at, tz = timezone) {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: tz, weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
     .formatToParts(new Date(at)).map((x) => [x.type, x.value]));
   return { day: WD_EN.indexOf(p.weekday), hm: `${p.hour}:${p.minute}` };
 }
 
 // { open: true } quando sem horário configurado ou dentro do expediente; senão { open: false, reopens: 'Abrimos ...' }.
-function hoursStatus(branch, at = Date.now()) {
+function hoursStatus(branch, at = Date.now(), tz = timezone) {
   let hours = null;
   try { hours = branch.hours_json ? JSON.parse(branch.hours_json) : null; } catch { hours = null; }
   if (!Array.isArray(hours) || hours.length !== 7) return { open: true };
-  const { day, hm } = localParts(at);
+  const { day, hm } = localParts(at, tz);
   const today = hours[day];
   if (today && today.open <= hm && hm < today.close) return { open: true };
   if (today && hm < today.open) return { open: false, reopens: `Abrimos hoje às ${today.open}.` };
@@ -78,9 +78,9 @@ function hoursStatus(branch, at = Date.now()) {
   return { open: false, reopens: null };
 }
 
-function buildConfig(branch, extra = {}) {
+function buildConfig(branch, extra = {}, tz = timezone) {
   const sid = effectiveSurveyId(branch);
-  return { ...extra, ...hoursStatus(branch), branding: publicBranding(), branch: { name: branch.name }, survey: surveyPayload(sid ? loadSurvey(sid) : null) };
+  return { ...extra, ...hoursStatus(branch, Date.now(), tz), timezone: tz, branding: publicBranding(), branch: { name: branch.name }, survey: surveyPayload(sid ? loadSurvey(sid) : null) };
 }
 
 // ---------------------------------------------------------------- contato (LGPD)

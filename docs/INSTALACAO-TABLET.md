@@ -58,3 +58,12 @@ Ajuste em **Configurações → Alertas → Tela do tablet e bateria** (tempo pa
 - **Android com Fully Kiosk:** ligue *Other Settings → Enable JavaScript Interface (PLUS)* para o sistema reduzir o brilho de verdade do aparelho.
 - **iPad / demais:** uma camada escura reduz a claridade (em tela OLED isso poupa bateria). Deixe também *Bloqueio Automático = Nunca* e, de preferência, o tablet na tomada em horário de funcionamento.
 - Um navegador não consegue alterar o brilho do aparelho sozinho; por isso o escurecimento é feito dentro da página.
+
+## Fuso horário (filiais em fusos diferentes)
+
+O horário de funcionamento vale no fuso da filial. Em **Filiais → Editar → Fuso horário da filial** há duas formas:
+
+- **Automático (padrão):** o tablet informa o fuso configurado nele. O servidor usa o **relógio do próprio servidor** nesse fuso, então um relógio errado no tablet não atrapalha — só um fuso errado.
+- **Fixo:** escolha Brasília, Fernando de Noronha, Manaus/Mato Grosso ou Rio Branco. Vale mais que o do tablet.
+
+Se o tablet informar um fuso fora do Brasil ou inválido, vale o fuso da empresa (`TZ_EMPRESA`, padrão `America/Sao_Paulo`). No iPad deixe *Ajustes → Geral → Data e Hora → Ajustar Automaticamente*; no Android, o fuso do sistema. O fuso também é usado nas campanhas agendadas da filial, no alerta de tablet sem sinal e na hora dos e-mails de alerta. Em **Tablets** você vê o fuso que cada aparelho informou.

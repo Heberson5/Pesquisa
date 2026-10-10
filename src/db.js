@@ -245,6 +245,9 @@ for (const [table, column, ddl] of [
   ['responses', 'geo_city', 'geo_city TEXT'],
   ['responses', 'geo_uf', 'geo_uf TEXT'],
   ['responses', 'geo_region', 'geo_region TEXT'],
+  ['branches', 'timezone', 'timezone TEXT'], // NULL = automático (usa o fuso informado pelo tablet)
+  ['devices', 'timezone', 'timezone TEXT'],
+  ['devices', 'timezone_at', 'timezone_at INTEGER'],
   ['branches', 'alert_emails', 'alert_emails TEXT'],
   ['branches', 'alert_phones', 'alert_phones TEXT'],
   ['branches', 'nps_goal', 'nps_goal INTEGER'],

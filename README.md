@@ -8,6 +8,7 @@ Sistema de coleta de pesquisa de satisfação para **tablets em modo quiosque**,
 - **Casos:** cada nota de 0 a 6 vira um caso para tratar; alerta por e-mail, webhook ou WhatsApp.
 - **Segurança:** 2FA, recuperação de senha, LGPD (consentimento, criptografia, retenção, pedidos do titular).
 - **Coleta:** tablet em modo quiosque e QR Code por filial, perguntas condicionais, campanhas agendadas, PT/EN/ES.
+- **Fuso horário por filial:** o horário de funcionamento vale no fuso do tablet (modo automático) ou num fuso fixo escolhido na filial; a empresa é a reserva. Vale também para campanhas, alerta de tablet sem sinal e e-mails.
 - **E-mail e WhatsApp pelo painel:** Configurações → E-mail e WhatsApp (SMTP com provedores prontos, API oficial da Meta, teste de conexão e fila de envios). Senhas e tokens ficam criptografados e nunca voltam à tela; o servidor SMTP precisa ser público (bloqueia rede interna). Cada pessoa pode cadastrar o próprio WhatsApp em Minha conta.
 - **Auditoria em português:** cada ação vira uma frase (quem, o quê, onde), com filtros por tipo, busca e destaque do que merece atenção.
 - **Localização das respostas (QR Code):** o cliente pode autorizar a localização; o sistema grava cidade (município do IBGE mais próximo), UF e região, com o ponto arredondado a ~1 km. Tudo offline, sem serviços externos; o ponto é apagado pela política de retenção e a cidade/UF ficam só como estatística. Aparece em Respostas, no filtro por estado, no quadro "Origem das respostas" e no CSV. Nos tablets o local é a cidade da filial.

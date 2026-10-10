@@ -41,8 +41,13 @@ test('relatório semanal: só envia no dia/hora configurados e uma vez por dia',
   const { sendWeeklyReport } = require('../src/scheduled');
   assert.equal((await sendWeeklyReport()).skipped, 'desativado');
   await admin.req('PUT', '/api/admin/settings', { body: { weeklyReport: { enabled: true, weekday: 1, hour: 8 } } });
-  const monday9 = Date.parse('2026-10-05T09:00:00-03:00'); const monday7 = Date.parse('2026-10-05T07:00:00-03:00');
-  const tuesday = Date.parse('2026-10-06T09:00:00-03:00');
+  // Datas relativas a hoje: as respostas foram feitas há 2 dias; o relatório sai na segunda-feira seguinte a elas.
+  const { localNow } = require('../src/time');
+  let m = Date.now() - 2 * 86_400_000 + 86_400_000;
+  while (localNow(m).weekday !== 1) m += 86_400_000;
+  const monday = localNow(m).date;
+  const monday9 = Date.parse(`${monday}T09:00:00-03:00`); const monday7 = Date.parse(`${monday}T07:00:00-03:00`);
+  const tuesday = monday9 + 86_400_000;
   assert.equal((await sendWeeklyReport({ now: monday7 })).skipped, 'fora do horário');
   assert.equal((await sendWeeklyReport({ now: tuesday })).skipped, 'fora do horário');
   const r = await sendWeeklyReport({ now: monday9 });
