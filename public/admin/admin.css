@@ -491,3 +491,11 @@ mark { background: color-mix(in srgb, var(--accent) 60%, transparent); color: in
   .help-nav a { border: 1px solid var(--line); background: var(--surface); }
   .release-item { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* ---------- cards da visão geral que abrem as respostas */
+a.kpi-link { position: relative; text-decoration: none; color: inherit; transition: border-color .15s, box-shadow .15s, transform .1s; }
+a.kpi-link:hover, a.kpi-link:focus-visible { border-color: color-mix(in srgb, var(--brand) 45%, var(--line)); box-shadow: 0 6px 18px rgba(15,23,42,.08); outline: none; }
+a.kpi-link:active { transform: translateY(1px); }
+.kpi-go { position: absolute; right: 16px; top: 50%; transform: translateY(-50%); font-size: 26px; line-height: 1; color: var(--muted); opacity: .5; transition: opacity .15s, right .15s; }
+a.kpi-link:hover .kpi-go { opacity: 1; right: 12px; }
+.filter-chip { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 10px 14px; margin-bottom: 14px; border-radius: 12px; background: var(--brand-soft); font-weight: 600; font-size: 14px; }

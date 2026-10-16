@@ -365,7 +365,8 @@
   async function surveys(force) { if (force || !cache.surveys) cache.surveys = await api('/surveys'); return cache.surveys; }
 
   // ------------------------------------------------------------ filtros reutilizáveis
-  function filterBar(state, onChange, { withSurvey = true } = {}) {
+  const NPS_GROUPS = { promotores: 'Promotores (notas 9 e 10)', neutros: 'Neutros (notas 7 e 8)', detratores: 'Detratores (notas 0 a 6)' };
+  function filterBar(state, onChange, { withSurvey = true, withNps = false } = {}) {
     const from = h('input', { type: 'date', value: state.from });
     const to = h('input', { type: 'date', value: state.to });
     const br = h('select', {}, h('option', { value: '' }, 'Todas as filiais'), cache.branches.map((b) => h('option', { value: String(b.id) }, b.name)));
@@ -377,15 +378,20 @@
     const uf = h('select', {}, h('option', { value: '' }, 'Todos os estados'), UFS.map((u) => h('option', { value: u }, u)),
       h('option', { value: '_fora' }, 'Fora do Brasil'), h('option', { value: '_sem' }, 'QR Code sem localização'));
     uf.value = state.uf || '';
-    const apply = () => { Object.assign(state, { from: from.value, to: to.value, branchId: br.value, surveyId: sv.value, channel: ch.value, uf: uf.value }); onChange(); };
-    [from, to, br, sv, ch, uf].forEach((el) => el.addEventListener('change', apply));
+    const nps = h('select', {}, h('option', { value: '' }, 'Todas as notas'), Object.entries(NPS_GROUPS).map(([k, l]) => h('option', { value: k }, l)));
+    nps.value = state.nps || '';
+    const apply = () => { Object.assign(state, { from: from.value, to: to.value, branchId: br.value, surveyId: sv.value, channel: ch.value, uf: uf.value, ...(withNps ? { nps: nps.value } : {}) }); onChange(); };
+    [from, to, br, sv, ch, uf, nps].forEach((el) => el.addEventListener('change', apply));
     return h('div', { class: 'filters card' },
       h('label', { class: 'f' }, 'De', from), h('label', { class: 'f' }, 'Até', to),
-      h('label', { class: 'f' }, 'Filial', br), withSurvey ? h('label', { class: 'f' }, 'Pesquisa', sv) : null, h('label', { class: 'f' }, 'Canal', ch), h('label', { class: 'f' }, 'Estado do cliente', uf));
+      h('label', { class: 'f' }, 'Filial', br), withSurvey ? h('label', { class: 'f' }, 'Pesquisa', sv) : null, h('label', { class: 'f' }, 'Canal', ch), h('label', { class: 'f' }, 'Estado do cliente', uf),
+      withNps ? h('label', { class: 'f' }, 'Classificação NPS', nps) : null);
   }
   const qs = (state) => new URLSearchParams(Object.entries(state).filter(([, v]) => v)).toString();
   const UFS = ['AC', 'AL', 'AM', 'AP', 'BA', 'CE', 'DF', 'ES', 'GO', 'MA', 'MG', 'MS', 'MT', 'PA', 'PB', 'PE', 'PI', 'PR', 'RJ', 'RN', 'RO', 'RR', 'RS', 'SC', 'SE', 'SP', 'TO'];
-  const filterState = { from: isoDay(new Date(Date.now() - 29 * 86400000)), to: isoDay(new Date()), branchId: '', surveyId: '', channel: '', uf: '' };
+  const filterState = { from: isoDay(new Date(Date.now() - 29 * 86400000)), to: isoDay(new Date()), branchId: '', surveyId: '', channel: '', uf: '', nps: '' };
+  // A classificação NPS só filtra a tela Respostas; a Visão geral mostra sempre o conjunto todo.
+  const statsQs = () => qs({ ...filterState, nps: '' });
 
   // ------------------------------------------------------------ dashboard
   async function pageDashboard() {
@@ -393,17 +399,19 @@
     const body = h('div');
     const load = async () => {
       body.replaceChildren(h('p', { class: 'muted' }, 'Carregando…'));
-      const s = await api('/stats?' + qs(filterState));
+      const s = await api('/stats?' + statsQs());
       body.replaceChildren(renderStats(s));
     };
     await load();
-    return h('div', {}, pageHead('Visão geral', 'Indicador NPS e satisfação das filiais', exportButtons()), filterBar(filterState, load), body);
+    return h('div', {}, pageHead('Visão geral', 'Indicador NPS e satisfação das filiais', exportButtons(false)), filterBar(filterState, load), body);
   }
 
-  function exportButtons() {
+  // withNps: a exportação segue a classificação NPS escolhida (só na tela Respostas).
+  function exportButtons(withNps = true) {
+    const q = () => (withNps ? qs(filterState) : statsQs());
     return [
-      can('respostas', 'csv') ? h('button', { class: 'btn secondary', onclick: () => { location.href = '/api/admin/responses.csv?' + qs(filterState); } }, icon('download', 18), 'CSV') : null,
-      can('dashboard', 'pptx') ? h('button', { class: 'btn', onclick: () => { toast('Gerando PowerPoint…'); location.href = '/api/admin/report.pptx?' + qs(filterState); } }, icon('slides', 18), 'Exportar PowerPoint') : null,
+      can('respostas', 'csv') ? h('button', { class: 'btn secondary', onclick: () => { location.href = '/api/admin/responses.csv?' + q(); } }, icon('download', 18), 'CSV') : null,
+      can('dashboard', 'pptx') ? h('button', { class: 'btn', onclick: () => { toast('Gerando PowerPoint…'); location.href = '/api/admin/report.pptx?' + statsQs(); } }, icon('slides', 18), 'Exportar PowerPoint') : null,
     ];
   }
 
@@ -418,14 +426,19 @@
   function renderStats(s) {
     const o = s.overall;
     const pct = (v) => (o.total ? Math.round((v / o.total) * 100) + '%' : '—');
-    const kpi = (ic, cls, label, value, valueCls, hint) => h('div', { class: 'card kpi' },
-      h('div', { class: 'kpi-icon ' + cls }, icon(ic, 22)),
-      h('div', {}, h('div', { class: 'label' }, label), h('div', { class: 'value ' + valueCls }, value), hint ? h('div', { class: 'small muted' }, hint) : null));
+    // go: atalho para as respostas por trás do número (mesmo período e filtros, mais a classificação NPS).
+    const kpi = (ic, cls, label, value, valueCls, hint, go) => h(go !== undefined && can('respostas') ? 'a' : 'div', {
+      class: 'card kpi' + (go !== undefined && can('respostas') ? ' kpi-link' : ''), href: go !== undefined && can('respostas') ? '#/respostas' : null,
+      title: go !== undefined && can('respostas') ? `Ver as respostas: ${label.toLowerCase()}` : null,
+      onclick: go !== undefined ? () => { filterState.nps = go; } : null },
+    h('div', { class: 'kpi-icon ' + cls }, icon(ic, 22)),
+    h('div', {}, h('div', { class: 'label' }, label), h('div', { class: 'value ' + valueCls }, value), hint ? h('div', { class: 'small muted' }, hint) : null),
+    go !== undefined && can('respostas') ? h('span', { class: 'kpi-go', 'aria-hidden': 'true' }, '›') : null);
     const kpis = h('div', { class: 'grid k4' },
-      kpi('gauge', '', 'NPS', fmtNps(o.nps), npsClass(o.nps), o.total ? `${o.total.toLocaleString('pt-BR')} notas de NPS` : 'Sem notas de NPS'),
-      kpi('inbox', '', 'Respostas', s.totalResponses.toLocaleString('pt-BR'), '', 'pesquisas concluídas'),
-      kpi('thumbs', 'good', 'Promotores', pct(o.promoters), 'good', 'notas 9 e 10'),
-      kpi('activity', 'bad', 'Detratores', pct(o.detractors), 'bad', 'notas de 0 a 6'));
+      kpi('gauge', '', 'NPS', fmtNps(o.nps), npsClass(o.nps), o.total ? `${o.total.toLocaleString('pt-BR')} notas de NPS · escala de 0 a 100` : 'Sem notas de NPS'),
+      kpi('inbox', '', 'Respostas', s.totalResponses.toLocaleString('pt-BR'), '', 'pesquisas concluídas', ''),
+      kpi('thumbs', 'good', 'Promotores', pct(o.promoters), 'good', `${o.promoters.toLocaleString('pt-BR')} notas 9 e 10`, 'promotores'),
+      kpi('activity', 'bad', 'Detratores', pct(o.detractors), 'bad', `${o.detractors.toLocaleString('pt-BR')} notas de 0 a 6`, 'detratores'));
 
     const maxN = Math.max(1, ...s.scoreDist.map((d) => d.n));
     const dist = h('div', { class: 'bars' }, Array.from({ length: 11 }, (_, n) => {
@@ -661,7 +674,9 @@
     await load();
     return h('div', {},
       pageHead('Respostas', 'Todas as pesquisas recebidas, dos tablets e dos QR Codes', exportButtons()),
-      filterBar(filterState, () => { page = 1; load(); }), body);
+      filterState.nps ? h('div', { class: 'filter-chip' }, `Mostrando só: ${NPS_GROUPS[filterState.nps]}`,
+        h('button', { class: 'btn secondary sm', onclick: () => { filterState.nps = ''; route(); } }, 'Mostrar todas')) : null,
+      filterBar(filterState, () => { page = 1; route(); }, { withNps: true }), body);
   }
 
   // ------------------------------------------------------------ pesquisas

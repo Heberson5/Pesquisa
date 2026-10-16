@@ -47,3 +47,24 @@ test('atualização converte uma única vez as metas gravadas na escala antiga (
   assert.deepEqual(read(), { goals: [40, 70, null], def: '65' }, 'na segunda vez não converte de novo');
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test('filtro por classificação (atalho dos cards): promotores, neutros e detratores', async () => {
+  const b = (await admin.req('POST', '/api/admin/branches', { body: { code: 'NF', name: 'Loja Filtro' } })).json.id;
+  const sv = (await admin.req('POST', '/api/admin/surveys', { body: { title: 'Filtro', welcome_title: 'Olá', thanks_title: 'Ok', thanks_seconds: 5, idle_seconds: 30,
+    questions: [{ text: 'Nota?', type: 'nps', is_nps: true }] } })).json.id;
+  await admin.req('PUT', `/api/admin/branches/${b}/survey`, { body: { surveyId: sv } });
+  const q = (await admin.req('GET', `/api/admin/surveys/${sv}`)).json.questions[0].id;
+  const d = await admin.req('POST', '/api/admin/devices', { body: { branchId: b, name: 'Tab F' } });
+  const tok = (await new Client().req('POST', '/api/kiosk/pair', { body: { code: d.json.code } })).json.token;
+  for (const v of [10, 9, 8, 3, 0]) {
+    await new Client().req('POST', '/api/kiosk/responses', { headers: { Authorization: 'Bearer ' + tok }, body: { uuid: crypto.randomUUID(), surveyId: sv, answers: [{ questionId: q, value: v }] } });
+  }
+  const total = async (nps) => (await admin.req('GET', `/api/admin/responses?branchId=${b}&nps=${nps}`)).json.total;
+  assert.equal(await total('promotores'), 2);
+  assert.equal(await total('neutros'), 1);
+  assert.equal(await total('detratores'), 2);
+  assert.equal(await total(''), 5);
+  assert.equal((await admin.req('GET', `/api/admin/responses?nps=todos`)).status, 400);
+  const stats = (await admin.req('GET', `/api/admin/stats?branchId=${b}`)).json;
+  assert.equal(stats.overall.nps, 50, '2 promotores e 2 detratores em 5 = empate');
+});

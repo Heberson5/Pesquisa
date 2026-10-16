@@ -27,6 +27,14 @@ function responseFilter(user, q) {
     assertBranch(user, bid);
     where.push('r.branch_id = ?'); params.push(bid);
   }
+  // Classificação no NPS (atalho dos cards Promotores e Detratores): respostas com nota de NPS na faixa.
+  if (q.nps) {
+    const range = { promotores: [9, 10], neutros: [7, 8], detratores: [0, 6] }[q.nps];
+    if (!range) throw bad('Classificação de NPS inválida.');
+    where.push(`EXISTS (SELECT 1 FROM answers an JOIN questions qn ON qn.id = an.question_id AND qn.is_nps = 1
+      WHERE an.response_id = r.id AND an.value_num BETWEEN ? AND ?)`);
+    params.push(...range);
+  }
   if (q.uf) {
     if (q.uf === '_sem') where.push("r.channel = 'link' AND r.geo_region IS NULL");
     else if (q.uf === '_fora') where.push("r.geo_region = 'Fora do Brasil'");
