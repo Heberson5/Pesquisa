@@ -20,6 +20,7 @@ const SCREENS = [
   ['Respostas', 'respostas'], ['Pesquisas', 'pesquisas'], ['Agendar campanha', 'pesquisas', clickText('button', 'Agendar campanha')],
   ['Editor de pesquisa', 'pesquisas', async (p) => { await p.locator('a.btn', { hasText: 'Editar' }).first().click(); await p.waitForTimeout(900); }],
   ['Nova pesquisa', 'pesquisas/nova'],
+  ['Ramificação na pesquisa', 'pesquisas/nova', async (p) => { for (let i = 0; i < 2; i++) await clickText('button', '+ Ramificação')(p); }],
   ['Filiais', 'filiais'], ['Nova filial', 'filiais', clickText('button', 'Nova filial')], ['QR Code da filial', 'filiais', clickText('button', 'QR Code')],
   ['Tablets', 'dispositivos'], ['Novo tablet', 'dispositivos', clickText('button', 'Novo tablet')], ['Guia do tablet', 'dispositivos', clickText('button', 'Guia de instalação')],
   ['Usuários', 'usuarios'], ['Novo usuário', 'usuarios', clickText('button', 'Novo usuário')],

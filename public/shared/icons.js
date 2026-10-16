@@ -53,6 +53,7 @@
     check: { label: 'Visto', rating: true, d: '<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>' },
     // utilitários da interface (não aparecem como opção de menu)
     menu: { ui: true, d: '<path d="M4 12h16"/><path d="M4 6h16"/><path d="M4 18h16"/>' },
+    branch: { ui: true, d: '<line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>' },
     'chevron-left': { ui: true, d: '<path d="m15 18-6-6 6-6"/>' },
     'chevron-right': { ui: true, d: '<path d="m9 18 6-6-6-6"/>' },
     'chevrons-left': { ui: true, d: '<path d="m11 17-5-5 5-5"/><path d="m18 17-5-5 5-5"/>' },

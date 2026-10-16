@@ -262,6 +262,17 @@ label.chk input { width: 18px; height: 18px; accent-color: var(--brand); }
 .q-editor .row.cond > * { flex: 0 1 auto; }
 .q-editor .row.cond select { min-width: 200px; }
 .q-editor .row.cond input[type=number] { width: 80px; }
+.q-editor .jumps { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; border-left: 3px solid var(--brand); padding-left: 10px; margin-top: 4px; }
+.q-editor .jumps > .small { display: flex; align-items: center; gap: 4px; color: var(--ink); }
+.q-editor .row.cond.jump { display: grid; grid-template-columns: 130px 190px 80px minmax(0, 1fr) auto; align-items: center; gap: 8px; }
+.q-editor .row.cond.jump > * { min-width: 0; width: 100%; }
+.q-editor .row.cond.jump > .btn { width: auto; }
+.q-editor .row.jump-add { align-items: center; }
+@media (max-width: 640px) {
+  .q-editor .row.cond.jump { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+  .q-editor .row.cond.jump select { min-width: 0; }
+  .q-editor .row.cond.jump > .btn { justify-self: end; }
+}
 details.tr { margin-top: 10px; } details.tr summary { cursor: pointer; font-weight: 600; color: var(--muted); font-size: 14px; }
 details.tr .form-grid { margin-top: 10px; }
 .mt { margin-top: 18px; }

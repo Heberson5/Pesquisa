@@ -261,6 +261,7 @@ for (const [table, column, ddl] of [
   ['surveys', 'contact_mode', "contact_mode TEXT NOT NULL DEFAULT 'never'"],
   ['questions', 'show_if', 'show_if TEXT'],
   ['questions', 'i18n', 'i18n TEXT'],
+  ['questions', 'jumps', 'jumps TEXT'], // ramificação conforme a resposta (1.5)
 ]) addColumnIfMissing(table, column, ddl);
 // ---- versão 1.5: perfis de acesso com permissões por menu (os perfis padrão são criados em permissions.js).
 db.exec(`CREATE TABLE IF NOT EXISTS roles (

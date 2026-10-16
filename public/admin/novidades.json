@@ -10,6 +10,8 @@
         "text": "Edite o texto de cada aviso, no e-mail e no WhatsApp, com variáveis como {filial} e {nota}, e veja na hora como a mensagem vai chegar." },
       { "type": "novo", "title": "Foto em Minha conta", "image": "minha-conta.jpg", "help": "minha-conta",
         "text": "Envie uma foto, recorte em círculo e ajuste o zoom. Ela aparece no menu, na lista de usuários e nos casos." },
+      { "type": "novo", "title": "Ramificação conforme a resposta", "help": "pesquisas",
+        "text": "Em cada pergunta de nota, sim/não ou opções, defina para onde o cliente vai conforme a resposta: pular para uma pergunta adiante ou encerrar a pesquisa. Ex.: notas de 0 a 6 vão para \"O que deu errado?\" e notas 9 e 10 encerram." },
       { "type": "novo", "title": "Manual de ajuda e notas de versão", "image": "ajuda.jpg", "help": "como-funciona",
         "text": "Menu Ajuda com artigos por assunto, busca e o botão \"?\" em cada tela. Cada pessoa vê os artigos das telas que pode abrir. As novidades de cada versão ficam neste menu." },
       { "type": "melhoria", "title": "Prazos de guarda de até 10 anos", "image": "config-lgpd.jpg", "help": "lgpd", "highlight": true,

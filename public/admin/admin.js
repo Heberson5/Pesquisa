@@ -820,6 +820,8 @@
     let keySeq = 0;
     const questions = s.questions.map((q) => ({ ...q, options: [...(q.options || [])], i18n: structuredClone(q.i18n || {}), _k: ++keySeq }));
     questions.forEach((q) => { if (q.show_if && questions[q.show_if.ref]) q.cond = { k: questions[q.show_if.ref]._k, op: q.show_if.op, value: q.show_if.value }; });
+    // Ramificação: destino guardado pela chave interna (ou 'end'), para sobreviver a reordenações.
+    questions.forEach((q) => { q.jumpRules = (q.jumps || []).map((r) => ({ op: r.op, value: r.value, to: r.goto === 'end' ? 'end' : questions[r.goto]?._k ?? null })); });
     const langs = new Set(s.languages || ['pt']);
     const sI18n = structuredClone(s.i18n || {});
     const extraLangs = () => ['en', 'es'].filter((l) => langs.has(l));
@@ -839,20 +841,49 @@
       } }, h('option', { value: '' }, 'Mostrar sempre'), prev.map(({ x, j }) => h('option', { value: String(x._k) }, `Mostrar só se a pergunta ${j + 1}…`)));
       sel.value = valid ? String(target._k) : '';
       if (!valid) { if (q.cond) q.cond = null; return h('div', { class: 'row cond' }, icon('sliders', 16), sel); }
+      const [op, val] = ruleControls(target, q.cond);
+      return h('div', { class: 'row cond' }, icon('sliders', 16), sel, op, val);
+    }
+    // Operador e valor de uma regra sobre a resposta da pergunta "target" (condição ou ramificação).
+    function ruleControls(target, rule) {
       let op; let val;
       if (target.type === 'nps' || target.type === 'scale5') {
-        op = h('select', { disabled: ro, onchange: (e) => { q.cond.op = e.target.value; } }, [['lte', 'for menor ou igual a'], ['gte', 'for maior ou igual a'], ['eq', 'for igual a']].map(([v, l]) => h('option', { value: v }, l)));
-        val = h('input', { type: 'number', min: target.type === 'nps' ? '0' : '1', max: target.type === 'nps' ? '10' : '5', value: q.cond.value, disabled: ro, oninput: (e) => { q.cond.value = Number(e.target.value); } });
+        op = h('select', { disabled: ro, onchange: (e) => { rule.op = e.target.value; } }, [['lte', 'for menor ou igual a'], ['gte', 'for maior ou igual a'], ['eq', 'for igual a']].map(([v, l]) => h('option', { value: v }, l)));
+        val = h('input', { type: 'number', min: target.type === 'nps' ? '0' : '1', max: target.type === 'nps' ? '10' : '5', value: rule.value, disabled: ro, oninput: (e) => { rule.value = Number(e.target.value); } });
       } else if (target.type === 'yesno') {
         op = h('span', { class: 'small muted' }, 'for');
-        val = h('select', { disabled: ro, onchange: (e) => { q.cond.value = e.target.value; } }, h('option', { value: 'sim' }, 'Sim'), h('option', { value: 'nao' }, 'Não'));
+        val = h('select', { disabled: ro, onchange: (e) => { rule.value = e.target.value; } }, h('option', { value: 'sim' }, 'Sim'), h('option', { value: 'nao' }, 'Não'));
       } else {
         op = h('span', { class: 'small muted' }, target.type === 'multi' ? 'incluir' : 'for');
-        val = h('select', { disabled: ro, onchange: (e) => { q.cond.value = e.target.value; } }, target.options.map((o) => h('option', { value: o }, o)));
+        if (!target.options.includes(rule.value)) rule.value = target.options[0];
+        val = h('select', { disabled: ro, onchange: (e) => { rule.value = e.target.value; } }, target.options.map((o) => h('option', { value: o }, o)));
       }
-      if (op.tagName === 'SELECT') op.value = q.cond.op;
-      val.value = q.cond.value;
-      return h('div', { class: 'row cond' }, icon('sliders', 16), sel, op, val);
+      if (op.tagName === 'SELECT') op.value = rule.op;
+      val.value = rule.value;
+      return [op, val];
+    }
+
+    // Ramificação: "se a resposta for X, ir para a pergunta N (ou encerrar)". Vale a primeira regra atendida.
+    function jumpEditor(q, i) {
+      if (!COND_TYPES.includes(q.type)) return null;
+      const later = questions.slice(i + 1).map((x, d) => ({ x, n: i + 2 + d }));
+      const rules = q.jumpRules || (q.jumpRules = []);
+      const short = (t) => (t && t.length > 40 ? t.slice(0, 39) + '…' : t || 'sem texto');
+      const rows = rules.map((r, k) => {
+        if (r.to !== 'end' && !later.some(({ x }) => x._k === r.to)) r.to = null; // destino ficou antes desta pergunta
+        const [op, val] = ruleControls(q, r);
+        const dest = h('select', { disabled: ro, 'aria-label': 'Destino', onchange: (e) => { r.to = e.target.value === 'end' ? 'end' : e.target.value ? Number(e.target.value) : null; } },
+          h('option', { value: '' }, 'Escolha o destino…'),
+          later.map(({ x, n }) => h('option', { value: String(x._k) }, `Ir para a pergunta ${n}: ${short(x.text)}`)),
+          h('option', { value: 'end' }, 'Encerrar a pesquisa'));
+        dest.value = r.to === null ? '' : String(r.to);
+        return h('div', { class: 'row cond jump' }, h('span', { class: 'small muted' }, k ? 'Senão, se a resposta' : 'Se a resposta'), op, val, dest,
+          ro ? null : h('button', { class: 'btn secondary sm', title: 'Remover regra', 'aria-label': 'Remover regra', onclick: () => { rules.splice(k, 1); renderQuestions(); } }, '×'));
+      });
+      const add = ro || rules.length >= 20 ? null : h('button', { class: 'btn secondary sm', onclick: () => { rules.push({ ...defaultCond(q), to: later[0] ? later[0].x._k : 'end' }); renderQuestions(); } }, '+ Ramificação');
+      if (!rules.length) return add ? h('div', { class: 'row jump-add' }, add, h('span', { class: 'small muted' }, 'Leve o cliente para outra pergunta (ou encerre) conforme a resposta.')) : null;
+      return h('div', { class: 'jumps' }, h('div', { class: 'small' }, icon('branch', 16), h('b', {}, ' Ramificação')), rows,
+        h('div', { class: 'row jump-add' }, add, h('span', { class: 'small muted' }, later.length ? `Demais respostas: segue para a pergunta ${i + 2}.` : 'Demais respostas: encerra a pesquisa.')));
     }
     function defaultCond(t) {
       if (t.type === 'nps') return { op: 'lte', value: 6 };
@@ -881,7 +912,7 @@
       qList.replaceChildren(...questions.map((q, i) => {
         const text = h('input', { value: q.text, placeholder: 'Texto da pergunta', disabled: ro, oninput: (e) => { q.text = e.target.value; } });
         const help = h('input', { value: q.help_text || '', placeholder: 'Texto de apoio (opcional)', disabled: ro, oninput: (e) => { q.help_text = e.target.value; } });
-        const type = h('select', { disabled: ro || locked, onchange: (e) => { q.type = e.target.value; if (q.type !== 'nps') q.is_nps = false; if (['single', 'multi'].includes(q.type) && q.options.length < 2) q.options = ['Opção 1', 'Opção 2']; renderQuestions(); } },
+        const type = h('select', { disabled: ro || locked, onchange: (e) => { q.type = e.target.value; q.jumpRules = []; if (q.type !== 'nps') q.is_nps = false; if (['single', 'multi'].includes(q.type) && q.options.length < 2) q.options = ['Opção 1', 'Opção 2']; renderQuestions(); } },
           Object.entries(questionTypes).map(([k, v]) => h('option', { value: k }, v)));
         type.value = q.type;
         const req = h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: q.required, disabled: ro, onchange: (e) => { q.required = e.target.checked; } }), 'Obrigatória');
@@ -908,7 +939,7 @@
             ro ? null : h('button', { class: 'btn danger sm', disabled: locked || questions.length === 1, onclick: () => { questions.splice(i, 1); renderQuestions(); } }, 'Remover')),
           h('div', { class: 'row', style: null }, help),
           h('div', { class: 'row' }, type, isScale ? disp : null, req, nps), iconPick ? h('div', { class: 'row' }, iconPick) : null, opts,
-          condEditor(q, i), translations(q));
+          condEditor(q, i), jumpEditor(q, i), translations(q));
       }));
     }
     renderQuestions();
@@ -965,6 +996,7 @@
           return { text: q.text, help_text: q.help_text || '', type: q.type, required: !!q.required, is_nps: !!q.is_nps, options: q.options,
             display: ['nps', 'scale5'].includes(q.type) ? (q.display || 'default') : undefined, icon: q.display === 'icons' ? q.icon || null : null,
             show_if: target >= 0 && target < i ? { ref: target, op: q.cond.op, value: q.cond.value } : null,
+            jumps: COND_TYPES.includes(q.type) ? (q.jumpRules || []).map((r) => ({ op: r.op, value: r.value, goto: r.to === 'end' ? 'end' : questions.findIndex((x) => x._k === r.to) })) : [],
             i18n: cleanI18n(q.i18n) };
         }),
       };

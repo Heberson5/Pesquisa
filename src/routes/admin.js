@@ -367,13 +367,16 @@ function parseLanguages(v) {
   return ['pt', ...LANGS.filter((l) => l !== 'pt' && v.includes(l))];
 }
 
-// Condições no banco referenciam o id da pergunta; no editor, a posição (ref). Converte nos dois sentidos.
+// Condições e ramificações no banco referenciam o id da pergunta; no editor, a posição (ref). Converte nos dois sentidos.
 function withRefs(survey) {
   const pos = new Map(survey.questions.map((q, i) => [q.id, i]));
-  survey.questions = survey.questions.map((q) => ({ ...q, show_if: q.show_if && pos.has(q.show_if.q) ? { ref: pos.get(q.show_if.q), op: q.show_if.op, value: q.show_if.value } : null }));
+  survey.questions = survey.questions.map((q) => ({ ...q,
+    show_if: q.show_if && pos.has(q.show_if.q) ? { ref: pos.get(q.show_if.q), op: q.show_if.op, value: q.show_if.value } : null,
+    jumps: (q.jumps || []).filter((r) => r.goto === 'end' || pos.has(r.goto)).map((r) => ({ op: r.op, value: r.value, goto: r.goto === 'end' ? 'end' : pos.get(r.goto) })) }));
   return survey;
 }
 const condForDb = (cond, ids) => (cond ? JSON.stringify({ q: ids[cond.ref], op: cond.op, value: cond.value }) : null);
+const jumpsForDb = (jumps, ids) => (jumps?.length ? JSON.stringify(jumps.map((r) => ({ op: r.op, value: r.value, goto: r.goto === 'end' ? 'end' : ids[r.goto] }))) : null);
 const i18nForDb = (o) => (o && Object.keys(o).length ? JSON.stringify(o) : null);
 
 function insertQuestions(surveyId, questions) {
@@ -385,6 +388,8 @@ function insertQuestions(surveyId, questions) {
       condForDb(q.show_if, ids), i18nForDb(q.i18n));
     ids.push(Number(r.lastInsertRowid));
   });
+  // As ramificações apontam para perguntas adiante: gravadas depois que todas têm id.
+  questions.forEach((q, i) => { if (q.jumps?.length) run('UPDATE questions SET jumps = ? WHERE id = ?', jumpsForDb(q.jumps, ids), ids[i]); });
 }
 
 router.post('/surveys', need('pesquisas', 'incluir'), (req, res) => {
@@ -426,8 +431,9 @@ router.put('/surveys/:id', need('pesquisas', 'editar'), (req, res) => {
           throw new HttpError(409, 'Esta pesquisa já tem respostas: não é possível mudar tipo ou opções. Use "Duplicar".');
         }
         // A aparência (números/carinhas/ícones) pode mudar: o valor gravado continua o mesmo número.
-        run('UPDATE questions SET text=?, help_text=?, required=?, is_nps=?, display=?, icon=?, show_if=?, i18n=? WHERE id=?',
-          q.text, q.help_text, q.required, q.is_nps, q.display, q.icon, condForDb(q.show_if, current.questions.map((x) => x.id)), i18nForDb(q.i18n), old.id);
+        const ids = current.questions.map((x) => x.id);
+        run('UPDATE questions SET text=?, help_text=?, required=?, is_nps=?, display=?, icon=?, show_if=?, jumps=?, i18n=? WHERE id=?',
+          q.text, q.help_text, q.required, q.is_nps, q.display, q.icon, condForDb(q.show_if, ids), jumpsForDb(q.jumps, ids), i18nForDb(q.i18n), old.id);
       });
     }
     if (!s.active) run('UPDATE branches SET survey_id = NULL WHERE survey_id = ?', sid);

@@ -21,6 +21,7 @@ Gerado a partir de `public/admin/novidades.json` (o mesmo conteúdo do menu **No
 
   ![Foto em Minha conta](public/admin/ajuda/img/minha-conta.jpg)
 
+- **Ramificação conforme a resposta.** Em cada pergunta de nota, sim/não ou opções, defina para onde o cliente vai conforme a resposta: pular para uma pergunta adiante ou encerrar a pesquisa. Ex.: notas de 0 a 6 vão para "O que deu errado?" e notas 9 e 10 encerram.
 - **Manual de ajuda e notas de versão.** Menu Ajuda com artigos por assunto, busca e o botão "?" em cada tela. Cada pessoa vê os artigos das telas que pode abrir. As novidades de cada versão ficam neste menu.
 
   ![Manual de ajuda e notas de versão](public/admin/ajuda/img/ajuda.jpg)

@@ -4,7 +4,7 @@
 const { get, run, tx } = require('./db');
 const geoLib = require('./geo');
 const { HttpError, bad, int, str, UUID_RE } = require('./validate');
-const { loadSurvey, normalizeAnswer, isVisible, LANGS } = require('./surveys');
+const { loadSurvey, normalizeAnswer, isVisible, nextIndex, LANGS } = require('./surveys');
 const { encrypt, lookup, normPhone, normEmail } = require('./vault');
 const { isEmail } = require('./notify');
 const { publicBranding } = require('./settings');
@@ -65,7 +65,7 @@ function surveyPayload(survey) {
     contactMode: survey.contact_mode,
     questions: survey.questions.map((q) => ({
       id: q.id, text: q.text, helpText: q.help_text, type: q.type, required: q.required, options: q.options,
-      display: q.display, icon: q.icon, showIf: q.show_if, i18n: q.i18n,
+      display: q.display, icon: q.icon, showIf: q.show_if, jumps: q.jumps, i18n: q.i18n,
     })),
   };
 }
@@ -145,18 +145,22 @@ function saveResponse({ branch, deviceId = null, deviceLabel = null, channel, bo
   const known = new Set(survey.questions.map((q) => q.id));
   for (const qid of byId.keys()) if (!known.has(qid)) throw bad('Pergunta não pertence à pesquisa.');
 
-  // Perguntas condicionais: só valem (e só são obrigatórias) quando a condição é atendida.
+  // Refaz o caminho do cliente: ramificações pulam perguntas e condicionais só valem quando atendidas.
+  // Pergunta fora do caminho não pode ter resposta nem é obrigatória.
   const raw = new Map();
   const normalized = [];
-  for (const q of survey.questions) {
-    if (!isVisible(q, raw)) {
+  let next = 0;
+  survey.questions.forEach((q, i) => {
+    if (i < next || !isVisible(q, raw)) {
       const v = byId.get(q.id);
       if (!(v === undefined || v === null || v === '' || (Array.isArray(v) && !v.length))) throw bad('Resposta para pergunta que não deveria aparecer.');
-      continue;
+      if (i >= next) next = i + 1;
+      return;
     }
     const v = normalizeAnswer(q, byId.get(q.id));
     if (v !== null) { normalized.push({ q, v }); raw.set(q.id, byId.get(q.id)); }
-  }
+    next = nextIndex(survey.questions, i, raw.get(q.id));
+  });
   if (normalized.length === 0) throw bad('Resposta vazia.');
 
   const npsScores = normalized.filter((x) => x.q.is_nps).map((x) => x.v.num);

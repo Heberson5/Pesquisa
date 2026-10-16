@@ -292,22 +292,31 @@
       default: return false;
     }
   }
-  // Visível se não tem condição ou se a pergunta de referência (também visível) atende a condição.
-  function visible(i) {
-    const q = state.survey.questions[i];
-    if (!q.showIf) return true;
-    const ref = state.survey.questions.findIndex((x) => x.id === q.showIf.q);
-    return ref >= 0 && ref < i && visible(ref) && condOk(q.showIf, state.answers[q.showIf.q]);
+  // Caminho da pesquisa com as respostas atuais: ramificações pulam perguntas (ou encerram) e as
+  // condicionais só aparecem quando a pergunta de referência está no caminho e atende a condição.
+  // O servidor refaz o mesmo cálculo ao receber a resposta.
+  function path() {
+    const qs = state.survey.questions;
+    const out = [];
+    let next = 0;
+    for (let i = next; i < qs.length; i = next) {
+      const q = qs[i];
+      next = i + 1;
+      if (q.showIf && !(out.some((j) => qs[j].id === q.showIf.q) && condOk(q.showIf, state.answers[q.showIf.q]))) continue;
+      out.push(i);
+      const rule = (q.jumps || []).find((r) => condOk(r, state.answers[q.id]));
+      if (rule) next = rule.goto === 'end' ? qs.length : Math.max(i + 1, qs.findIndex((x) => x.id === rule.goto));
+    }
+    return out;
   }
-  const visibleIdx = () => state.survey.questions.map((_, i) => i).filter(visible);
 
   function goNext() {
-    const next = visibleIdx().find((i) => i > state.index);
+    const next = path().find((i) => i > state.index);
     if (next === undefined) return finish();
     state.index = next; showQuestion();
   }
   function goBack() {
-    const prev = visibleIdx().filter((i) => i < state.index).pop();
+    const prev = path().filter((i) => i < state.index).pop();
     if (prev !== undefined) { state.index = prev; showQuestion(); }
   }
 
@@ -315,7 +324,7 @@
     bumpIdle();
     const s = state.survey;
     const q = s.questions[state.index];
-    const vis = visibleIdx();
+    const vis = path();
     const pos = vis.indexOf(state.index);
     const total = vis.length;
     const isLast = pos === total - 1;
@@ -383,7 +392,8 @@
 
   // ------------------------------------------------------------ contato (com consentimento — LGPD)
   function minNps() {
-    const scores = state.survey.questions.filter((q, i) => q.type === 'nps' && visible(i) && Number.isInteger(state.answers[q.id])).map((q) => state.answers[q.id]);
+    const onPath = new Set(path());
+    const scores = state.survey.questions.filter((q, i) => q.type === 'nps' && onPath.has(i) && Number.isInteger(state.answers[q.id])).map((q) => state.answers[q.id]);
     return scores.length ? Math.min(...scores) : null;
   }
   function needsContact() {
@@ -435,6 +445,7 @@
   // ------------------------------------------------------------ envio
   function buildPayload() {
     const s = state.survey;
+    const onPath = new Set(path());
     return {
       uuid: state.uuid,
       surveyId: s.id,
@@ -444,9 +455,9 @@
       ticket: state.ticket,
       contact: state.contact || undefined,
       geo: MODE === 'link' && geoState === 'ok' && geo ? { lat: geo.lat, lng: geo.lng, consent: true } : undefined,
-      // Só envia respostas de perguntas visíveis (condicionais escondidas são descartadas).
+      // Só envia respostas das perguntas do caminho (as puladas ou escondidas são descartadas).
       answers: s.questions
-        .filter((q, i) => visible(i) && state.answers[q.id] !== undefined && !(q.type === 'text' && !String(state.answers[q.id]).trim()))
+        .filter((q, i) => onPath.has(i) && state.answers[q.id] !== undefined && !(q.type === 'text' && !String(state.answers[q.id]).trim()))
         .filter((q) => !(Array.isArray(state.answers[q.id]) && !state.answers[q.id].length))
         .map((q) => ({ questionId: q.id, value: q.type === 'text' ? String(state.answers[q.id]).trim() : state.answers[q.id] })),
     };
