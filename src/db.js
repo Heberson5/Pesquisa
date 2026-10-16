@@ -318,12 +318,17 @@ const qSql = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND 
 if (!qSql.includes("'default'")) {
   const createNew = SCHEMA.match(/CREATE TABLE IF NOT EXISTS questions \([\s\S]*?\n\);/)[0]
     .replace('CREATE TABLE IF NOT EXISTS questions', 'CREATE TABLE questions_new');
+  // Colunas acrescentadas depois do esquema base (show_if, i18n, jumps…) já foram criadas acima: são levadas
+  // para a nova tabela junto com os dados, senão sumiriam até o próximo início do servidor.
+  const baseCols = ['id', 'survey_id', 'position', 'text', 'help_text', 'type', 'required', 'is_nps', 'options_json', 'display', 'icon'];
+  const extraCols = db.prepare('PRAGMA table_info(questions)').all().filter((c) => !baseCols.includes(c.name));
+  const cols = [...baseCols, ...extraCols.map((c) => c.name)].join(', ');
   db.exec('PRAGMA foreign_keys = OFF');
   db.exec('BEGIN');
   try {
     db.exec(`${createNew}
-      INSERT INTO questions_new (id, survey_id, position, text, help_text, type, required, is_nps, options_json, display, icon)
-        SELECT id, survey_id, position, text, help_text, type, required, is_nps, options_json, display, icon FROM questions;
+      ${extraCols.map((c) => `ALTER TABLE questions_new ADD COLUMN ${c.name} ${c.type};`).join('\n')}
+      INSERT INTO questions_new (${cols}) SELECT ${cols} FROM questions;
       DROP TABLE questions;
       ALTER TABLE questions_new RENAME TO questions;`);
     if (db.prepare('PRAGMA foreign_key_check').all().length) throw new Error('Migração de perguntas deixaria referências inválidas.');

@@ -146,18 +146,19 @@ function saveResponse({ branch, deviceId = null, deviceLabel = null, channel, bo
   for (const qid of byId.keys()) if (!known.has(qid)) throw bad('Pergunta não pertence à pesquisa.');
 
   // Refaz o caminho do cliente: ramificações pulam perguntas e condicionais só valem quando atendidas.
-  // Pergunta fora do caminho não pode ter resposta nem é obrigatória.
+  // Resposta para pergunta fora do caminho é descartada (não é gravada nem conta nos relatórios): assim uma
+  // resposta guardada offline antes de alguém mudar as regras não é perdida. Pelo mesmo motivo, se a pesquisa
+  // foi alterada depois que o cliente começou, as obrigatórias do novo caminho não são exigidas.
+  const changedSince = (startedAt ?? submittedAt) < survey.updated_at;
   const raw = new Map();
   const normalized = [];
   let next = 0;
   survey.questions.forEach((q, i) => {
     if (i < next || !isVisible(q, raw)) {
-      const v = byId.get(q.id);
-      if (!(v === undefined || v === null || v === '' || (Array.isArray(v) && !v.length))) throw bad('Resposta para pergunta que não deveria aparecer.');
       if (i >= next) next = i + 1;
       return;
     }
-    const v = normalizeAnswer(q, byId.get(q.id));
+    const v = normalizeAnswer(changedSince ? { ...q, required: false } : q, byId.get(q.id));
     if (v !== null) { normalized.push({ q, v }); raw.set(q.id, byId.get(q.id)); }
     next = nextIndex(survey.questions, i, raw.get(q.id));
   });

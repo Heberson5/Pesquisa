@@ -855,8 +855,13 @@
         val = h('select', { disabled: ro, onchange: (e) => { rule.value = e.target.value; } }, h('option', { value: 'sim' }, 'Sim'), h('option', { value: 'nao' }, 'Não'));
       } else {
         op = h('span', { class: 'small muted' }, target.type === 'multi' ? 'incluir' : 'for');
-        if (!target.options.includes(rule.value)) rule.value = target.options[0];
-        val = h('select', { disabled: ro, onchange: (e) => { rule.value = e.target.value; } }, target.options.map((o) => h('option', { value: o }, o)));
+        // Valor que não está mais entre as opções (opção renomeada, regra "in" feita pela API): não troca a regra
+        // em silêncio; mostra "Escolha a opção…" e o servidor recusa ao salvar até a pessoa escolher.
+        const known = target.options.includes(rule.value);
+        val = h('select', { disabled: ro, onchange: (e) => { rule.op = target.type === 'multi' ? 'has' : 'eq'; rule.value = e.target.value; } },
+          known ? null : h('option', { value: '', disabled: true }, 'Escolha a opção…'), target.options.map((o) => h('option', { value: o }, o)));
+        val.value = known ? rule.value : '';
+        return [op, val];
       }
       if (op.tagName === 'SELECT') op.value = rule.op;
       val.value = rule.value;
@@ -870,13 +875,15 @@
       const rules = q.jumpRules || (q.jumpRules = []);
       const short = (t) => (t && t.length > 40 ? t.slice(0, 39) + '…' : t || 'sem texto');
       const rows = rules.map((r, k) => {
-        if (r.to !== 'end' && !later.some(({ x }) => x._k === r.to)) r.to = null; // destino ficou antes desta pergunta
+        // Destino que ficou antes desta pergunta (ou foi removido): aparece vazio, mas a regra é mantida para o caso
+        // de a pessoa desfazer a reordenação; ao salvar sem corrigir, o servidor recusa com a mensagem da ramificação.
+        const to = r.to === 'end' || later.some(({ x }) => x._k === r.to) ? r.to : null;
         const [op, val] = ruleControls(q, r);
         const dest = h('select', { disabled: ro, 'aria-label': 'Destino', onchange: (e) => { r.to = e.target.value === 'end' ? 'end' : e.target.value ? Number(e.target.value) : null; } },
           h('option', { value: '' }, 'Escolha o destino…'),
           later.map(({ x, n }) => h('option', { value: String(x._k) }, `Ir para a pergunta ${n}: ${short(x.text)}`)),
           h('option', { value: 'end' }, 'Encerrar a pesquisa'));
-        dest.value = r.to === null ? '' : String(r.to);
+        dest.value = to === null ? '' : String(to);
         return h('div', { class: 'row cond jump' }, h('span', { class: 'small muted' }, k ? 'Senão, se a resposta' : 'Se a resposta'), op, val, dest,
           ro ? null : h('button', { class: 'btn secondary sm', title: 'Remover regra', 'aria-label': 'Remover regra', onclick: () => { rules.splice(k, 1); renderQuestions(); } }, '×'));
       });

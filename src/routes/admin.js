@@ -425,13 +425,13 @@ router.put('/surveys/:id', need('pesquisas', 'editar'), (req, res) => {
       // Com respostas coletadas, a estrutura fica congelada para não corromper o histórico.
       // Só é permitido corrigir textos e a marcação de NPS (que recalcula os relatórios).
       if (s.questions.length !== current.questions.length) throw new HttpError(409, 'Esta pesquisa já tem respostas: não é possível adicionar ou remover perguntas. Use "Duplicar".');
+      const ids = current.questions.map((x) => x.id);
       s.questions.forEach((q, i) => {
         const old = current.questions[i];
         if (old.type !== q.type || JSON.stringify(old.options) !== JSON.stringify(q.options)) {
           throw new HttpError(409, 'Esta pesquisa já tem respostas: não é possível mudar tipo ou opções. Use "Duplicar".');
         }
         // A aparência (números/carinhas/ícones) pode mudar: o valor gravado continua o mesmo número.
-        const ids = current.questions.map((x) => x.id);
         run('UPDATE questions SET text=?, help_text=?, required=?, is_nps=?, display=?, icon=?, show_if=?, jumps=?, i18n=? WHERE id=?',
           q.text, q.help_text, q.required, q.is_nps, q.display, q.icon, condForDb(q.show_if, ids), jumpsForDb(q.jumps, ids), i18nForDb(q.i18n), old.id);
       });
