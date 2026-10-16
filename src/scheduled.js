@@ -9,6 +9,7 @@ const zones = require('./zones');
 const { hoursStatus } = require('./responses');
 const { branchRecipients } = require('./alerts');
 const { publicUrl } = require('./config');
+const { accessFor } = require('./permissions');
 
 const fmtNps = (n) => (n === null || n === undefined ? '—' : (n > 0 ? '+' : '') + n.toLocaleString('pt-BR'));
 const pct = (v, t) => (t ? Math.round((v / t) * 100) + '%' : '—');
@@ -33,18 +34,20 @@ async function sendWeeklyReport({ force = false, now = Date.now() } = {}) {
 
   const period = lastWeek(ln.date);
   // Destinatários: cada usuário recebe o relatório no SEU escopo (gestor só as filiais dele).
-  const users = all("SELECT id, name, email, role FROM users WHERE active = 1 AND notify_reports = 1");
+  const users = all("SELECT id, name, email, role, role_id FROM users WHERE active = 1 AND notify_reports = 1")
+    .filter((u) => { const a = accessFor(u); return a.isAdmin || a.perms.has('dashboard.ver'); });
   const recipients = users.map((u) => ({ email: u.email, user: u }));
   const adminScope = { id: 0, role: 'admin', name: 'Relatório automático' };
   for (const e of s.weeklyReport.extraEmails) if (!recipients.some((r) => r.email === e)) recipients.push({ email: e, user: adminScope });
 
   let sent = 0;
   for (const r of recipients) {
-    if (r.user.role === 'gestor' && !get('SELECT 1 FROM user_branches WHERE user_id = ?', r.user.id)) continue;
+    const scoped = !accessFor(r.user).scopeAll;
+    if (scoped && !get('SELECT 1 FROM user_branches WHERE user_id = ?', r.user.id)) continue;
     const { buffer, stats } = await reportFor(r.user, period, 'Relatório automático');
     const o = stats.overall;
-    const open = get(`SELECT COUNT(*) AS n FROM cases c ${r.user.role === 'gestor' ? 'JOIN user_branches ub ON ub.branch_id = c.branch_id AND ub.user_id = ?' : ''}
-      WHERE c.status IN ('aberto','em_contato')`, ...(r.user.role === 'gestor' ? [r.user.id] : [])).n;
+    const open = get(`SELECT COUNT(*) AS n FROM cases c ${scoped ? 'JOIN user_branches ub ON ub.branch_id = c.branch_id AND ub.user_id = ?' : ''}
+      WHERE c.status IN ('aberto','em_contato')`, ...(scoped ? [r.user.id] : [])).n;
     const { html, text } = renderEmail({
       brand: s, title: 'Relatório semanal de satisfação',
       intro: `Resumo de ${period.from.split('-').reverse().join('/')} a ${period.to.split('-').reverse().join('/')}. O relatório completo em PowerPoint está anexado.`,

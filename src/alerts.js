@@ -7,17 +7,27 @@ const { queueEmail, queueWebhook, queueWhatsApp, renderEmail } = require('./noti
 const { decrypt } = require('./vault');
 const { publicUrl } = require('./config');
 const zones = require('./zones');
+const { accessFor } = require('./permissions');
 
 const DETRACTOR_MAX = 6;
 const parseList = (json) => { try { const v = JSON.parse(json || '[]'); return Array.isArray(v) ? v : []; } catch { return []; } };
 
-// Destinatários de e-mail de uma filial: lista da filial + gestores da filial e admins que querem o aviso.
-const PREF_COLUMNS = new Set(['notify_detractors', 'notify_reports', 'notify_offline']);
+// Usuários que recebem um aviso da filial: quem marcou a preferência em Minha conta, enxerga a filial
+// e pode abrir a tela correspondente (casos, tablets ou visão geral).
+const PREF_COLUMNS = { notify_detractors: 'casos', notify_reports: 'dashboard', notify_offline: 'tablets' };
+function usersToNotify(branchId, prefColumn) {
+  if (!Object.hasOwn(PREF_COLUMNS, prefColumn)) throw new Error('Preferência inválida.');
+  return all(`SELECT id, email, whatsapp, role, role_id FROM users WHERE active = 1 AND ${prefColumn} = 1`).filter((u) => {
+    const a = accessFor(u);
+    if (!a.isAdmin && !a.perms.has(PREF_COLUMNS[prefColumn] + '.ver')) return false;
+    return a.scopeAll || !!get('SELECT 1 FROM user_branches WHERE user_id = ? AND branch_id = ?', u.id, branchId);
+  });
+}
+
+// Destinatários de e-mail de uma filial: lista da filial + usuários que querem o aviso.
 function branchRecipients(branchId, prefColumn) {
-  if (!PREF_COLUMNS.has(prefColumn)) throw new Error('Preferência inválida.');
   const b = get('SELECT alert_emails FROM branches WHERE id = ?', branchId);
-  const users = all(`SELECT DISTINCT u.email FROM users u LEFT JOIN user_branches ub ON ub.user_id = u.id
-      WHERE u.active = 1 AND u.${prefColumn} = 1 AND (u.role = 'admin' OR ub.branch_id = ?)`, branchId).map((r) => r.email);
+  const users = usersToNotify(branchId, prefColumn).map((u) => u.email);
   return [...new Set([...parseList(b?.alert_emails), ...users].map((e) => String(e).toLowerCase()))];
 }
 
@@ -62,11 +72,10 @@ function notifyDetractor(r, score, caseId) {
   }
   if (s.alerts.whatsappTemplate) {
     const phones = parseList(get('SELECT alert_phones FROM branches WHERE id = ?', r.branch_id)?.alert_phones);
-    // + WhatsApp pessoal dos usuários (gestores da filial e administradores) que quiserem o aviso
-    const mine = all(`SELECT DISTINCT u.whatsapp FROM users u LEFT JOIN user_branches ub ON ub.user_id = u.id
-        WHERE u.active = 1 AND u.notify_detractors = 1 AND u.whatsapp IS NOT NULL AND (u.role = 'admin' OR ub.branch_id = ?)`, r.branch_id).map((x) => x.whatsapp);
+    // + WhatsApp pessoal dos usuários que enxergam a filial e quiseram o aviso
+    const mine = usersToNotify(r.branch_id, 'notify_detractors').map((x) => x.whatsapp).filter(Boolean);
     for (const p of [...new Set([...phones, ...mine])]) queueWhatsApp(p, { template: s.alerts.whatsappTemplate, language: s.alerts.whatsappLanguage, params: [r.branch_name, String(score), url] }, 'detractor');
   }
 }
 
-module.exports = { onResponse, branchRecipients, parseList, DETRACTOR_MAX };
+module.exports = { onResponse, branchRecipients, usersToNotify, parseList, DETRACTOR_MAX };

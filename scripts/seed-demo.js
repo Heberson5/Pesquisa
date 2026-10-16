@@ -5,6 +5,7 @@ const crypto = require('node:crypto');
 const { get, run, tx } = require('../src/db');
 const { hashPassword, passwordPolicyError } = require('../src/security');
 const { encrypt, lookup } = require('../src/vault');
+const { GESTOR_DEFAULT } = require('../src/permissions');
 
 if (process.env.NODE_ENV === 'production') { console.error('seed:demo não pode rodar em produção.'); process.exit(1); }
 if (get('SELECT 1 FROM surveys LIMIT 1')) { console.error('O banco já possui dados; seed ignorado.'); process.exit(0); }
@@ -101,6 +102,10 @@ tx(() => {
     }
   }
   void adminId;
+  // Perfis: os usuários recebem o perfil padrão equivalente; mais um perfil de exemplo criado pela empresa.
+  run("UPDATE users SET role_id = (SELECT id FROM roles WHERE builtin = users.role) WHERE role_id IS NULL");
+  run("INSERT INTO roles (name, description, scope, perms, created_at, updated_at) VALUES ('Supervisor regional', 'Exemplo: vê todas as filiais, cuida de campanhas e tablets.', 'all', ?, ?, ?)",
+    JSON.stringify([...GESTOR_DEFAULT, 'campanhas.incluir', 'campanhas.excluir', 'filiais.qrcode', 'auditoria.ver']), now, now);
 });
 console.log('Dados de demonstração criados.');
 console.log('  admin:  admin@demo.local');

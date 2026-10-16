@@ -285,3 +285,50 @@ details.tr .form-grid { margin-top: 10px; }
 tr.tone-warn td:first-child { box-shadow: inset 3px 0 0 var(--mid); }
 tr.tone-bad td:first-child { box-shadow: inset 3px 0 0 var(--bad); }
 label.f > .small { font-weight: 400; }
+
+/* ---------- perfis e permissões */
+fieldset.ro { border: 0; padding: 0; margin: 0; min-width: 0; }
+fieldset.ro .btn { display: none; }
+.chk-list { display: grid; gap: 6px; margin-top: 6px; }
+.perm-layout { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 20px; align-items: start; }
+.role-list { display: grid; gap: 8px; position: sticky; top: 16px; }
+.role-item { display: grid; gap: 2px; text-align: left; font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; cursor: pointer; }
+.role-item b { display: flex; gap: 6px; align-items: center; font-size: 14px; }
+.role-item span { font-size: 12px; color: var(--muted); }
+.role-item:hover { background: var(--surface-2); }
+.role-item.active { border-color: var(--brand); box-shadow: 0 0 0 1px var(--brand); }
+.radio-row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 8px; }
+.radio-card { display: flex; gap: 10px; align-items: flex-start; border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px; cursor: pointer; flex: 1 1 220px; }
+.radio-card.active { border-color: var(--brand); background: var(--brand-soft); }
+.radio-card input { margin-top: 3px; accent-color: var(--brand); width: 18px; height: 18px; }
+.radio-card span { display: grid; } .radio-card small { color: var(--muted); }
+.perm-matrix th.c, .perm-matrix td.c { text-align: center; width: 72px; padding-left: 4px; padding-right: 4px; }
+.perm-matrix td:first-child { min-width: 200px; }
+.perm-matrix td:last-child { min-width: 180px; }
+.perm-matrix tr.group-row td { background: var(--surface-2); font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); padding: 8px 10px; }
+.perm-matrix tbody tr.group-row:hover { background: none; }
+.perm-box { width: 20px; height: 20px; accent-color: var(--brand); cursor: pointer; }
+.perm-box:disabled { cursor: not-allowed; }
+.perm-extra { display: grid; gap: 6px; }
+.perm-extra label.chk { font-weight: 500; font-size: 13px; align-items: flex-start; }
+.perm-extra label.chk input { flex: none; width: 18px; height: 18px; margin: 0; }
+.na { color: var(--neutral); font-weight: 700; }
+@media (max-width: 900px) {
+  .perm-layout { grid-template-columns: minmax(0, 1fr); }
+  .role-list { position: static; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+}
+@media (max-width: 640px) {
+  .perm-matrix tr.group-row td { display: block; border-radius: 8px; text-align: left; }
+  .perm-matrix td:first-child { display: block; text-align: left; font-size: 15px; }
+  .perm-matrix td:first-child::before { display: none; }
+  .perm-matrix td:last-child { align-items: flex-start; }
+  .perm-matrix td input.perm-box { width: 22px; height: 22px; flex: none; }
+  .perm-matrix td.c > input { margin-left: auto; }
+  .perm-extra { margin-left: auto; }
+  .perm-extra label.chk { text-align: left; }
+  .perm-matrix td.c { width: auto; }
+  .perm-matrix td:first-child, .perm-matrix td:last-child { min-width: 0; }
+  .perm-matrix td .na { display: none; }
+  .perm-matrix td:has(> .na) { display: none; }
+  .perm-extra { justify-items: end; }
+}

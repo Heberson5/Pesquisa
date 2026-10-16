@@ -1,13 +1,15 @@
 'use strict';
 // API do painel administrativo. Todas as rotas (exceto login) exigem sessão.
-// Perfis: admin (tudo) e gestor (somente as filiais vinculadas a ele).
+// Cada rota confere a permissão do perfil do usuário (src/permissions.js) e o escopo de filiais (src/scope.js).
 const express = require('express');
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { get, all, run, tx, audit } = require('../db');
 const { hashPassword, verifyPassword, pairingCode, sha256, passwordPolicyError, rateLimiter } = require('../security');
-const { destroySession, destroyUserSessions, requireUser, requireAdmin } = require('../auth');
+const { destroySession, destroyUserSessions, requireUser } = require('../auth');
+const perm = require('../permissions');
+const { can, need, needAny } = perm;
 const { HttpError, bad, str, int, bool, id, email, dateParam } = require('../validate');
 const { QUESTION_TYPES, DISPLAYS, LANGS, LANG_LABELS, CONTACT_MODES, loadSurvey, normalizeQuestions, normalizeI18n, npsFromCounts } = require('../surveys');
 const { getSettings, saveSettings, emailList } = require('../settings');
@@ -40,18 +42,26 @@ router.post('/logout', (req, res) => {
 
 router.get('/me', (req, res) => {
   const u = get('SELECT totp_enabled, notify_detractors, notify_reports, notify_offline, whatsapp FROM users WHERE id = ?', req.user.id);
-  res.json({ user: { id: req.user.id, name: req.user.name, email: req.user.email, role: req.user.role, mfaEnabled: !!u.totp_enabled, whatsapp: u.whatsapp || '',
+  res.json({ user: { id: req.user.id, name: req.user.name, email: req.user.email, role: req.user.role, access: perm.publicAccess(req.user), mfaEnabled: !!u.totp_enabled, whatsapp: u.whatsapp || '',
     notify: { detractors: !!u.notify_detractors, reports: !!u.notify_reports, offline: !!u.notify_offline } },
   mfaSetupRequired: req.user.mfaSetupRequired, csrf: req.user.csrf,
-  questionTypes: QUESTION_TYPES, displays: DISPLAYS, langs: LANG_LABELS, contactModes: CONTACT_MODES, settings: req.user.mfaSetupRequired ? null : settingsFor(req.user) });
+  questionTypes: QUESTION_TYPES, displays: DISPLAYS, langs: LANG_LABELS, contactModes: CONTACT_MODES, permCatalog: perm.catalog(), settings: req.user.mfaSetupRequired ? null : settingsFor(req.user) });
 });
 
-// Menor privilégio: gestor recebe só o que a interface usa (marca, ícones, meta), sem integrações e destinatários.
+// Menor privilégio: todos recebem o que a interface usa (marca, ícones, meta); cada aba de Configurações
+// só vem para quem pode vê-la. Chaves de cada aba (as mesmas conferidas ao salvar).
+const SETTINGS_GROUPS = {
+  cfg_marca: ['companyName', 'primaryColor', 'accentColor', 'logoMediaId', 'faviconMediaId', 'appIconMediaId', 'menuIcons', 'defaultDisplay', 'ratingIcon', 'colorScheme', 'faceStyle'],
+  cfg_alertas: ['alerts', 'weeklyReport', 'defaultNpsGoal', 'offlineAlert', 'screen'],
+  cfg_lgpd: ['requireAdminMfa', 'privacyText', 'retention'],
+};
+const BASE_KEYS = ['companyName', 'primaryColor', 'accentColor', 'logoMediaId', 'menuIcons', 'defaultDisplay', 'ratingIcon', 'colorScheme', 'faceStyle', 'defaultNpsGoal'];
 function settingsFor(user) {
   const s = getSettings();
-  if (user.role === 'admin') return s;
-  const { companyName, primaryColor, accentColor, logoMediaId, menuIcons, defaultDisplay, ratingIcon, colorScheme, faceStyle, defaultNpsGoal } = s;
-  return { companyName, primaryColor, accentColor, logoMediaId, menuIcons, defaultDisplay, ratingIcon, colorScheme, faceStyle, defaultNpsGoal };
+  if (user.access.isAdmin) return s;
+  const keys = new Set(BASE_KEYS);
+  for (const [g, list] of Object.entries(SETTINGS_GROUPS)) if (can(user, g, 'ver')) list.forEach((k) => keys.add(k));
+  return Object.fromEntries(Object.entries(s).filter(([k]) => keys.has(k)));
 }
 
 // Preferências de notificação do próprio usuário.
@@ -94,8 +104,14 @@ router.get('/branches', (req, res) => {
   const rows = all(`SELECT b.id, b.code, b.name, b.city, b.active, b.survey_id, s.title AS survey_title, b.alert_emails, b.alert_phones, b.nps_goal, b.hours_json, b.timezone, b.public_enabled,
       (SELECT COUNT(*) FROM devices d WHERE d.branch_id = b.id AND d.active = 1) AS devices
     FROM branches b LEFT JOIN surveys s ON s.id = b.survey_id ${where} ORDER BY b.name`, ...(s || []));
+  // A lista de filiais alimenta os filtros de todas as telas; destinatários e horário só para quem vê o cadastro de filiais.
+  const full = can(req.user, 'filiais', 'ver');
   // Fuso em uso agora (escolhido ou informado pelo tablet) e as opções do cadastro.
-  res.json(rows.map((b) => ({ ...b, effective_tz: zones.forBranch(b) })));
+  res.json(rows.map((b) => {
+    const out = { ...b, effective_tz: zones.forBranch(b) };
+    if (!full) { delete out.alert_emails; delete out.alert_phones; delete out.hours_json; }
+    return out;
+  }));
 });
 router.get('/timezones', (req, res) => res.json({ company: companyTz, choices: zones.ZONE_CHOICES }));
 
@@ -146,7 +162,7 @@ function hoursInput(v) {
   return JSON.stringify(out);
 }
 
-router.post('/branches', requireAdmin, (req, res) => {
+router.post('/branches', need('filiais', 'incluir'), (req, res) => {
   const b = branchInput(req.body);
   if (get('SELECT 1 FROM branches WHERE code = ?', b.code)) throw new HttpError(409, 'Já existe uma filial com esse código.');
   const r = run('INSERT INTO branches (code, name, city, active, alert_emails, alert_phones, nps_goal, hours_json, timezone, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)',
@@ -155,7 +171,7 @@ router.post('/branches', requireAdmin, (req, res) => {
   res.status(201).json({ id: Number(r.lastInsertRowid) });
 });
 
-router.put('/branches/:id', requireAdmin, (req, res) => {
+router.put('/branches/:id', need('filiais', 'editar'), (req, res) => {
   const bid = id(req.params.id);
   assertBranch(req.user, bid);
   const b = branchInput(req.body);
@@ -166,8 +182,8 @@ router.put('/branches/:id', requireAdmin, (req, res) => {
   res.json({ ok: true });
 });
 
-// Define qual pesquisa os tablets da filial exibem (admin ou gestor da filial).
-router.put('/branches/:id/survey', (req, res) => {
+// Define qual pesquisa os tablets da filial exibem (quem tem a permissão, dentro das filiais dele).
+router.put('/branches/:id/survey', need('filiais', 'pesquisa'), (req, res) => {
   const bid = id(req.params.id);
   assertBranch(req.user, bid);
   const sid = req.body?.surveyId === null ? null : id(req.body?.surveyId, 'pesquisa');
@@ -185,14 +201,14 @@ async function linkInfo(b) {
   return { enabled: !!b.public_enabled, url, qr: await QRCode.toDataURL(url, { errorCorrectionLevel: 'M', margin: 2, width: 600 }) };
 }
 
-router.get('/branches/:id/public-link', async (req, res) => {
+router.get('/branches/:id/public-link', need('filiais', 'ver'), async (req, res) => {
   const bid = id(req.params.id);
   assertBranch(req.user, bid);
   res.json(await linkInfo(get('SELECT * FROM branches WHERE id = ?', bid)));
 });
 
 // Ativar/desativar ou gerar um novo link (o anterior deixa de funcionar — útil se um QR vazar).
-router.post('/branches/:id/public-link', requireAdmin, async (req, res) => {
+router.post('/branches/:id/public-link', need('filiais', 'qrcode'), async (req, res) => {
   const bid = id(req.params.id);
   assertBranch(req.user, bid);
   const b = get('SELECT * FROM branches WHERE id = ?', bid);
@@ -207,7 +223,7 @@ router.post('/branches/:id/public-link', requireAdmin, async (req, res) => {
 });
 
 // ---------------------------------------------------------------- campanhas agendadas
-router.get('/schedules', (req, res) => {
+router.get('/schedules', need('campanhas', 'ver'), (req, res) => {
   const s = scope(req.user);
   const where = s ? `WHERE (c.branch_id IS NULL OR c.branch_id IN (${placeholders(s)}))` : '';
   const rows = all(`SELECT c.id, c.survey_id, v.title AS survey, c.branch_id, b.name AS branch, c.starts_at, c.ends_at
@@ -217,11 +233,12 @@ router.get('/schedules', (req, res) => {
   res.json(rows.map((c) => ({ ...c, tz: c.branch_id ? zones.forBranch(get('SELECT id, timezone FROM branches WHERE id = ?', c.branch_id)) : companyTz })));
 });
 
-router.post('/schedules', requireAdmin, (req, res) => {
+router.post('/schedules', need('campanhas', 'incluir'), (req, res) => {
   const surveyId = id(req.body?.surveyId, 'pesquisa');
   if (!get('SELECT 1 FROM surveys WHERE id = ? AND active = 1', surveyId)) throw bad('Pesquisa inexistente ou inativa.');
   const branchId = req.body?.branchId === null || req.body?.branchId === undefined || req.body?.branchId === '' ? null : id(req.body.branchId, 'filial');
   if (branchId !== null) assertBranch(req.user, branchId);
+  else if (scope(req.user)) throw new HttpError(403, 'Seu perfil só pode agendar campanhas nas filiais ligadas a você.');
   // Data e hora digitadas valem no fuso da filial escolhida (ou no da empresa, se for para todas).
   const tz = branchId !== null ? zones.forBranch(get('SELECT id, timezone FROM branches WHERE id = ?', branchId)) : companyTz;
   const startsAt = parseLocal(req.body?.startsAt, tz);
@@ -236,10 +253,13 @@ router.post('/schedules', requireAdmin, (req, res) => {
   res.status(201).json({ id: Number(r.lastInsertRowid) });
 });
 
-router.delete('/schedules/:id', requireAdmin, (req, res) => {
+router.delete('/schedules/:id', need('campanhas', 'excluir'), (req, res) => {
   const sid = id(req.params.id);
-  const r = run('DELETE FROM schedules WHERE id = ?', sid);
-  if (!r.changes) throw new HttpError(404, 'Campanha não encontrada.');
+  const c = get('SELECT branch_id FROM schedules WHERE id = ?', sid);
+  if (!c) throw new HttpError(404, 'Campanha não encontrada.');
+  if (c.branch_id !== null) assertBranch(req.user, c.branch_id);
+  else if (scope(req.user)) throw new HttpError(403, 'Esta campanha vale para todas as filiais; só quem vê todas pode excluí-la.');
+  run('DELETE FROM schedules WHERE id = ?', sid);
   audit(req.user.id, 'schedule.delete', { id: sid }, req.ip);
   res.json({ ok: true });
 });
@@ -253,7 +273,7 @@ router.get('/surveys', (req, res) => {
     FROM surveys s ORDER BY s.active DESC, s.updated_at DESC`));
 });
 
-router.get('/surveys/:id', (req, res) => {
+router.get('/surveys/:id', need('pesquisas', 'ver'), (req, res) => {
   const s = withRefs(loadSurvey(id(req.params.id)) || { questions: [] });
   if (!s.id) throw new HttpError(404, 'Pesquisa não encontrada.');
   s.has_responses = !!get('SELECT 1 FROM responses WHERE survey_id = ? LIMIT 1', s.id);
@@ -310,7 +330,7 @@ function insertQuestions(surveyId, questions) {
   });
 }
 
-router.post('/surveys', requireAdmin, (req, res) => {
+router.post('/surveys', need('pesquisas', 'incluir'), (req, res) => {
   const s = surveyInput(req.body);
   const now = Date.now();
   const newId = tx(() => {
@@ -325,7 +345,7 @@ router.post('/surveys', requireAdmin, (req, res) => {
   res.status(201).json({ id: newId });
 });
 
-router.put('/surveys/:id', requireAdmin, (req, res) => {
+router.put('/surveys/:id', need('pesquisas', 'editar'), (req, res) => {
   const sid = id(req.params.id);
   const current = loadSurvey(sid);
   if (!current) throw new HttpError(404, 'Pesquisa não encontrada.');
@@ -359,7 +379,7 @@ router.put('/surveys/:id', requireAdmin, (req, res) => {
   res.json({ ok: true });
 });
 
-router.post('/surveys/:id/duplicate', requireAdmin, (req, res) => {
+router.post('/surveys/:id/duplicate', need('pesquisas', 'incluir'), (req, res) => {
   const src = loadSurvey(id(req.params.id));
   if (!src) throw new HttpError(404, 'Pesquisa não encontrada.');
   const now = Date.now();
@@ -389,7 +409,7 @@ function sniffMime(buf) {
   return null; // SVG, HTML, PDF, executáveis etc. são recusados
 }
 
-router.post('/media', requireAdmin, express.raw({ type: () => true, limit: MEDIA_MAX }), (req, res) => {
+router.post('/media', needAny(['pesquisas', 'incluir'], ['pesquisas', 'editar'], ['cfg_marca', 'editar']), express.raw({ type: () => true, limit: MEDIA_MAX }), (req, res) => {
   if (!Buffer.isBuffer(req.body) || req.body.length === 0) throw bad('Arquivo vazio.');
   const mime = sniffMime(req.body);
   if (!mime) throw new HttpError(415, 'Formato não suportado. Use JPG, PNG, WEBP, GIF, MP4 ou WEBM.');
@@ -402,7 +422,7 @@ router.post('/media', requireAdmin, express.raw({ type: () => true, limit: MEDIA
 });
 
 // ---------------------------------------------------------------- dispositivos (tablets)
-router.get('/devices', (req, res) => {
+router.get('/devices', need('tablets', 'ver'), (req, res) => {
   const s = scope(req.user);
   const where = s ? `WHERE d.branch_id IN (${placeholders(s)})` : '';
   const rows = all(`SELECT d.id, d.name, d.branch_id, b.name AS branch_name, d.active, d.paired_at, d.last_seen_at,
@@ -419,7 +439,7 @@ function issuePairingCode(deviceId) {
   return { code, expiresAt: Date.now() + PAIR_TTL_MS };
 }
 
-router.post('/devices', (req, res) => {
+router.post('/devices', need('tablets', 'incluir'), (req, res) => {
   const branchId = id(req.body?.branchId, 'filial');
   assertBranch(req.user, branchId);
   const name = str(req.body?.name, { field: 'nome', min: 2, max: 60 });
@@ -436,14 +456,14 @@ function loadDeviceScoped(user, deviceId) {
   return d;
 }
 
-router.post('/devices/:id/pairing-code', (req, res) => {
+router.post('/devices/:id/pairing-code', need('tablets', 'codigo'), (req, res) => {
   const d = loadDeviceScoped(req.user, id(req.params.id));
   const pairing = issuePairingCode(d.id);
   audit(req.user.id, 'device.new_code', { id: d.id }, req.ip);
   res.json(pairing);
 });
 
-router.post('/devices/:id/revoke', (req, res) => {
+router.post('/devices/:id/revoke', need('tablets', 'excluir'), (req, res) => {
   const d = loadDeviceScoped(req.user, id(req.params.id));
   run('UPDATE devices SET active = 0, token_hash = NULL, pair_code_hash = NULL, pair_expires_at = NULL WHERE id = ?', d.id);
   audit(req.user.id, 'device.revoke', { id: d.id }, req.ip);
@@ -451,9 +471,9 @@ router.post('/devices/:id/revoke', (req, res) => {
 });
 
 // ---------------------------------------------------------------- relatórios
-router.get('/stats', (req, res) => res.json(computeStats(req.user, req.query)));
+router.get('/stats', need('dashboard', 'ver'), (req, res) => res.json(computeStats(req.user, req.query)));
 
-router.get('/surveys/:id/breakdown', (req, res) => {
+router.get('/surveys/:id/breakdown', need('dashboard', 'ver'), (req, res) => {
   const survey = loadSurvey(id(req.params.id));
   if (!survey) throw new HttpError(404, 'Pesquisa não encontrada.');
   res.json(computeBreakdown(req.user, survey, req.query));
@@ -481,24 +501,26 @@ function displayValue(a) {
   return a.value_text ?? String(a.value_num);
 }
 
-router.get('/responses', (req, res) => {
+router.get('/responses', need('respostas', 'ver'), (req, res) => {
   const page = int(req.query.page || '1', { field: 'página', min: 1, max: 100000 });
   res.json({ page, pageSize: 25, ...listResponses(req.user, req.query, 25, (page - 1) * 25) });
 });
 
-// Exclusão de respostas: SOMENTE administrador (gestor nunca apaga). Respostas, casos e
-// anotações ligados a ela saem juntos (ON DELETE CASCADE). Fica registrado na auditoria.
-router.delete('/responses/:id', requireAdmin, (req, res) => {
+// Exclusão de respostas: só perfis com "Respostas · Excluir" (o Gestor de filial padrão não tem), dentro das
+// filiais que enxergam. Respostas, casos e anotações ligados a ela saem juntos (ON DELETE CASCADE). Fica na auditoria.
+router.delete('/responses/:id', need('respostas', 'excluir'), (req, res) => {
   const rid = id(req.params.id);
   const r = get('SELECT id, branch_id, survey_id, submitted_at FROM responses WHERE id = ?', rid);
   if (!r) throw new HttpError(404, 'Resposta não encontrada.');
+  const sc = scope(req.user);
+  if (sc && !sc.includes(r.branch_id)) throw new HttpError(404, 'Resposta não encontrada.');
   run('DELETE FROM responses WHERE id = ?', rid);
   audit(req.user.id, 'response.delete', { id: rid, branchId: r.branch_id, surveyId: r.survey_id }, req.ip);
   res.json({ ok: true });
 });
 
 // Exclusão em lote do que está filtrado na tela (útil para limpar os testes). Exige digitar a palavra EXCLUIR.
-router.post('/responses/delete-filtered', requireAdmin, (req, res) => {
+router.post('/responses/delete-filtered', need('respostas', 'excluir'), (req, res) => {
   if (req.body?.confirm !== 'EXCLUIR') throw new HttpError(400, 'Digite EXCLUIR para confirmar.');
   const f = responseFilter(req.user, req.body?.filter && typeof req.body.filter === 'object' ? req.body.filter : {});
   const n = tx(() => run(`DELETE FROM responses WHERE id IN (SELECT r.id FROM responses r ${f.sql})`, ...f.params).changes);
@@ -514,7 +536,7 @@ function csvCell(v) {
   return '"' + s.replace(/"/g, '""') + '"';
 }
 
-router.get('/responses.csv', (req, res) => {
+router.get('/responses.csv', need('respostas', 'csv'), (req, res) => {
   const { rows } = listResponses(req.user, req.query, 100000, 0);
   const questions = [...new Set(rows.flatMap((r) => (r.answers || []).map((a) => a.question)))];
   const lines = [['Data/hora', 'Filial', 'Pesquisa', 'Dispositivo', 'Canal', 'Cidade da loja', 'Cidade (cliente)', 'UF (cliente)', 'Região (cliente)', 'Latitude aprox.', 'Longitude aprox.', ...questions].map(csvCell).join(';')];
@@ -530,18 +552,35 @@ router.get('/responses.csv', (req, res) => {
   res.send('﻿' + lines.join('\r\n'));
 });
 
-// ---------------------------------------------------------------- usuários (somente admin)
-router.get('/users', requireAdmin, (req, res) => {
-  const users = all('SELECT id, name, email, role, active, locked_until, created_at, totp_enabled FROM users ORDER BY name');
+// ---------------------------------------------------------------- usuários
+// Regras contra aumento de acesso: quem não é administrador só cria ou altera pessoas cujo perfil cabe no seu,
+// só nas filiais que enxerga, e ninguém muda o próprio perfil nem se desativa.
+function userView(u, links) {
+  const a = perm.accessFor(u);
+  return { id: u.id, name: u.name, email: u.email, role: u.role, role_id: a.roleId, role_name: a.roleName, scope_all: a.scopeAll, active: u.active,
+    locked_until: u.locked_until, created_at: u.created_at, totp_enabled: u.totp_enabled, branches: links.filter((l) => l.user_id === u.id).map((l) => l.branch_id) };
+}
+
+router.get('/users', need('usuarios', 'ver'), (req, res) => {
   const links = all('SELECT user_id, branch_id FROM user_branches');
-  res.json(users.map((u) => ({ ...u, branches: links.filter((l) => l.user_id === u.id).map((l) => l.branch_id) })));
+  let list = all('SELECT id, name, email, role, role_id, active, locked_until, created_at, totp_enabled FROM users ORDER BY name').map((u) => userView(u, links));
+  // Quem enxerga só algumas filiais vê apenas as pessoas dessas filiais.
+  const sc = scope(req.user);
+  if (sc) list = list.filter((u) => u.id === req.user.id || (!u.scope_all && u.branches.length && u.branches.every((b) => sc.includes(b))));
+  res.json(list);
 });
 
 function userInput(body, isNew) {
+  let roleRow;
+  if (body?.roleId !== undefined && body?.roleId !== null && body?.roleId !== '') {
+    roleRow = get('SELECT * FROM roles WHERE id = ?', id(body.roleId, 'perfil'));
+    if (!roleRow) throw bad('Perfil inválido.');
+  } else roleRow = perm.builtinRole(body?.role === 'admin' ? 'admin' : 'gestor'); // compatibilidade: role = 'admin' | 'gestor'
   const u = {
     name: str(body?.name, { field: 'nome', min: 2, max: 100 }),
     email: email(body?.email),
-    role: body?.role === 'admin' ? 'admin' : 'gestor',
+    roleRow,
+    role: roleRow.builtin === 'admin' ? 'admin' : 'gestor',
     active: body?.active === false ? 0 : 1,
     branches: Array.isArray(body?.branches) ? [...new Set(body.branches.map((b) => id(b, 'filial')))] : [],
     password: body?.password || null,
@@ -554,59 +593,134 @@ function userInput(body, isNew) {
   return u;
 }
 
+function assertCanManage(actor, u, existing) {
+  if (!perm.roleWithin(actor, u.roleRow)) throw new HttpError(403, 'Você não pode dar a alguém um perfil com mais acesso que o seu.');
+  if (existing && !perm.roleWithin(actor, perm.roleOf(existing))) throw new HttpError(403, 'Você não pode alterar uma pessoa com mais acesso que você.');
+  const sc = scope(actor);
+  if (sc) {
+    if (!u.branches.every((b) => sc.includes(b))) throw new HttpError(403, 'Você só pode ligar a pessoa às filiais que você enxerga.');
+    if (existing && !all('SELECT branch_id FROM user_branches WHERE user_id = ?', existing.id).every((l) => sc.includes(l.branch_id))) {
+      throw new HttpError(403, 'Esta pessoa tem filiais que você não enxerga.');
+    }
+  }
+}
+
+const activeAdmins = (exceptId) => get("SELECT COUNT(*) AS n FROM users WHERE role = 'admin' AND active = 1 AND id <> ?", exceptId).n;
+
 function setUserBranches(userId, branches) {
   run('DELETE FROM user_branches WHERE user_id = ?', userId);
   for (const b of branches) run('INSERT INTO user_branches (user_id, branch_id) VALUES (?,?)', userId, b);
 }
 
-router.post('/users', requireAdmin, (req, res) => {
+router.post('/users', need('usuarios', 'incluir'), (req, res) => {
   const u = userInput(req.body, true);
+  assertCanManage(req.user, u, null);
   if (get('SELECT 1 FROM users WHERE email = ?', u.email)) throw new HttpError(409, 'E-mail já cadastrado.');
   const newId = tx(() => {
-    const r = run('INSERT INTO users (name, email, password_hash, role, active, created_at) VALUES (?,?,?,?,?,?)',
-      u.name, u.email, hashPassword(u.password), u.role, u.active, Date.now());
+    const r = run('INSERT INTO users (name, email, password_hash, role, role_id, active, created_at) VALUES (?,?,?,?,?,?,?)',
+      u.name, u.email, hashPassword(u.password), u.role, u.roleRow.id, u.active, Date.now());
     setUserBranches(r.lastInsertRowid, u.branches);
     return Number(r.lastInsertRowid);
   });
-  audit(req.user.id, 'user.create', { id: newId, email: u.email, role: u.role, branches: u.branches }, req.ip);
+  audit(req.user.id, 'user.create', { id: newId, email: u.email, role: u.role, roleId: u.roleRow.id, roleName: u.roleRow.name, branches: u.branches }, req.ip);
   res.status(201).json({ id: newId });
 });
 
-router.put('/users/:id', requireAdmin, (req, res) => {
+router.put('/users/:id', need('usuarios', 'editar'), (req, res) => {
   const uid = id(req.params.id);
   const existing = get('SELECT * FROM users WHERE id = ?', uid);
   if (!existing) throw new HttpError(404, 'Usuário não encontrado.');
   const u = userInput(req.body, false);
-  if (uid === req.user.id && (u.role !== 'admin' || !u.active)) throw bad('Você não pode remover seu próprio acesso de administrador.');
+  const before = perm.roleOf(existing);
+  if (uid === req.user.id) {
+    if (u.roleRow.id !== before.id) throw bad('Você não pode mudar o seu próprio perfil.');
+    if (!u.active) throw bad('Você não pode desativar a si mesmo.');
+  }
+  assertCanManage(req.user, u, existing);
+  if (existing.role === 'admin' && existing.active && (u.role !== 'admin' || !u.active) && activeAdmins(uid) === 0) {
+    throw bad('Esta é a única pessoa com perfil Administrador ativo. Cadastre outro administrador antes.');
+  }
   if (get('SELECT 1 FROM users WHERE email = ? AND id <> ?', u.email, uid)) throw new HttpError(409, 'E-mail já cadastrado.');
-  tx(() => {
-    run('UPDATE users SET name=?, email=?, role=?, active=?, locked_until = CASE WHEN ? THEN NULL ELSE locked_until END WHERE id=?',
-      u.name, u.email, u.role, u.active, req.body?.unlock ? 1 : 0, uid);
-    if (u.password) run('UPDATE users SET password_hash = ?, failed_logins = 0, locked_until = NULL WHERE id = ?', hashPassword(u.password), uid);
-    setUserBranches(uid, u.branches);
-  });
-  // Mudança de papel, desativação ou senha nova derrubam as sessões abertas do usuário.
-  if (u.password || !u.active || u.role !== existing.role) destroyUserSessions(uid);
   // Reset do 2FA (celular perdido): o usuário configura de novo no próximo login.
   const resetMfa = req.body?.resetMfa === true;
   if (resetMfa) {
     if (uid === req.user.id) throw bad('Para trocar o seu próprio 2FA, use "Minha conta".');
-    resetUserMfa(uid);
+    if (!can(req.user, 'usuarios', 'mfa')) throw perm.deny();
   }
-  audit(req.user.id, 'user.update', { id: uid, email: u.email, role: u.role, active: u.active, passwordReset: !!u.password, resetMfa }, req.ip);
+  tx(() => {
+    run('UPDATE users SET name=?, email=?, role=?, role_id=?, active=?, locked_until = CASE WHEN ? THEN NULL ELSE locked_until END WHERE id=?',
+      u.name, u.email, u.role, u.roleRow.id, u.active, req.body?.unlock ? 1 : 0, uid);
+    if (u.password) run('UPDATE users SET password_hash = ?, failed_logins = 0, locked_until = NULL WHERE id = ?', hashPassword(u.password), uid);
+    setUserBranches(uid, u.branches);
+  });
+  // Mudança de perfil, desativação ou senha nova derrubam as sessões abertas do usuário.
+  if (u.password || !u.active || u.roleRow.id !== before.id) destroyUserSessions(uid);
+  if (resetMfa) resetUserMfa(uid);
+  audit(req.user.id, 'user.update', { id: uid, email: u.email, role: u.role, roleId: u.roleRow.id, roleName: u.roleRow.name, active: u.active, passwordReset: !!u.password, resetMfa }, req.ip);
   res.json({ ok: true });
 });
 
-// ---------------------------------------------------------------- configurações (somente admin)
+// ---------------------------------------------------------------- perfis e permissões
+router.get('/roles', needAny(['permissoes', 'ver'], ['usuarios', 'ver']), (req, res) => {
+  res.json({ roles: perm.listRoles(), catalog: perm.catalog() });
+});
+
+function assertRoleName(name, exceptId = 0) {
+  if (get('SELECT 1 FROM roles WHERE name = ? AND id <> ?', name, exceptId)) throw new HttpError(409, 'Já existe um perfil com esse nome.');
+}
+const WIDER = 'Você não pode criar ou alterar um perfil com mais acesso que o seu.';
+
+router.post('/roles', need('permissoes', 'incluir'), (req, res) => {
+  const r = perm.roleInput(req.body);
+  if (!perm.roleWithin(req.user, r)) throw new HttpError(403, WIDER);
+  assertRoleName(r.name);
+  const now = Date.now();
+  const ins = run('INSERT INTO roles (name, description, scope, perms, created_at, updated_at) VALUES (?,?,?,?,?,?)', r.name, r.description, r.scope, JSON.stringify(r.perms), now, now);
+  audit(req.user.id, 'role.create', { id: Number(ins.lastInsertRowid), name: r.name, scope: r.scope, perms: r.perms }, req.ip);
+  res.status(201).json({ id: Number(ins.lastInsertRowid) });
+});
+
+router.put('/roles/:id', need('permissoes', 'editar'), (req, res) => {
+  const rid = id(req.params.id);
+  const cur = get('SELECT * FROM roles WHERE id = ?', rid);
+  if (!cur) throw new HttpError(404, 'Perfil não encontrado.');
+  if (cur.builtin === 'admin') throw bad('O perfil Administrador é fixo e não pode ser alterado.');
+  if (!perm.roleWithin(req.user, cur)) throw new HttpError(403, WIDER);
+  const r = perm.roleInput(req.body);
+  if (!perm.roleWithin(req.user, r)) throw new HttpError(403, WIDER);
+  assertRoleName(r.name, rid);
+  const old = perm.parsePerms(cur.perms);
+  run('UPDATE roles SET name = ?, description = ?, scope = ?, perms = ?, updated_at = ? WHERE id = ?', r.name, r.description, r.scope, JSON.stringify(r.perms), Date.now(), rid);
+  // Auditoria com o "antes e depois": o que entrou, o que saiu e a mudança de filiais.
+  audit(req.user.id, 'role.update', { id: rid, name: r.name, renamedFrom: cur.name !== r.name ? cur.name : undefined,
+    scopeFrom: cur.scope !== r.scope ? cur.scope : undefined, scope: r.scope,
+    added: r.perms.filter((p) => !old.includes(p)), removed: old.filter((p) => !r.perms.includes(p)) }, req.ip);
+  res.json({ ok: true });
+});
+
+router.delete('/roles/:id', need('permissoes', 'excluir'), (req, res) => {
+  const rid = id(req.params.id);
+  const cur = get('SELECT * FROM roles WHERE id = ?', rid);
+  if (!cur) throw new HttpError(404, 'Perfil não encontrado.');
+  if (cur.builtin) throw bad('Os perfis padrão do sistema não podem ser excluídos.');
+  if (!perm.roleWithin(req.user, cur)) throw new HttpError(403, WIDER);
+  const n = get("SELECT COUNT(*) AS n FROM users WHERE role_id = ? AND role <> 'admin'", rid).n;
+  if (n) throw bad(`${n} usuário(s) usam este perfil. Troque o perfil deles antes de excluir.`);
+  run('DELETE FROM roles WHERE id = ?', rid);
+  audit(req.user.id, 'role.delete', { id: rid, name: cur.name }, req.ip);
+  res.json({ ok: true });
+});
+
+// ---------------------------------------------------------------- configurações (cada aba com a sua permissão)
 router.get('/settings', (req, res) => res.json(settingsFor(req.user)));
 
-router.get('/settings/notifications', requireAdmin, (req, res) => {
-  const recent = all("SELECT id, kind, channel, status, attempts, last_error, created_at, sent_at FROM outbox ORDER BY id DESC LIMIT 30");
-  res.json({ ...outboxStatus(), webhookSecret: webhookSecret(), recent });
+router.get('/settings/notifications', needAny(['cfg_envios', 'ver'], ['cfg_alertas', 'ver']), (req, res) => {
+  const recent = can(req.user, 'cfg_envios', 'ver') ? all("SELECT id, kind, channel, status, attempts, last_error, created_at, sent_at FROM outbox ORDER BY id DESC LIMIT 30") : [];
+  res.json({ ...outboxStatus(), webhookSecret: can(req.user, 'cfg_alertas', 'ver') ? webhookSecret() : null, recent });
 });
 
 const testLimiter = rateLimiter({ windowMs: 60 * 60_000, max: 5, keyFn: (req) => 'test:' + req.user.id, message: 'Limite de testes atingido. Aguarde um pouco.' });
-router.post('/settings/test-email', requireAdmin, testLimiter, async (req, res) => {
+router.post('/settings/test-email', need('cfg_envios', 'editar'), testLimiter, async (req, res) => {
   const s = getSettings();
   const { html, text } = renderEmail({ brand: s, title: 'E-mail de teste', intro: 'Se você recebeu esta mensagem, o envio de e-mails do sistema de pesquisa está funcionando.' });
   queueEmail({ to: req.user.email, subject: `${s.companyName}: e-mail de teste`, text, html, kind: 'test' });
@@ -616,21 +730,28 @@ router.post('/settings/test-email', requireAdmin, testLimiter, async (req, res) 
 });
 
 // Envia agora o relatório semanal (para testar) — mesmo conteúdo do envio automático.
-router.post('/settings/weekly-report/send-now', requireAdmin, testLimiter, async (req, res) => {
+router.post('/settings/weekly-report/send-now', need('cfg_alertas', 'relatorio'), testLimiter, async (req, res) => {
   const r = await require('../scheduled').sendWeeklyReport({ force: true });
   await processOutbox(50);
   audit(req.user.id, 'report.weekly_manual', r, req.ip);
   res.json(r);
 });
 
-router.put('/settings', requireAdmin, (req, res) => {
+router.put('/settings', (req, res) => {
+  // Cada chave enviada precisa da permissão de editar a aba dela.
+  if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) throw bad('Configurações inválidas.');
+  const sent = Object.keys(req.body);
+  for (const [g, keys] of Object.entries(SETTINGS_GROUPS)) {
+    if (sent.some((k) => keys.includes(k)) && !can(req.user, g, 'editar')) throw perm.deny();
+  }
+  if (!sent.some((k) => Object.values(SETTINGS_GROUPS).flat().includes(k))) throw bad('Nada para salvar.');
   const saved = saveSettings(req.body);
   audit(req.user.id, 'settings.update', { companyName: saved.companyName }, req.ip);
-  res.json(saved);
+  res.json(settingsFor(req.user));
 });
 
 // ---------------------------------------------------------------- relatório PowerPoint
-router.get('/report.pptx', async (req, res) => {
+router.get('/report.pptx', need('dashboard', 'pptx'), async (req, res) => {
   const { buffer: buf } = await reportFor(req.user, req.query, req.user.name);
   audit(req.user.id, 'report.pptx', { filter: req.query }, req.ip);
   res.set('Content-Type', 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
@@ -638,22 +759,22 @@ router.get('/report.pptx', async (req, res) => {
   res.send(buf);
 });
 
-router.get('/audit', requireAdmin, (req, res) => {
+router.get('/audit', need('auditoria', 'ver'), (req, res) => {
   const limit = int(req.query.limit || '300', { field: 'limite', min: 1, max: 1000 });
   res.json(all(`SELECT l.id, l.at, l.action, l.detail, l.ip, l.user_id, u.email, u.name FROM audit_log l LEFT JOIN users u ON u.id = l.user_id
     ORDER BY l.id DESC LIMIT ?`, limit));
 });
 
-// ---------------------------------------------------------------- envio: e-mail (SMTP) e WhatsApp, configurados pelo painel (somente admin)
-router.get('/settings/delivery', requireAdmin, (req, res) => res.json(delivery.publicView()));
-router.put('/settings/delivery', requireAdmin, async (req, res) => {
+// ---------------------------------------------------------------- envio: e-mail (SMTP) e WhatsApp, configurados pelo painel
+router.get('/settings/delivery', need('cfg_envios', 'ver'), (req, res) => res.json(delivery.publicView()));
+router.put('/settings/delivery', need('cfg_envios', 'editar'), async (req, res) => {
   const b = req.body || {};
   const view = await delivery.save({ smtp: b.smtp, whatsapp: b.whatsapp });
   // Auditoria sem segredos: só registra o que foi alterado.
   audit(req.user.id, 'settings.delivery', { smtp: b.smtp === undefined ? undefined : (b.smtp?.clear ? 'removido' : 'alterado'), whatsapp: b.whatsapp === undefined ? undefined : (b.whatsapp?.clear ? 'removido' : 'alterado') }, req.ip);
   res.json(view);
 });
-router.post('/settings/test-whatsapp', requireAdmin, testLimiter, async (req, res) => {
+router.post('/settings/test-whatsapp', need('cfg_envios', 'editar'), testLimiter, async (req, res) => {
   try {
     const info = await whatsappCheck();
     let queued = false;

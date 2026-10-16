@@ -1,17 +1,18 @@
 'use strict';
-// LGPD — pedidos do titular dos dados (somente administradores):
+// LGPD — pedidos do titular dos dados (perfis com "Segurança e LGPD · Pedidos do titular"):
 // localizar, exportar (portabilidade) e excluir/anonimizar os dados de uma pessoa.
 // A busca é por telefone ou e-mail via HMAC: o dado aberto nunca é usado como índice.
 const express = require('express');
 const { all, run, tx, audit } = require('../db');
-const { requireUser, requireAdmin } = require('../auth');
+const { requireUser } = require('../auth');
+const { need } = require('../permissions');
 const { bad, str } = require('../validate');
 const { decrypt, lookup, normPhone, normEmail } = require('../vault');
 const { isEmail } = require('../notify');
 const { rateLimiter } = require('../security');
 
 const router = express.Router();
-router.use(requireUser, requireAdmin, rateLimiter({ windowMs: 60_000, max: 30 }));
+router.use(requireUser, need('cfg_lgpd', 'titular'), rateLimiter({ windowMs: 60_000, max: 30 }));
 
 function matches(body) {
   const phone = body?.phone ? normPhone(str(body.phone, { field: 'telefone', max: 30 })) : null;

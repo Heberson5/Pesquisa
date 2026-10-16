@@ -54,6 +54,9 @@
   }
 
   const icon = (name, size = 20, opts = {}) => window.Icons.svg(name, { size, ...opts });
+  // Permissões do perfil de quem está logado (o servidor confere de novo em cada ação).
+  const can = (mod, act = 'ver') => !!me?.access && (me.access.isAdmin || me.access.perms.includes(`${mod}.${act}`));
+  const CFG_GROUPS = ['cfg_marca', 'cfg_alertas', 'cfg_envios', 'cfg_lgpd'];
   const initials = (name) => String(name || '?').split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join('');
 
   function modal(title, content, actions = []) {
@@ -189,7 +192,7 @@
     const content = [area];
     if (forced) {
       content.push(h('a', { href: '#', class: 'small', onclick: async (e) => { e.preventDefault(); await api('/logout', { method: 'POST' }).catch(() => {}); me = null; showLogin(); } }, 'Sair'));
-      await loginShell('Ative a verificação em duas etapas', 'Por segurança, administradores precisam usar um código do celular além da senha.', ...content);
+      await loginShell('Ative a verificação em duas etapas', 'Por segurança, o seu perfil precisa usar um código do celular além da senha.', ...content);
     } else {
       modal('Ativar verificação em duas etapas', h('div', {}, ...content));
     }
@@ -215,34 +218,37 @@
 
   let displays = {};
   let contactModes = {};
+  let permCatalog = null;
   async function loadMe() {
     const r = await api('/me');
     if (r.mfaSetupRequired) { csrf = r.csrf; showMfaSetup(true); throw new Error('401'); }
-    me = r.user; csrf = r.csrf; questionTypes = r.questionTypes; displays = r.displays; settings = r.settings; contactModes = r.contactModes;
+    me = r.user; csrf = r.csrf; questionTypes = r.questionTypes; displays = r.displays; settings = r.settings; contactModes = r.contactModes; permCatalog = r.permCatalog;
     applyBranding({ companyName: settings.companyName, primaryColor: settings.primaryColor, accentColor: settings.accentColor,
       logoUrl: settings.logoMediaId ? '/media/' + settings.logoMediaId : null });
   }
 
   // ------------------------------------------------------------ layout + rotas
-  // [rota, rótulo, página, perfil exigido, grupo]
+  // [rota, rótulo, página, quem vê (sem função = todos), grupo]
   const PAGES = [
-    ['dashboard', 'Visão geral', pageDashboard, null, 'Análise'],
-    ['casos', 'Casos', pageCases, null, 'Análise'],
-    ['respostas', 'Respostas', pageResponses, null, 'Análise'],
-    ['pesquisas', 'Pesquisas', pageSurveys, null, 'Coleta'],
-    ['filiais', 'Filiais', pageBranches, null, 'Coleta'],
-    ['dispositivos', 'Tablets', pageDevices, null, 'Coleta'],
-    ['usuarios', 'Usuários', pageUsers, 'admin', 'Administração'],
-    ['configuracoes', 'Configurações', pageSettings, 'admin', 'Administração'],
-    ['auditoria', 'Auditoria', pageAudit, 'admin', 'Administração'],
+    ['dashboard', 'Visão geral', pageDashboard, () => can('dashboard'), 'Análise'],
+    ['casos', 'Casos', pageCases, () => can('casos'), 'Análise'],
+    ['respostas', 'Respostas', pageResponses, () => can('respostas'), 'Análise'],
+    ['pesquisas', 'Pesquisas', pageSurveys, () => can('pesquisas') || can('campanhas'), 'Coleta'],
+    ['filiais', 'Filiais', pageBranches, () => can('filiais'), 'Coleta'],
+    ['dispositivos', 'Tablets', pageDevices, () => can('tablets'), 'Coleta'],
+    ['usuarios', 'Usuários', pageUsers, () => can('usuarios'), 'Administração'],
+    ['permissoes', 'Permissões', pagePermissions, () => can('permissoes'), 'Administração'],
+    ['configuracoes', 'Configurações', pageSettings, () => CFG_GROUPS.some((g) => can(g)), 'Administração'],
+    ['auditoria', 'Auditoria', pageAudit, () => can('auditoria'), 'Administração'],
     ['conta', 'Minha conta', pageAccount, null, 'Administração'],
   ];
+  const visiblePages = () => PAGES.filter((p) => !p[3] || p[3]());
   const menuIcon = (id) => settings?.menuIcons?.[id] || window.Icons.MENU_DEFAULTS[id];
 
   function layout(active, content) {
     const collapsed = prefs.get('sidebar', 'open') === 'collapsed';
     const shell = h('div', { class: 'layout' + (collapsed ? ' collapsed' : '') });
-    const visible = PAGES.filter((p) => !p[3] || me.role === p[3]);
+    const visible = visiblePages();
     const groups = [...new Set(visible.map((p) => p[4]))];
     const dark = document.documentElement.dataset.theme === 'dark';
     const toggleCollapse = () => {
@@ -269,7 +275,7 @@
             icon(dark ? 'sun' : 'moon'), h('span', {}, dark ? 'Tema claro' : 'Tema escuro')),
           collapseBtn,
           h('div', { class: 'who', title: me.name }, h('span', { class: 'avatar' }, initials(me.name)),
-            h('div', { class: 'who-text' }, h('b', {}, me.name), h('span', {}, me.role === 'admin' ? 'Administrador' : 'Gestor de filial'))),
+            h('div', { class: 'who-text' }, h('b', {}, me.name), h('span', {}, me.access.roleName))),
           h('button', { class: 'side-btn', title: 'Sair', onclick: async () => { await api('/logout', { method: 'POST' }).catch(() => {}); me = null; showLogin(); } },
             icon('logout'), h('span', {}, 'Sair')))),
       h('div', {},
@@ -287,7 +293,8 @@
     if (reset) return showReset(reset[1]);
     if (!me) { try { await loadMe(); } catch { return; } }
     const [, name = 'dashboard', param] = location.hash.split('/');
-    const page = PAGES.find((p) => p[0] === name && (!p[3] || me.role === p[3])) || PAGES[0];
+    const pages = visiblePages();
+    const page = pages.find((p) => p[0] === name) || pages[0];
     const container = h('div', {}, h('p', { class: 'muted' }, 'Carregando…'));
     layout(page[0], container);
     try { container.replaceChildren(await page[2](param)); } catch (e) { if (e.message !== '401') container.replaceChildren(h('div', { class: 'card bad' }, e.message)); }
@@ -355,8 +362,8 @@
 
   function exportButtons() {
     return [
-      h('button', { class: 'btn secondary', onclick: () => { location.href = '/api/admin/responses.csv?' + qs(filterState); } }, icon('download', 18), 'CSV'),
-      h('button', { class: 'btn', onclick: () => { toast('Gerando PowerPoint…'); location.href = '/api/admin/report.pptx?' + qs(filterState); } }, icon('slides', 18), 'Exportar PowerPoint'),
+      can('respostas', 'csv') ? h('button', { class: 'btn secondary', onclick: () => { location.href = '/api/admin/responses.csv?' + qs(filterState); } }, icon('download', 18), 'CSV') : null,
+      can('dashboard', 'pptx') ? h('button', { class: 'btn', onclick: () => { toast('Gerando PowerPoint…'); location.href = '/api/admin/report.pptx?' + qs(filterState); } }, icon('slides', 18), 'Exportar PowerPoint') : null,
     ];
   }
 
@@ -526,7 +533,10 @@
       c.contact.phone ? h('div', {}, h('a', { href: 'tel:+' + (c.contact.phone.length <= 11 ? '55' : '') + c.contact.phone }, c.contact.phone),
         ' · ', h('a', { href: 'https://wa.me/' + (c.contact.phone.length <= 11 ? '55' : '') + c.contact.phone, target: '_blank', rel: 'noopener noreferrer' }, 'WhatsApp')) : null,
       c.contact.email ? h('div', {}, h('a', { href: 'mailto:' + c.contact.email }, c.contact.email)) : null,
-      h('div', { class: 'small muted' }, 'Consentimento em ' + fmtDate(c.contact.consentAt))) : h('p', { class: 'small muted' }, 'O cliente não deixou contato.');
+      h('div', { class: 'small muted' }, 'Consentimento em ' + fmtDate(c.contact.consentAt)))
+      : h('p', { class: 'small muted' }, c.contactHidden ? 'O cliente deixou contato, mas o seu perfil não permite ver os dados de contato.' : 'O cliente não deixou contato.');
+    const editable = can('casos', 'editar');
+    status.disabled = !editable; who.disabled = !editable;
     modal(`Caso #${c.id} · ${c.branch}`, h('div', {},
       h('p', { class: 'small muted' }, `${fmtDate(c.submitted_at)} · ${c.survey}${c.channel === 'link' ? ' · via QR Code' : c.device ? ' · ' + c.device : ''}`),
       h('ul', { class: 'answers' }, c.answers.map((a) => h('li', {}, h('b', {}, qLabel(a.question)), a.value))),
@@ -536,8 +546,8 @@
         h('div', { class: 'small muted' }, `${fmtDate(n.at)} · ${n.user || 'sistema'}${n.status_to ? ` · ${c.statuses[n.status_from] || n.status_from} → ${c.statuses[n.status_to]}` : ''}`),
         n.text ? h('div', {}, n.text) : null))) : h('p', { class: 'small muted' }, 'Nenhuma ação registrada ainda.'),
       h('div', { class: 'form-grid' }, h('label', { class: 'f' }, 'Status', status), h('label', { class: 'f' }, 'Responsável', who)),
-      h('label', { class: 'f' }, 'Anotação', note)),
-    [{ label: 'Salvar', onClick: async (close) => {
+      editable ? h('label', { class: 'f' }, 'Anotação', note) : null),
+    !editable ? [] : [{ label: 'Salvar', onClick: async (close) => {
       try {
         await api('/cases/' + c.id, { method: 'PUT', body: { status: status.value, assigneeId: who.value ? Number(who.value) : null, note: note.value } });
         close(); toast('Caso atualizado.'); if (location.hash !== '#/casos') history.replaceState(null, '', '#/casos'); reload();
@@ -566,7 +576,7 @@
 
   async function pageResponses() {
     await Promise.all([branches(), surveys()]);
-    const isAdmin = me.role === 'admin'; // só administrador exclui respostas (o servidor também confere)
+    const isAdmin = can('respostas', 'excluir'); // só perfis com "Respostas · Excluir" (o servidor também confere)
     let page = 1;
     const body = h('div');
     // Apaga tudo o que o filtro atual mostra (limpeza dos testes). Exige digitar EXCLUIR.
@@ -620,20 +630,20 @@
     const list = await surveys(true);
     return h('div', {},
       pageHead('Pesquisas', 'Perguntas exibidas nos tablets e marcação do NPS',
-        me.role === 'admin' ? h('a', { class: 'btn', href: '#/pesquisas/nova' }, icon('plus', 18), 'Nova pesquisa') : null),
-      h('div', { class: 'card table-wrap' }, h('table', {},
+        can('pesquisas', 'incluir') ? h('a', { class: 'btn', href: '#/pesquisas/nova' }, icon('plus', 18), 'Nova pesquisa') : null),
+      !can('pesquisas') ? null : h('div', { class: 'card table-wrap' }, h('table', {},
         h('thead', {}, h('tr', {}, h('th', {}, 'Título'), h('th', {}, 'Perguntas'), h('th', {}, 'NPS'), h('th', {}, 'Respostas'), h('th', {}, 'Status'), h('th', {}))),
         h('tbody', {}, list.length ? list.map((s) => h('tr', {},
           h('td', {}, h('b', {}, s.title), h('div', { class: 'small muted' }, 'Atualizada ' + fmtDate(s.updated_at))),
           h('td', {}, s.questions), h('td', {}, s.nps_questions ? h('span', { class: 'badge nps' }, `${s.nps_questions} marcada(s)`) : h('span', { class: 'badge warn' }, 'nenhuma')),
           h('td', {}, s.responses), h('td', {}, h('span', { class: 'badge ' + (s.active ? 'ok' : 'off') }, s.active ? 'Ativa' : 'Inativa')),
           h('td', {}, h('div', { class: 'row' },
-            h('a', { class: 'btn secondary sm', href: '#/pesquisas/' + s.id }, me.role === 'admin' ? 'Editar' : 'Ver'),
-            me.role === 'admin' ? h('button', { class: 'btn secondary sm', onclick: async () => {
+            h('a', { class: 'btn secondary sm', href: '#/pesquisas/' + s.id }, can('pesquisas', 'editar') ? 'Editar' : 'Ver'),
+            can('pesquisas', 'incluir') ? h('button', { class: 'btn secondary sm', onclick: async () => {
               const r = await api(`/surveys/${s.id}/duplicate`, { method: 'POST' }); toast('Pesquisa duplicada.'); location.hash = '#/pesquisas/' + r.id;
             } }, 'Duplicar') : null))))
           : h('tr', {}, h('td', { colspan: '6', class: 'empty' }, 'Nenhuma pesquisa criada.'))))),
-      await campaignsCard(list));
+      can('campanhas') ? await campaignsCard(list) : null);
   }
 
   // Campanhas: trocam a pesquisa de uma filial (ou de todas) por um período, e voltam sozinhas à padrão.
@@ -654,10 +664,10 @@
     };
     return h('div', { class: 'card' },
       h('div', { class: 'topbar' }, h('div', {}, h('h2', {}, 'Campanhas agendadas'), h('div', { class: 'small muted' }, 'Durante o período, a pesquisa da campanha substitui a padrão; depois, tudo volta sozinho.')),
-        me.role === 'admin' ? h('button', { class: 'btn secondary', onclick: add }, icon('calendar', 16), 'Agendar campanha') : null),
+        can('campanhas', 'incluir') ? h('button', { class: 'btn secondary', onclick: add }, icon('calendar', 16), 'Agendar campanha') : null),
       rows.length ? h('div', { class: 'table-wrap' }, h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, 'Pesquisa'), h('th', {}, 'Filial'), h('th', {}, 'Período'), h('th', {}, 'Situação'), h('th', {}))),
         h('tbody', {}, rows.map((c) => h('tr', {}, h('td', {}, c.survey), h('td', {}, c.branch || 'Todas'), h('td', { class: 'small' }, `${fmtDateTz(c.starts_at, c.tz)} → ${fmtDateTz(c.ends_at, c.tz)}`),
-          h('td', {}, status(c)), h('td', {}, me.role === 'admin' ? h('button', { class: 'btn secondary sm', onclick: async () => {
+          h('td', {}, status(c)), h('td', {}, can('campanhas', 'excluir') ? h('button', { class: 'btn secondary sm', onclick: async () => {
             if (!confirm('Excluir esta campanha?')) return;
             try { await api('/schedules/' + c.id, { method: 'DELETE' }); route(); } catch (ex) { toast(ex.message, true); }
           } }, 'Excluir') : null))))))
@@ -678,7 +688,7 @@
 
   async function surveyEditor(sid) {
     const s = sid ? await api('/surveys/' + sid) : structuredClone(NEW_SURVEY);
-    const ro = me.role !== 'admin';
+    const ro = !can('pesquisas', sid ? 'editar' : 'incluir');
     const locked = s.has_responses;
     const f = {};
     const field = (key, label, type = 'text', extra = {}) => {
@@ -879,7 +889,6 @@
 
   async function pageBranches() {
     const [list, svs, tzInfo] = await Promise.all([branches(true), surveys(true), api('/timezones')]);
-    const isAdmin = me.role === 'admin';
     const tzName = (tz) => (tzInfo.choices.find((c) => c.value === tz)?.label) || tz;
     const edit = (b = {}) => {
       const tzSel = h('select', {}, h('option', { value: 'auto' }, 'Automático — usar o fuso do tablet'), tzInfo.choices.map((c) => h('option', { value: c.value }, c.label)));
@@ -925,11 +934,11 @@
       } }]);
     };
     return h('div', {},
-      pageHead('Filiais', 'Cada filial coleta separadamente e exibe sua própria pesquisa', isAdmin ? h('button', { class: 'btn', onclick: () => edit() }, icon('plus', 18), 'Nova filial') : null),
+      pageHead('Filiais', 'Cada filial coleta separadamente e exibe sua própria pesquisa', can('filiais', 'incluir') ? h('button', { class: 'btn', onclick: () => edit() }, icon('plus', 18), 'Nova filial') : null),
       h('div', { class: 'card table-wrap' }, h('table', {},
         h('thead', {}, h('tr', {}, h('th', {}, 'Código'), h('th', {}, 'Filial'), h('th', {}, 'Pesquisa padrão dos tablets'), h('th', {}, 'Meta'), h('th', {}, 'Tablets'), h('th', {}, 'Status'), h('th', {}))),
         h('tbody', {}, list.length ? list.map((b) => {
-          const sel = h('select', { onchange: async (e) => {
+          const sel = h('select', { disabled: !can('filiais', 'pesquisa'), title: can('filiais', 'pesquisa') ? null : 'Seu perfil não pode trocar a pesquisa dos tablets', onchange: async (e) => {
             try { await api(`/branches/${b.id}/survey`, { method: 'PUT', body: { surveyId: e.target.value ? Number(e.target.value) : null } }); toast('Pesquisa da filial atualizada. Os tablets recebem em até 1 minuto.'); cache.branches = null; } catch (ex) { toast(ex.message, true); }
           } }, h('option', { value: '' }, '— nenhuma —'), svs.filter((s) => s.active).map((s) => h('option', { value: String(s.id) }, s.title)));
           sel.value = b.survey_id ? String(b.survey_id) : '';
@@ -938,14 +947,14 @@
             h('td', {}, h('span', { class: 'badge ' + (b.active ? 'ok' : 'off') }, b.active ? 'Ativa' : 'Inativa'), b.public_enabled ? h('span', { class: 'badge ok' }, 'QR ativo') : null),
             h('td', {}, h('div', { class: 'row' },
               h('button', { class: 'btn secondary sm', onclick: () => openLink(b) }, 'QR Code'),
-              isAdmin ? h('button', { class: 'btn secondary sm', onclick: () => edit(b) }, 'Editar') : null)));
+              can('filiais', 'editar') ? h('button', { class: 'btn secondary sm', onclick: () => edit(b) }, 'Editar') : null)));
         }) : h('tr', {}, h('td', { colspan: '7', class: 'empty' }, 'Nenhuma filial cadastrada.'))))));
   }
 
   // Link/QR Code público da filial + cartaz para imprimir.
   async function openLink(b) {
     let info = await api(`/branches/${b.id}/public-link`);
-    const isAdmin = me.role === 'admin';
+    const isAdmin = can('filiais', 'qrcode');
     const box = h('div');
     const draw = () => {
       box.replaceChildren(
@@ -995,18 +1004,18 @@
     };
     return h('div', {},
       pageHead('Tablets', 'Dispositivos de coleta vinculados às filiais', h('button', { class: 'btn secondary', onclick: showGuide }, icon('file', 18), 'Guia de instalação'),
-        brs.length ? h('button', { class: 'btn', onclick: add }, icon('plus', 18), 'Novo tablet') : null),
+        brs.length && can('tablets', 'incluir') ? h('button', { class: 'btn', onclick: add }, icon('plus', 18), 'Novo tablet') : null),
       h('p', { class: 'muted' }, 'Cada tablet é vinculado a uma única filial. As respostas coletadas nele são sempre gravadas nessa filial — o tablet não consegue escolher ou trocar de filial.'),
       h('div', { class: 'card table-wrap' }, h('table', {},
         h('thead', {}, h('tr', {}, h('th', {}, 'Tablet'), h('th', {}, 'Filial'), h('th', {}, 'Status'), h('th', {}, 'Último contato'), h('th', {}))),
         h('tbody', {}, devs.length ? devs.map((d) => h('tr', {},
           h('td', {}, h('b', {}, d.name), h('div', { class: 'small muted' }, d.timezone ? `Fuso do tablet: ${d.timezone}` : 'Fuso ainda não informado')), h('td', {}, d.branch_name), h('td', {}, status(d)), h('td', {}, fmtDate(d.last_seen_at)),
           h('td', {}, h('div', { class: 'row' },
-            h('button', { class: 'btn secondary sm', onclick: async () => {
+            !can('tablets', 'codigo') ? null : h('button', { class: 'btn secondary sm', onclick: async () => {
               if (d.paired && !confirm('Gerar novo código desconecta o tablet atual até ele ser pareado de novo. Continuar?')) return;
               try { const r = await api(`/devices/${d.id}/pairing-code`, { method: 'POST' }); await route(); showCode(r, d.name); } catch (ex) { toast(ex.message, true); }
             } }, 'Novo código'),
-            d.active ? h('button', { class: 'btn danger sm', onclick: async () => {
+            d.active && can('tablets', 'excluir') ? h('button', { class: 'btn danger sm', onclick: async () => {
               if (!confirm(`Revogar o acesso do tablet "${d.name}"? Ele deixará de coletar respostas imediatamente.`)) return;
               try { await api(`/devices/${d.id}/revoke`, { method: 'POST' }); toast('Tablet revogado.'); route(); } catch (ex) { toast(ex.message, true); }
             } }, 'Revogar') : null))))
@@ -1034,45 +1043,178 @@
 
   // ------------------------------------------------------------ usuários
   async function pageUsers() {
-    const [users, brs] = await Promise.all([api('/users'), branches(true)]);
+    const [users, brs, rl] = await Promise.all([api('/users'), branches(true), api('/roles')]);
+    const roles = rl.roles;
+    const roleById = (rid) => roles.find((r) => r.id === rid);
+    // Só aparecem os perfis que cabem no seu (o servidor recusa os outros de qualquer forma).
+    const mine = new Set(me.access.perms);
+    const fits = (r) => me.access.isAdmin || (r.builtin !== 'admin' && (r.scope === 'own' || me.access.scopeAll) && r.perms.every((x) => mine.has(x)));
     const edit = (u = {}) => {
       const name = h('input', { value: u.name || '', maxlength: '100' });
       const email = h('input', { type: 'email', value: u.email || '', maxlength: '254' });
-      const role = h('select', {}, h('option', { value: 'gestor' }, 'Gestor de filial'), h('option', { value: 'admin' }, 'Administrador'));
-      role.value = u.role || 'gestor';
+      const curRole = u.role_id || roles.find((r) => r.builtin === 'gestor')?.id;
+      const role = h('select', {}, roles.filter((r) => fits(r) || r.id === curRole).map((r) => h('option', { value: String(r.id), disabled: !fits(r) }, r.name)));
+      role.value = String(curRole);
       const pw = h('input', { type: 'password', autocomplete: 'new-password', placeholder: u.id ? 'Deixe em branco para manter' : 'Mín. 10 caracteres, letras e números' });
       const active = h('input', { type: 'checkbox', checked: u.id ? !!u.active : true });
       const resetMfa = h('input', { type: 'checkbox' });
       const chosen = new Set(u.branches || []);
-      const brBox = h('div', {}, brs.map((b) => h('label', { class: 'chk' },
+      const brBox = h('div', { class: 'chk-list' }, brs.map((b) => h('label', { class: 'chk' },
         h('input', { type: 'checkbox', checked: chosen.has(b.id), onchange: (e) => { e.target.checked ? chosen.add(b.id) : chosen.delete(b.id); } }), b.name)));
+      const scopeHint = h('div', { class: 'small muted' });
+      const roleHint = h('p', { class: 'small muted' });
+      const syncRole = () => {
+        const r = roleById(Number(role.value));
+        roleHint.textContent = r ? (r.description || '') : '';
+        scopeHint.textContent = r?.scope === 'all' ? 'Este perfil enxerga todas as filiais. As marcadas abaixo valem só se o perfil mudar.' : 'Filiais que a pessoa pode ver';
+      };
+      role.addEventListener('change', syncRole); syncRole();
       modal(u.id ? 'Editar usuário' : 'Novo usuário', h('div', { class: 'form-grid' },
-        h('label', { class: 'f' }, 'Nome', name), h('label', { class: 'f' }, 'E-mail', email), h('label', { class: 'f' }, 'Perfil', role),
+        h('label', { class: 'f' }, 'Nome', name), h('label', { class: 'f' }, 'E-mail', email),
+        h('label', { class: 'f' }, 'Perfil de acesso', role, roleHint),
         h('label', { class: 'f' }, 'Senha', pw), h('label', { class: 'chk' }, active, 'Ativo'),
-        u.id && u.totp_enabled && u.id !== me.id ? h('label', { class: 'chk', title: 'Use quando a pessoa perdeu o celular' }, resetMfa, 'Resetar 2FA (perdeu o celular)') : null,
-        h('div', {}, h('div', { class: 'small muted' }, 'Filiais que o gestor pode ver'), brBox)),
+        u.id && u.totp_enabled && u.id !== me.id && can('usuarios', 'mfa') ? h('label', { class: 'chk', title: 'Use quando a pessoa perdeu o celular' }, resetMfa, 'Resetar 2FA (perdeu o celular)') : null,
+        h('div', {}, scopeHint, brBox)),
       [{ label: 'Salvar', onClick: async (close) => {
         try {
           await api(u.id ? '/users/' + u.id : '/users', { method: u.id ? 'PUT' : 'POST', body: {
-            name: name.value, email: email.value, role: role.value, password: pw.value || null, active: active.checked, branches: [...chosen], unlock: true, resetMfa: resetMfa.checked } });
+            name: name.value, email: email.value, roleId: Number(role.value), password: pw.value || null, active: active.checked, branches: [...chosen], unlock: true, resetMfa: resetMfa.checked } });
           close(); toast('Usuário salvo.'); route();
         } catch (ex) { toast(ex.message, true); }
       } }]);
     };
-    const bName = (id) => brs.find((b) => b.id === id)?.name || id;
+    const bName = (bid) => brs.find((b) => b.id === bid)?.name || bid;
     return h('div', {},
-      pageHead('Usuários', 'Administradores e gestores de filial', h('button', { class: 'btn', onclick: () => edit() }, icon('plus', 18), 'Novo usuário')),
+      pageHead('Usuários', 'Quem acessa o painel, com qual perfil e em quais filiais',
+        can('permissoes') ? h('a', { class: 'btn secondary', href: '#/permissoes' }, icon('key', 18), 'Perfis e permissões') : null,
+        can('usuarios', 'incluir') ? h('button', { class: 'btn', onclick: () => edit() }, icon('plus', 18), 'Novo usuário') : null),
       h('div', { class: 'card table-wrap' }, h('table', {},
         h('thead', {}, h('tr', {}, h('th', {}, 'Nome'), h('th', {}, 'Perfil'), h('th', {}, 'Filiais'), h('th', {}, 'Status'), h('th', {}))),
         h('tbody', {}, users.map((u) => h('tr', {},
           h('td', {}, h('b', {}, u.name), h('div', { class: 'small muted' }, u.email)),
-          h('td', {}, u.role === 'admin' ? 'Administrador' : 'Gestor'),
-          h('td', { class: 'small' }, u.role === 'admin' ? 'Todas' : (u.branches.map(bName).join(', ') || '—')),
+          h('td', {}, u.role_name),
+          h('td', { class: 'small' }, u.scope_all ? 'Todas' : (u.branches.map(bName).join(', ') || '—')),
           h('td', {}, h('span', { class: 'badge ' + (u.active ? 'ok' : 'off') }, u.active ? 'Ativo' : 'Inativo'),
             u.locked_until && u.locked_until > Date.now() ? h('span', { class: 'badge warn' }, 'Bloqueado') : null,
             u.totp_enabled ? h('span', { class: 'badge ok', title: 'Verificação em duas etapas ativa' }, icon('shield', 12), '2FA') : null),
-          h('td', {}, h('button', { class: 'btn secondary sm', onclick: () => edit(u) }, 'Editar'))))))));
+          h('td', {}, can('usuarios', 'editar') ? h('button', { class: 'btn secondary sm', onclick: () => edit(u) }, 'Editar') : null)))))));
   }
+
+  // ------------------------------------------------------------ perfis e permissões
+  // Cada perfil: quais filiais enxerga e, menu por menu, o que pode ver, incluir, editar e excluir.
+  let permSelected = null;
+  async function pagePermissions() {
+    const { roles, catalog } = await api('/roles');
+    if (!roles.some((r) => r.id === permSelected)) permSelected = (roles.find((r) => r.builtin === 'gestor') || roles[0]).id;
+    const mine = new Set(me.access.perms);
+    const mayGrant = (p) => me.access.isAdmin || mine.has(p);
+    const fits = (r) => me.access.isAdmin || (r.builtin !== 'admin' && (r.scope === 'own' || me.access.scopeAll) && r.perms.every((x) => mine.has(x)));
+    const list = h('div', { class: 'role-list' });
+    const editor = h('div', { class: 'role-editor' });
+    let draft = null; // perfil em edição (cópia)
+
+    const openRole = (r) => {
+      permSelected = r ? r.id : null;
+      draft = r ? { ...r, perms: new Set(r.perms) } : { id: null, name: '', description: '', scope: 'own', builtin: null, perms: new Set(['dashboard.ver']), users: 0 };
+      drawList(); drawEditor();
+    };
+    const drawList = () => list.replaceChildren(...[...roles.map((r) => h('button', { class: 'role-item' + (draft && r.id === draft.id ? ' active' : ''), onclick: () => openRole(r) },
+      h('b', {}, r.builtin === 'admin' ? icon('lock', 14) : null, r.name),
+      h('span', {}, `${r.builtin === 'admin' ? 'Fixo · acesso total' : r.builtin === 'gestor' ? 'Padrão do sistema' : 'Criado pela empresa'} · ${r.users} ${r.users === 1 ? 'usuário' : 'usuários'}`))),
+    draft && !draft.id ? h('button', { class: 'role-item active' }, h('b', {}, draft.name || 'Novo perfil'), h('span', {}, 'Ainda não salvo')) : null].filter(Boolean));
+
+    const drawEditor = () => {
+      const locked = draft.builtin === 'admin';
+      const editable = !locked && (draft.id ? can('permissoes', 'editar') && fits(roles.find((r) => r.id === draft.id)) : can('permissoes', 'incluir'));
+      const name = h('input', { value: draft.name, maxlength: '60', disabled: !editable, oninput: (e) => { draft.name = e.target.value; } });
+      const desc = h('input', { value: draft.description || '', maxlength: '200', disabled: !editable, placeholder: 'Ex.: Diretoria que só acompanha os números', oninput: (e) => { draft.description = e.target.value; } });
+      const scopeOpt = (v, label, hint) => h('label', { class: 'radio-card' + (draft.scope === v ? ' active' : '') },
+        h('input', { type: 'radio', name: 'role-scope', value: v, checked: draft.scope === v, disabled: !editable || (v === 'all' && !me.access.scopeAll),
+          onchange: () => { draft.scope = v; drawEditor(); } }), h('span', {}, h('b', {}, label), h('small', {}, hint)));
+      const toggle = (perm, on) => {
+        const [mod, act] = perm.split('.');
+        if (on) { draft.perms.add(perm); draft.perms.add(mod + '.ver'); } // qualquer ação inclui "ver"
+        else if (act === 'ver') { for (const p of [...draft.perms]) if (p.startsWith(mod + '.')) draft.perms.delete(p); } // sem "ver", sai tudo do menu
+        else draft.perms.delete(perm);
+        drawEditor();
+      };
+      const box = (perm, label) => {
+        const has = locked || draft.perms.has(perm);
+        return h('input', { type: 'checkbox', class: 'perm-box', checked: has, 'aria-label': label, disabled: !editable || (!has && !mayGrant(perm)),
+          title: !has && !mayGrant(perm) ? 'Você não tem esta permissão, então não pode dá-la' : null, onchange: (e) => toggle(perm, e.target.checked) });
+      };
+      const groups = [...new Set(catalog.modules.map((m) => m.group))];
+      const rows = [];
+      for (const g of groups) {
+        rows.push(h('tr', { class: 'group-row' }, h('td', { colspan: '6' }, g)));
+        for (const m of catalog.modules.filter((x) => x.group === g)) {
+          rows.push(h('tr', {},
+            h('td', {}, h('b', {}, m.label), m.hint ? h('div', { class: 'small muted' }, m.hint) : null),
+            Object.keys(catalog.ops).map((op) => h('td', { class: 'c' }, m.ops.includes(op) ? box(`${m.key}.${op}`, `${m.label}: ${catalog.ops[op]}`) : h('span', { class: 'na', title: 'Não se aplica' }, '—'))),
+            h('td', {}, Object.keys(m.extra).length ? h('div', { class: 'perm-extra' }, Object.entries(m.extra).map(([k, label]) =>
+              h('label', { class: 'chk small' }, box(`${m.key}.${k}`, `${m.label}: ${label}`), label))) : h('span', { class: 'na' }, '—'))));
+        }
+      }
+      rows.push(h('tr', { class: 'group-row' }, h('td', { colspan: '6' }, 'Sempre disponível')));
+      rows.push(h('tr', {}, h('td', {}, h('b', {}, 'Minha conta'), h('div', { class: 'small muted' }, 'Senha, 2FA, foto e notificações da própria pessoa')),
+        h('td', { class: 'c' }, h('input', { type: 'checkbox', class: 'perm-box', checked: true, disabled: true, 'aria-label': 'Minha conta: ver' })),
+        h('td', { class: 'c' }, h('span', { class: 'na' }, '—')), h('td', { class: 'c' }, h('span', { class: 'na' }, '—')), h('td', { class: 'c' }, h('span', { class: 'na' }, '—')), h('td', {}, h('span', { class: 'na' }, '—'))));
+
+      const save = async () => {
+        const body = { name: draft.name, description: draft.description, scope: draft.scope, perms: [...draft.perms] };
+        try {
+          if (draft.id) await api('/roles/' + draft.id, { method: 'PUT', body });
+          else permSelected = (await api('/roles', { method: 'POST', body })).id;
+          toast('Perfil salvo. As permissões valem na hora para quem usa este perfil.');
+          if (draft.id === me.access.roleId) { me = null; await loadMe(); }
+          route();
+        } catch (ex) { toast(ex.message, true); }
+      };
+      const remove = async () => {
+        if (!confirm(`Excluir o perfil "${draft.name}"? Isso não pode ser desfeito.`)) return;
+        try { await api('/roles/' + draft.id, { method: 'DELETE' }); toast('Perfil excluído.'); permSelected = null; route(); } catch (ex) { toast(ex.message, true); }
+      };
+      editor.replaceChildren(
+        h('div', { class: 'card' },
+          locked ? h('p', { class: 'small' }, h('span', { class: 'badge' }, icon('lock', 12), 'Perfil fixo'), ' O Administrador tem acesso total e não pode ser alterado nem excluído.') : null,
+          h('div', { class: 'form-grid' }, h('label', { class: 'f' }, 'Nome do perfil', name), h('label', { class: 'f' }, 'Descrição (opcional)', desc)),
+          h('div', { class: 'f mt' }, 'Quais filiais o perfil enxerga'),
+          h('div', { class: 'radio-row' },
+            scopeOpt('all', 'Todas as filiais', 'Vê os dados de todas as filiais'),
+            scopeOpt('own', 'Só as filiais da pessoa', 'Escolhidas no cadastro de cada usuário'))),
+        h('div', { class: 'card table-wrap perm-matrix' }, h('table', {},
+          h('thead', {}, h('tr', {}, h('th', {}, 'Menu'), Object.values(catalog.ops).map((l) => h('th', { class: 'c' }, l)), h('th', {}, 'Ações específicas'))),
+          h('tbody', {}, rows))),
+        h('div', { class: 'row between' },
+          h('p', { class: 'small muted' }, 'Sem "Ver", o menu some da barra lateral e o servidor recusa o acesso. Marcar Incluir, Editar ou Excluir marca Ver junto.'),
+          h('div', { class: 'row' },
+            draft.id && !draft.builtin && can('permissoes', 'excluir') ? h('button', { class: 'btn danger', onclick: remove }, icon('trash', 16), 'Excluir perfil') : null,
+            editable ? h('button', { class: 'btn', onclick: save }, 'Salvar perfil') : null)));
+    };
+
+    openRole(roles.find((r) => r.id === permSelected));
+    const duplicate = () => {
+      if (!draft) return;
+      const src = draft;
+      openRole(null);
+      draft.name = `${src.name} (cópia)`.slice(0, 60); draft.description = src.description;
+      draft.scope = src.scope === 'all' && !me.access.scopeAll ? 'own' : src.scope;
+      draft.perms = new Set([...(src.builtin === 'admin' ? catalog.modules.flatMap((m) => [...m.ops, ...Object.keys(m.extra)].map((a) => `${m.key}.${a}`)) : src.perms)].filter(mayGrant));
+      drawList(); drawEditor();
+    };
+    return h('div', {},
+      pageHead('Perfis e permissões', 'Defina o que cada perfil pode fazer em cada menu',
+        can('permissoes', 'incluir') ? h('button', { class: 'btn secondary', onclick: duplicate }, icon('copy', 18), 'Duplicar perfil') : null,
+        can('permissoes', 'incluir') ? h('button', { class: 'btn', onclick: () => openRole(null) }, icon('plus', 18), 'Novo perfil') : null),
+      h('div', { class: 'perm-layout' }, list, editor));
+  }
+
+  const permLabel = (p) => {
+    const [mod, act] = String(p).split('.');
+    const m = permCatalog?.modules.find((x) => x.key === mod);
+    if (!m) return p;
+    return `${m.label}: ${(permCatalog.ops[act] || m.extra[act] || act).toLowerCase()}`;
+  };
 
   // ------------------------------------------------------------ configurações
   async function uploadMedia(file, { imagesOnly = false } = {}) {
@@ -1082,12 +1224,19 @@
   }
 
   let settingsTab = 'identidade';
+  // Chaves de cada aba (o servidor confere a mesma divisão ao salvar).
+  const SETTINGS_KEYS = {
+    cfg_marca: ['companyName', 'primaryColor', 'accentColor', 'logoMediaId', 'faviconMediaId', 'appIconMediaId', 'menuIcons', 'defaultDisplay', 'ratingIcon', 'colorScheme', 'faceStyle'],
+    cfg_alertas: ['alerts', 'weeklyReport', 'defaultNpsGoal', 'offlineAlert', 'screen'],
+    cfg_lgpd: ['requireAdminMfa', 'privacyText', 'retention'],
+  };
   async function pageSettings() {
     const st = structuredClone(await api('/settings'));
     const body = h('div');
+    const editableKeys = Object.entries(SETTINGS_KEYS).filter(([g]) => can(g, 'editar')).flatMap(([, keys]) => keys);
     const save = async () => {
       try {
-        const saved = await api('/settings', { method: 'PUT', body: st });
+        const saved = await api('/settings', { method: 'PUT', body: Object.fromEntries(editableKeys.filter((k) => k in st).map((k) => [k, st[k]])) });
         settings = saved;
         applyBranding({ companyName: saved.companyName, primaryColor: saved.primaryColor, accentColor: saved.accentColor,
           logoUrl: saved.logoMediaId ? '/media/' + saved.logoMediaId : null });
@@ -1095,16 +1244,25 @@
         route();
       } catch (ex) { toast(ex.message, true); }
     };
-    const tabs = [['identidade', 'Identidade visual', 'palette'], ['menu', 'Ícones do menu', 'layout'], ['respostas', 'Ícones das respostas', 'star'],
-      ['envios', 'E-mail e WhatsApp', 'mail'], ['alertas', 'Alertas e relatórios', 'bell'], ['seguranca', 'Segurança e LGPD', 'shield']];
+    // [aba, rótulo, ícone, permissão]
+    const tabs = [['identidade', 'Identidade visual', 'palette', 'cfg_marca'], ['menu', 'Ícones do menu', 'layout', 'cfg_marca'], ['respostas', 'Ícones das respostas', 'star', 'cfg_marca'],
+      ['envios', 'E-mail e WhatsApp', 'mail', 'cfg_envios'], ['alertas', 'Alertas e relatórios', 'bell', 'cfg_alertas'], ['seguranca', 'Segurança e LGPD', 'shield', 'cfg_lgpd']]
+      .filter((t) => can(t[3]));
+    if (!tabs.some((t) => t[0] === settingsTab)) settingsTab = tabs[0][0];
     const TAB = { identidade: identityTab, menu: menuTab, respostas: ratingTab, envios: deliveryTab, alertas: alertsTab, seguranca: securityTab };
     const renderTab = async () => {
-      const content = await (TAB[settingsTab] || identityTab)(st, renderTab);
+      const group = tabs.find((t) => t[0] === settingsTab)[3];
+      const content = await TAB[settingsTab](st, renderTab);
+      // Sem permissão de editar, a aba aparece só para consulta.
+      const ro = !can(group, 'editar');
       body.replaceChildren(h('div', { class: 'tabs' }, tabs.map(([k, label, ic]) => h('button', { class: settingsTab === k ? 'active' : '',
-        onclick: () => { settingsTab = k; renderTab(); } }, icon(ic, 16), label))), content);
+        onclick: () => { settingsTab = k; renderTab(); } }, icon(ic, 16), label))),
+      ro ? h('p', { class: 'small muted' }, icon('lock', 14), ' Somente consulta: o seu perfil não pode alterar esta aba.') : null,
+      ro ? h('fieldset', { class: 'ro', disabled: true }, content) : content);
     };
     await renderTab();
-    return h('div', {}, pageHead('Configurações', 'Marca, ícones, alertas, relatórios, segurança e LGPD', h('button', { class: 'btn', onclick: save }, 'Salvar configurações')), body);
+    return h('div', {}, pageHead('Configurações', 'Marca, ícones, alertas, relatórios, segurança e LGPD',
+      editableKeys.length ? h('button', { class: 'btn', onclick: save }, 'Salvar configurações') : null), body);
   }
 
   function identityTab(st, rerender) {
@@ -1225,7 +1383,7 @@
           h('div', { class: 'form-grid mt' }, h('label', { class: 'f' }, 'Dia', day), h('label', { class: 'f' }, 'Hora (Brasília)', hour)),
           h('label', { class: 'f mt' }, 'Destinatários extras (recebem todas as filiais)', extra),
           h('p', { class: 'small muted' }, 'Administradores e gestores recebem conforme a preferência em Minha conta; cada gestor recebe apenas as filiais dele.'),
-          h('button', { class: 'btn secondary sm', onclick: async () => {
+          !can('cfg_alertas', 'relatorio') ? null : h('button', { class: 'btn secondary sm', onclick: async () => {
             try { const r = await api('/settings/weekly-report/send-now', { method: 'POST' }); toast(`Relatório enviado para ${r.sent} destinatário(s).`); renderAgain(); } catch (ex) { toast(ex.message, true); }
           } }, 'Enviar agora (teste)'))),
       h('div', { class: 'grid c2' },
@@ -1359,8 +1517,8 @@
     return h('div', {},
       h('div', { class: 'grid c2' },
         h('div', { class: 'card' }, h('h2', {}, 'Acesso ao painel'),
-          chk(st.requireAdminMfa, (v) => { st.requireAdminMfa = v; }, 'Exigir verificação em duas etapas (2FA) de administradores'),
-          h('p', { class: 'small muted' }, 'Recomendado. Com isso ligado, o administrador sem 2FA é obrigado a configurá-lo no próximo login.')),
+          chk(st.requireAdminMfa, (v) => { st.requireAdminMfa = v; }, 'Exigir verificação em duas etapas (2FA) de administradores e de perfis que alteram usuários, permissões ou configurações'),
+          h('p', { class: 'small muted' }, 'Recomendado. Com isso ligado, quem tem esses perfis e ainda não usa 2FA é obrigado a configurá-lo no próximo login.')),
         h('div', { class: 'card' }, h('h2', {}, 'Prazo de guarda dos dados (LGPD)'),
           h('div', { class: 'form-grid' },
             h('label', { class: 'f' }, 'Contatos (meses)', num(st.retention, 'contactsMonths', 1, 60)),
@@ -1368,7 +1526,7 @@
             h('label', { class: 'f' }, 'Auditoria (meses)', num(st.retention, 'auditMonths', 6, 120))),
           h('p', { class: 'small muted' }, 'Depois do prazo, os dados são apagados automaticamente. As notas numéricas (sem dados pessoais) são mantidas para o histórico do NPS.'))),
       h('div', { class: 'card' }, h('h2', {}, 'Aviso de privacidade exibido no tablet e no QR Code'), privacy),
-      h('div', { class: 'card' }, h('h2', {}, 'Pedido do titular (LGPD)'),
+      !can('cfg_lgpd', 'titular') ? null : h('div', { class: 'card' }, h('h2', {}, 'Pedido do titular (LGPD)'),
         h('p', { class: 'small muted' }, 'Quando um cliente pedir acesso ou exclusão dos dados dele, localize pelo telefone ou e-mail informado.'),
         h('div', { class: 'row' }, phone, mail, h('button', { class: 'btn secondary', onclick: search }, 'Localizar')), results));
   }
@@ -1414,13 +1572,23 @@
       case 'password.reset_unknown': return E('conta', 'warn', 'Pedido de nova senha para e-mail não cadastrado', d.email ? `E-mail digitado: ${d.email}.` : '');
       case 'password.reset_done': return E('conta', 'ok', 'Definiu uma nova senha pelo link do e-mail');
       case 'user.password_changed': return E('conta', 'ok', 'Trocou a própria senha');
-      case 'user.create': return E('usuarios', '', `Criou o usuário ${d.email || ''}`, `Perfil: ${ROLE[d.role] || d.role}${d.role === 'gestor' ? ` · ${plural((d.branches || []).length, 'filial', 'filiais')}: ${(d.branches || []).map(brName).join(', ') || 'nenhuma'}` : ''}.`);
+      case 'user.create': return E('usuarios', '', `Criou o usuário ${d.email || ''}`, `Perfil: ${d.roleName || ROLE[d.role] || d.role}${d.role === 'gestor' ? ` · ${plural((d.branches || []).length, 'filial', 'filiais')}: ${(d.branches || []).map(brName).join(', ') || 'nenhuma'}` : ''}.`);
       case 'user.update': {
-        const bits = [`Perfil: ${ROLE[d.role] || d.role}`, d.active === 0 || d.active === false ? 'usuário DESATIVADO' : 'usuário ativo'];
+        const bits = [`Perfil: ${d.roleName || ROLE[d.role] || d.role}`, d.active === 0 || d.active === false ? 'usuário DESATIVADO' : 'usuário ativo'];
         if (d.passwordReset) bits.push('senha redefinida pelo administrador');
         if (d.resetMfa) bits.push('verificação em duas etapas reiniciada');
         return E('usuarios', d.active === 0 || d.active === false || d.resetMfa ? 'warn' : '', `Alterou o usuário ${d.email || '#' + d.id}`, bits.join(' · ') + '.');
       }
+      case 'role.create': return E('usuarios', '', `Criou o perfil de acesso "${d.name}"`, `${d.scope === 'all' ? 'Todas as filiais' : 'Só as filiais do usuário'} · ${plural((d.perms || []).length, 'permissão', 'permissões')}.`);
+      case 'role.update': {
+        const bits = [];
+        if (d.renamedFrom) bits.push(`antes se chamava "${d.renamedFrom}"`);
+        if (d.scopeFrom) bits.push(d.scope === 'all' ? 'passou a ver TODAS as filiais' : 'passou a ver só as filiais do usuário');
+        if (d.added?.length) bits.push('ganhou: ' + d.added.map(permLabel).join(', '));
+        if (d.removed?.length) bits.push('perdeu: ' + d.removed.map(permLabel).join(', '));
+        return E('usuarios', d.added?.length || d.scopeFrom ? 'warn' : '', `Alterou as permissões do perfil "${d.name}"`, bits.length ? bits.join(' · ') + '.' : 'Sem mudança nas permissões.');
+      }
+      case 'role.delete': return E('usuarios', 'warn', `Excluiu o perfil de acesso "${d.name}"`);
       case 'branch.create': return E('cadastros', '', `Cadastrou a filial "${d.name || d.code || '#' + d.id}"`, [d.code && `Código ${d.code}`, d.city].filter(Boolean).join(' · '));
       case 'branch.update': return E('cadastros', '', `Alterou a filial "${d.name || brName(d.id)}"`, d.active === 0 || d.active === false ? 'Filial DESATIVADA.' : '');
       case 'branch.set_survey': return E('cadastros', '', `Definiu a pesquisa padrão da filial "${brName(d.branchId)}"`, d.surveyId ? `Pesquisa: ${sv(d.surveyId)}.` : 'Sem pesquisa padrão.');
@@ -1456,7 +1624,9 @@
   const TONE_LABEL = { ok: 'Normal', warn: 'Atenção', bad: 'Importante' };
 
   async function pageAudit() {
-    const [rows, brs, svs, users, devs] = await Promise.all([api('/audit?limit=500'), branches(), surveys(), api('/users'), api('/devices')]);
+    // Nomes de pessoas e tablets só aparecem se o perfil também puder ver essas telas.
+    const [rows, brs, svs, users, devs] = await Promise.all([api('/audit?limit=500'), branches(), surveys(),
+      can('usuarios') ? api('/users') : [], can('tablets') ? api('/devices') : []]);
     const ctx = { branches: new Map(brs.map((b) => [b.id, b.name])), surveys: new Map(svs.map((x) => [x.id, x.title])),
       users: new Map(users.map((u) => [u.id, u.name])), devices: new Map(devs.map((x) => [x.id, x.name])) };
     const events = rows.map((r) => ({ r, e: auditEvent(r, ctx) }));

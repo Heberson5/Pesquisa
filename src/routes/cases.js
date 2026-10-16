@@ -7,9 +7,10 @@ const { requireUser } = require('../auth');
 const { HttpError, bad, str, int, id, dateParam } = require('../validate');
 const { scope, assertBranch, placeholders } = require('../scope');
 const { decrypt } = require('../vault');
+const { need, can, accessFor } = require('../permissions');
 
 const router = express.Router();
-router.use(requireUser);
+router.use(requireUser, need('casos', 'ver'));
 
 const STATUS = { aberto: 'Aberto', em_contato: 'Em contato', resolvido: 'Resolvido', sem_retorno: 'Sem retorno' };
 const CLOSED = new Set(['resolvido', 'sem_retorno']);
@@ -62,9 +63,12 @@ function loadCase(user, caseId) {
   return c;
 }
 
-// Pessoas que podem ser responsáveis por um caso da filial: admins e gestores da filial.
-const assignable = (branchId) => all(`SELECT DISTINCT u.id, u.name FROM users u LEFT JOIN user_branches ub ON ub.user_id = u.id
-  WHERE u.active = 1 AND (u.role = 'admin' OR ub.branch_id = ?) ORDER BY u.name`, branchId);
+// Pessoas que podem ser responsáveis por um caso da filial: quem enxerga a filial e pode tratar casos.
+const assignable = (branchId) => all('SELECT id, name, role, role_id FROM users WHERE active = 1 ORDER BY name').filter((u) => {
+  const a = accessFor(u);
+  if (!a.isAdmin && !a.perms.has('casos.editar')) return false;
+  return a.scopeAll || !!get('SELECT 1 FROM user_branches WHERE user_id = ? AND branch_id = ?', u.id, branchId);
+}).map(({ id: uid, name }) => ({ id: uid, name }));
 
 router.get('/:id', (req, res) => {
   const c = loadCase(req.user, id(req.params.id));
@@ -76,17 +80,19 @@ router.get('/:id', (req, res) => {
     value: a.type === 'yesno' ? (a.value_num ? 'Sim' : 'Não') : a.type === 'multi' ? JSON.parse(a.value_text).join(', ') : (a.value_text ?? String(a.value_num)),
   }));
   let contact = null;
-  if (r.contact_consent_at && !r.anonymized_at) {
+  const hasContact = !!(r.contact_consent_at && !r.anonymized_at);
+  // Dado pessoal: só para perfis com "Casos · Ver contato do cliente".
+  if (hasContact && can(req.user, 'casos', 'contato')) {
     contact = { name: decrypt(r.contact_name_enc), phone: decrypt(r.contact_phone_enc), email: decrypt(r.contact_email_enc), consentAt: r.contact_consent_at };
     audit(req.user.id, 'contact.view', { caseId: c.id }, req.ip); // acesso a dado pessoal fica registrado
   }
   const notes = all(`SELECT n.at, n.text, n.status_from, n.status_to, u.name AS user FROM case_notes n LEFT JOIN users u ON u.id = n.user_id
     WHERE n.case_id = ? ORDER BY n.at`, c.id);
   res.json({ ...c, branch: r.branch, survey: r.survey, device: r.device, channel: r.channel, submitted_at: r.submitted_at,
-    answers, contact, notes, statuses: STATUS, assignable: assignable(c.branch_id) });
+    answers, contact, contactHidden: hasContact && !contact, notes, statuses: STATUS, assignable: assignable(c.branch_id) });
 });
 
-router.put('/:id', (req, res) => {
+router.put('/:id', need('casos', 'editar'), (req, res) => {
   const c = loadCase(req.user, id(req.params.id));
   const b = req.body || {};
   const status = b.status === undefined ? c.status : b.status;

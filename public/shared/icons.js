@@ -73,7 +73,7 @@
   // Itens do menu e ícone padrão de cada um.
   const MENU_DEFAULTS = {
     dashboard: 'layout', casos: 'bell', respostas: 'inbox', pesquisas: 'clipboard', filiais: 'store', dispositivos: 'tablet',
-    usuarios: 'users', configuracoes: 'settings', auditoria: 'history', conta: 'user_cog',
+    usuarios: 'users', permissoes: 'key', configuracoes: 'settings', auditoria: 'history', conta: 'user_cog',
   };
 
   const MENU_ICONS = Object.keys(ICONS).filter((k) => !ICONS[k].ui && !ICONS[k].rating);

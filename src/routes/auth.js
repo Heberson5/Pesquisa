@@ -8,6 +8,7 @@ const { createSession, destroyUserSessions, requireUser } = require('../auth');
 const { HttpError, bad } = require('../validate');
 const totp = require('../totp');
 const { encrypt, decrypt, lookup } = require('../vault');
+const { isPrivileged } = require('../permissions');
 const { getSettings } = require('../settings');
 const { queueEmail, renderEmail } = require('../notify');
 const { publicUrl } = require('../config');
@@ -24,7 +25,8 @@ const forgotPerEmail = rateLimiter({ windowMs: 60 * 60_000, max: 3, keyFn: (req)
 const mfaLimiter = rateLimiter({ windowMs: 15 * 60_000, max: 15, message: 'Muitas tentativas. Aguarde 15 minutos.' });
 
 const publicUser = (u) => ({ id: u.id, name: u.name, email: u.email, role: u.role });
-const mfaRequiredFor = (u) => u.role === 'admin' && getSettings().requireAdminMfa;
+// 2FA obrigatório (quando a empresa exige): administradores e perfis que podem mudar usuários, permissões ou configurações.
+const mfaRequiredFor = (u) => getSettings().requireAdminMfa && isPrivileged(u);
 
 function registerFailure(user, req, action) {
   const fails = user.failed_logins + 1;
@@ -197,7 +199,7 @@ router.post('/mfa/recovery-codes', requireUser, mfaLimiter, (req, res) => {
 
 router.post('/mfa/disable', requireUser, mfaLimiter, (req, res) => {
   const u = requirePassword(req);
-  if (mfaRequiredFor(u)) throw new HttpError(403, 'O 2FA é obrigatório para administradores nesta empresa.');
+  if (mfaRequiredFor(u)) throw new HttpError(403, 'O 2FA é obrigatório para o seu perfil nesta empresa.');
   const step = totp.verify(decrypt(u.totp_secret_enc) || '', String(req.body?.code || '').trim(), u.totp_last_step);
   if (step === null) throw bad('Código inválido.');
   tx(() => {

@@ -262,6 +262,19 @@ for (const [table, column, ddl] of [
   ['questions', 'show_if', 'show_if TEXT'],
   ['questions', 'i18n', 'i18n TEXT'],
 ]) addColumnIfMissing(table, column, ddl);
+// ---- versão 1.5: perfis de acesso com permissões por menu (os perfis padrão são criados em permissions.js).
+db.exec(`CREATE TABLE IF NOT EXISTS roles (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  description TEXT,
+  scope TEXT NOT NULL DEFAULT 'own' CHECK (scope IN ('all','own')),
+  perms TEXT NOT NULL DEFAULT '[]',
+  builtin TEXT UNIQUE CHECK (builtin IN ('admin','gestor')),
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);`);
+addColumnIfMissing('users', 'role_id', 'role_id INTEGER REFERENCES roles(id)');
+
 // Respostas antigas de tablet: copia o nome atual do tablet (depois disso, renomear não muda o histórico).
 db.exec("UPDATE responses SET device_label = (SELECT name FROM devices WHERE devices.id = responses.device_id) WHERE device_label IS NULL AND device_id IS NOT NULL");
 db.exec(`CREATE INDEX IF NOT EXISTS idx_resp_phone ON responses(contact_phone_lookup);

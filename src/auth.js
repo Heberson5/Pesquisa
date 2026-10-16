@@ -3,6 +3,7 @@
 const { get, run } = require('./db');
 const { randomToken, sha256, safeEqual } = require('./security');
 const { HttpError } = require('./validate');
+const { accessFor } = require('./permissions');
 
 const SECURE_COOKIE = process.env.COOKIE_SECURE === 'true' || process.env.NODE_ENV === 'production';
 const COOKIE_NAME = SECURE_COOKIE ? '__Host-sid' : 'sid';
@@ -50,7 +51,7 @@ const MFA_SETUP_ALLOWED = new Set(['GET /me', 'POST /mfa/setup', 'POST /mfa/enab
 function requireUser(req, res, next) {
   const token = parseCookies(req.headers.cookie)[COOKIE_NAME];
   if (!token || token.length > 100) throw new HttpError(401, 'Sessão expirada. Faça login novamente.');
-  const s = get(`SELECT s.*, u.name, u.email, u.role, u.active FROM sessions s JOIN users u ON u.id = s.user_id
+  const s = get(`SELECT s.*, u.name, u.email, u.role, u.role_id, u.active FROM sessions s JOIN users u ON u.id = s.user_id
                  WHERE s.token_hash = ?`, sha256(token));
   const now = Date.now();
   if (!s || !s.active || now - s.last_seen_at > IDLE_MS || now - s.created_at > ABSOLUTE_MS) {
@@ -64,6 +65,8 @@ function requireUser(req, res, next) {
   }
   if (now - s.last_seen_at > 60_000) run('UPDATE sessions SET last_seen_at = ? WHERE token_hash = ?', now, s.token_hash);
   req.user = { id: s.user_id, name: s.name, email: s.email, role: s.role, csrf: s.csrf, mfaSetupRequired: !!s.mfa_setup_required, sessionHash: s.token_hash };
+  // Perfil lido a cada requisição: mudar as permissões de um perfil vale na hora, sem novo login.
+  req.user.access = accessFor({ id: s.user_id, role: s.role, role_id: s.role_id });
   // Administrador sem 2FA (quando obrigatório): só pode configurar o 2FA, ver seus dados ou sair.
   if (req.user.mfaSetupRequired && !MFA_SETUP_ALLOWED.has(`${req.method} ${req.path}`)) {
     return res.status(403).json({ error: 'Ative a autenticação em duas etapas para continuar.', code: 'MFA_SETUP_REQUIRED' });
@@ -72,7 +75,7 @@ function requireUser(req, res, next) {
 }
 
 function requireAdmin(req, res, next) {
-  if (req.user?.role !== 'admin') throw new HttpError(403, 'Acesso restrito a administradores.');
+  if (!req.user?.access?.isAdmin) throw new HttpError(403, 'Acesso restrito a administradores.');
   next();
 }
 
