@@ -4,7 +4,7 @@
 process.env.LIVE_HEARTBEAT_MS = '150';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { start, stop, Client, makeUser, base } = require('./helpers');
+const { start, stop, Client, makeUser, base, run } = require('./helpers');
 
 let admin; let gestor; let branchA; let branchB; let survey; let q; let tokB;
 
@@ -91,4 +91,12 @@ test('a sessão encerrada derruba o canal aberto na próxima verificação', asy
   await c.req('POST', '/api/admin/logout');
   assert.ok(await waitFor(() => l.ended(), 1500), 'encerrado depois do logout');
   assert.equal((await listen(c)).status, 401, 'o mesmo cookie não abre outro canal');
+});
+
+test('sessão que expirou por tempo sem uso também derruba o canal', async () => {
+  const c = new Client(); await c.login('adm@l.local', 'SenhaForte123');
+  const l = await listen(c);
+  assert.equal(l.status, 200);
+  run('UPDATE sessions SET last_seen_at = ? WHERE user_id = (SELECT id FROM users WHERE email = ?)', Date.now() - 3 * 3_600_000, 'adm@l.local');
+  assert.ok(await waitFor(() => l.ended(), 1500), 'encerrado depois de 2 h sem uso');
 });

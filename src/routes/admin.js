@@ -10,7 +10,7 @@ const { hashPassword, verifyPassword, pairingCode, sha256, passwordPolicyError, 
 const { destroySession, destroyUserSessions, requireUser } = require('../auth');
 const perm = require('../permissions');
 const { can, need, needAny } = perm;
-const { HttpError, bad, str, int, bool, id, email, dateParam } = require('../validate');
+const { HttpError, bad, str, int, bool, id, email } = require('../validate');
 const { QUESTION_TYPES, DISPLAYS, LANGS, LANG_LABELS, CONTACT_MODES, loadSurvey, normalizeQuestions, normalizeI18n, npsFromCounts } = require('../surveys');
 const { getSettings, saveSettings, emailList } = require('../settings');
 const { queueEmail, queueWhatsApp, processOutbox, outboxStatus, webhookSecret, whatsappCheck } = require('../notify');
@@ -146,7 +146,8 @@ router.delete('/users/:id/photo', need('usuarios', 'editar'), (req, res) => {
   const uid = id(req.params.id);
   const u = get('SELECT * FROM users WHERE id = ?', uid);
   if (!u) throw new HttpError(404, 'Usuário não encontrado.');
-  if (!perm.roleWithin(req.user, perm.roleOf(u))) throw new HttpError(403, 'Você não pode alterar uma pessoa com mais acesso que você.');
+  // Mesmas regras de Editar: perfil que cabe no seu e só pessoas das filiais que você enxerga.
+  assertCanManage(req.user, { roleRow: perm.roleOf(u), branches: [] }, u);
   run('DELETE FROM user_photos WHERE user_id = ?', uid);
   audit(req.user.id, 'user.photo_removed', { id: uid, email: u.email }, req.ip);
   res.json({ ok: true });
@@ -550,8 +551,12 @@ function listResponses(user, query, limit, offset) {
       FROM responses r JOIN branches b ON b.id = r.branch_id JOIN surveys s ON s.id = r.survey_id
       LEFT JOIN devices d ON d.id = r.device_id ${f.sql} ORDER BY r.submitted_at DESC LIMIT ? OFFSET ?`, ...f.params, limit, offset);
   // Fuso de cada resposta (o do tablet que respondeu, ou o da filial): a tela e o CSV mostram a hora local.
+  // (Um cálculo por filial/fuso do tablet: no CSV podem ser milhares de linhas.)
+  const tzMemo = new Map();
   for (const r of rows) {
-    r.tz = zones.forBranch({ id: r.branch_id, timezone: r.branch_tz }, r.device_tz ? { timezone: r.device_tz } : null);
+    const k = `${r.branch_id}|${r.branch_tz}|${r.device_tz}`;
+    if (!tzMemo.has(k)) tzMemo.set(k, zones.forBranch({ id: r.branch_id, timezone: r.branch_tz }, r.device_tz ? { timezone: r.device_tz } : null));
+    r.tz = tzMemo.get(k);
     delete r.branch_tz; delete r.device_tz;
   }
   if (rows.length) {
@@ -762,6 +767,11 @@ router.put('/roles/:id', need('permissoes', 'editar'), (req, res) => {
   assertRoleName(r.name, rid);
   const old = perm.parsePerms(cur.perms);
   run('UPDATE roles SET name = ?, description = ?, scope = ?, perms = ?, updated_at = ? WHERE id = ?', r.name, r.description, r.scope, JSON.stringify(r.perms), Date.now(), rid);
+  // O perfil passou a ter permissão que exige 2FA: quem usa o perfil e ainda não tem 2FA sai e, no próximo login,
+  // configura o 2FA (a exigência só é conferida no login).
+  if (getSettings().requireAdminMfa && r.perms.some((p) => perm.SENSITIVE.has(p)) && !old.some((p) => perm.SENSITIVE.has(p))) {
+    for (const u of all("SELECT id FROM users WHERE role_id = ? AND role <> 'admin' AND totp_enabled = 0", rid)) destroyUserSessions(u.id);
+  }
   // Auditoria com o "antes e depois": o que entrou, o que saiu e a mudança de filiais.
   audit(req.user.id, 'role.update', { id: rid, name: r.name, renamedFrom: cur.name !== r.name ? cur.name : undefined,
     scopeFrom: cur.scope !== r.scope ? cur.scope : undefined, scope: r.scope,
@@ -849,7 +859,7 @@ const previews = new Map();
 const previewRows = { detractor: [['Filial', 'Loja Centro · Campinas'], ['Nota', '3'], ['Quando', '16/10/2026 14:32'], ['O que podemos melhorar?', 'Esperei 40 minutos para ser atendido.'],
   ['Cliente pediu contato', 'Mariana S.'], ['Telefone', '(19) 99812-4410']],
 offline: [['Filial', 'Loja Centro · Campinas'], ['Tablet', 'Tablet do caixa 2'], ['Último contato', '16/10/2026 13:58']],
-weekly: [['NPS', '+48'], ['Respostas', '412'], ['Promotores', '61%'], ['Detratores', '13%'], ['Casos pendentes', '7'], ['1º Loja Centro', 'NPS +62 (meta 50)']] };
+weekly: [['NPS', '74'], ['Respostas', '412'], ['Promotores', '61%'], ['Detratores', '13%'], ['Casos pendentes', '7'], ['1º Loja Centro', 'NPS 81 (meta 75)']] };
 router.post('/templates/:kind/:channel/preview', need('cfg_modelos', 'ver'), (req, res) => {
   const { kind, channel } = templateParams(req);
   const vars = templates.sampleVars(kind);

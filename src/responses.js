@@ -18,12 +18,12 @@ const { localDay } = require('./time');
   const { all } = require('./db');
   const rows = all('SELECT r.id, r.submitted_at, r.branch_id, d.timezone AS device_tz FROM responses r LEFT JOIN devices d ON d.id = r.device_id WHERE r.local_day IS NULL');
   if (!rows.length) return;
-  const branches = new Map();
+  const tzMemo = new Map(); // um cálculo por filial + fuso do tablet
   tx(() => {
     for (const r of rows) {
-      if (!branches.has(r.branch_id)) branches.set(r.branch_id, get('SELECT id, timezone FROM branches WHERE id = ?', r.branch_id));
-      const tz = zones.forBranch(branches.get(r.branch_id), r.device_tz ? { timezone: r.device_tz } : null);
-      run('UPDATE responses SET local_day = ? WHERE id = ?', localDay(r.submitted_at, tz), r.id);
+      const k = `${r.branch_id}|${r.device_tz}`;
+      if (!tzMemo.has(k)) tzMemo.set(k, zones.forBranch(get('SELECT id, timezone FROM branches WHERE id = ?', r.branch_id), r.device_tz ? { timezone: r.device_tz } : null));
+      run('UPDATE responses SET local_day = ? WHERE id = ?', localDay(r.submitted_at, tzMemo.get(k)), r.id);
     }
   });
 })();
@@ -149,7 +149,11 @@ function saveResponse({ branch, deviceId = null, deviceLabel = null, channel, bo
   // Resposta para pergunta fora do caminho é descartada (não é gravada nem conta nos relatórios): assim uma
   // resposta guardada offline antes de alguém mudar as regras não é perdida. Pelo mesmo motivo, se a pesquisa
   // foi alterada depois que o cliente começou, as obrigatórias do novo caminho não são exigidas.
-  const changedSince = (startedAt ?? submittedAt) < survey.updated_at;
+  // A versão que o cliente exibiu (config.survey.version) é a referência: um tablet offline pode continuar com a
+  // versão antiga por horas e o cliente começar DEPOIS da alteração. Sem versão (clientes antigos), vale o horário.
+  // (Valor estranho é ignorado em vez de recusar: recusar descartaria a resposta guardada no tablet.)
+  const clientVersion = Number.isSafeInteger(body.surveyVersion) ? body.surveyVersion : null;
+  const changedSince = clientVersion !== null ? clientVersion !== survey.updated_at : (startedAt ?? submittedAt) < survey.updated_at;
   const raw = new Map();
   const normalized = [];
   let next = 0;

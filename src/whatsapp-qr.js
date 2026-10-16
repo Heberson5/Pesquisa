@@ -129,7 +129,10 @@ async function disconnect() {
 
 // Ao subir o servidor: reconecta se o modo QR estiver ligado e houver sessão salva.
 function boot() {
-  if (cfg().mode === 'qr' && hasSession()) connect().catch((e) => { status = { ...status, state: 'error', lastError: e.message }; });
+  if (cfg().mode !== 'qr') return;
+  // A fila anda mesmo sem sessão: assim os avisos parados vencem em 24 h em vez de ficarem pendentes para sempre.
+  startWorker();
+  if (hasSession()) connect().catch((e) => { status = { ...status, state: 'error', lastError: e.message }; });
 }
 
 // Aviso por e-mail aos administradores quando o celular desconecta o sistema.
@@ -141,7 +144,10 @@ function warnAdmins() {
     const { html, text } = renderEmail({ brand, title: 'WhatsApp desconectado',
       intro: 'O número usado para os alertas foi desconectado (pelo celular ou pelo próprio WhatsApp). Os alertas por WhatsApp ficam guardados na fila por até 24 horas. Entre no painel e leia o QR Code de novo.',
       button: { label: 'Conectar de novo', url: `${publicUrl}/admin/#/configuracoes` } });
-    for (const u of all("SELECT email FROM users WHERE active = 1 AND role = 'admin'")) queueEmail({ to: u.email, subject: `${brand.companyName}: WhatsApp desconectado`, text, html, kind: 'whatsapp_down' });
+    // Quem pode reconectar: administradores e perfis com "Conectar e desconectar o WhatsApp".
+    const { can } = require('./permissions');
+    const to = all('SELECT id, email, role, role_id FROM users WHERE active = 1').filter((u) => can(u, 'cfg_envios', 'whatsapp'));
+    for (const u of to) queueEmail({ to: u.email, subject: `${brand.companyName}: WhatsApp desconectado`, text, html, kind: 'whatsapp_down' });
   } catch (e) { console.error('[whatsapp] aviso', e.message); }
 }
 
@@ -177,8 +183,6 @@ async function sendNow(phone, text) {
   if (!sock || status.state !== 'connected') throw new Error('WhatsApp desconectado.');
   await sock.sendMessage(await jidFor(phone), { text });
 }
-
-const isQrItem = (item) => { try { return item.channel === 'whatsapp' && JSON.parse(item.payload || '{}').mode === 'qr'; } catch { return false; } };
 
 // Um envio por vez. Nunca manda dois seguidos antes do intervalo mínimo, nem se o servidor ficou parado.
 async function processQueue(now = Date.now()) {
@@ -240,4 +244,4 @@ const connected = () => status.state === 'connected';
 function useTransportForTests(t) { transport = t; if (t) { status = { state: 'connected', qr: null, qrAt: null, me: { number: '5511900000000', name: 'Teste' }, since: Date.now(), lastError: null }; } else status = { state: 'off', qr: null, qrAt: null, me: null, since: null, lastError: null }; }
 function stopWorker() { clearInterval(timer); timer = null; }
 
-module.exports = { connect, disconnect, boot, queue, processQueue, queueView, publicStatus, connected, isQrItem, useTransportForTests, stopWorker, sendNow };
+module.exports = { connect, disconnect, boot, queue, processQueue, queueView, publicStatus, connected, useTransportForTests, stopWorker, sendNow };

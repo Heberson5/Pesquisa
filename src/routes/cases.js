@@ -67,11 +67,14 @@ function loadCase(user, caseId) {
 }
 
 // Pessoas que podem ser responsáveis por um caso da filial: quem enxerga a filial e pode tratar casos.
-const assignable = (branchId) => all('SELECT id, name, role, role_id FROM users WHERE active = 1 ORDER BY name').filter((u) => {
-  const a = accessFor(u);
-  if (!a.isAdmin && !a.perms.has('casos.editar')) return false;
-  return a.scopeAll || !!get('SELECT 1 FROM user_branches WHERE user_id = ? AND branch_id = ?', u.id, branchId);
-}).map(({ id: uid, name }) => ({ id: uid, name }));
+function assignable(branchId) {
+  const linked = new Set(all('SELECT user_id FROM user_branches WHERE branch_id = ?', branchId).map((x) => x.user_id));
+  return all('SELECT id, name, role, role_id FROM users WHERE active = 1 ORDER BY name').filter((u) => {
+    const a = accessFor(u);
+    if (!a.isAdmin && !a.perms.has('casos.editar')) return false;
+    return a.scopeAll || linked.has(u.id);
+  }).map(({ id: uid, name }) => ({ id: uid, name }));
+}
 
 router.get('/:id', (req, res) => {
   const c = loadCase(req.user, id(req.params.id));

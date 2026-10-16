@@ -2,7 +2,7 @@
 // Modelos de mensagem: o texto de cada tipo de envio (e-mail e WhatsApp) pode ser editado no painel.
 // Variáveis entre chaves, ex.: {filial}. A mesma montagem serve para a prévia e para o envio real.
 // No e-mail tudo é escapado (renderEmail): um comentário de cliente nunca vira HTML ou link.
-const { get, all, run } = require('./db');
+const { get, run } = require('./db');
 const { bad } = require('./validate');
 const { renderEmail, oneLine } = require('./notify');
 const { getSettings } = require('./settings');
@@ -148,8 +148,13 @@ function emailFor(kind, vars, { rows = [], buttonUrl = null, override = null } =
 function whatsappFor(kind, vars, { override = null } = {}) {
   const t = override ? { ...current(kind, 'whatsapp'), ...validate(kind, 'whatsapp', override) } : current(kind, 'whatsapp');
   const v = { empresa: getSettings().companyName, destinatario: 'equipe', ...vars };
-  // Linhas que ficaram vazias (variável sem valor, ex.: cliente sem contato) são retiradas.
-  return fill(t.text, v).split('\n').filter((line, i, arr) => line.trim() || (i > 0 && arr[i - 1].trim())).join('\n').trim();
+  // Linhas cujas variáveis ficaram todas sem valor (ex.: "💬 _{comentario}_" sem comentário) são retiradas,
+  // junto com a formatação em volta; depois, linhas em branco repetidas viram uma só.
+  const lines = String(t.text || '').split('\n').filter((line) => {
+    const keys = [...line.matchAll(VAR_RE)].map((m) => m[1]).filter((k) => Object.hasOwn(v, k));
+    return !keys.length || keys.some((k) => String(v[k] ?? '').trim());
+  });
+  return lines.map((line) => fill(line, v)).filter((line, i, arr) => line.trim() || (i > 0 && arr[i - 1].trim())).join('\n').trim();
 }
 
 // Lista para a tela: tipos, variáveis com exemplo e o texto em uso.
@@ -161,6 +166,4 @@ function overview() {
   }));
 }
 
-const customized = () => all('SELECT kind, channel FROM message_templates');
-
-module.exports = { KINDS, FIELDS, current, validate, save, restore, fill, sampleVars, emailFor, whatsappFor, overview, customized };
+module.exports = { KINDS, FIELDS, current, validate, save, restore, fill, sampleVars, emailFor, whatsappFor, overview };

@@ -44,6 +44,13 @@ function destroySession(req, res) {
 
 function destroyUserSessions(userId) { run('DELETE FROM sessions WHERE user_id = ?', userId); }
 
+// Sessão ainda vale? (mesmas regras do requireUser: usuário ativo, tempo sem uso e tempo máximo do login).
+// Usada pelo canal de tempo real, que fica aberto sem novas requisições.
+function sessionValid(tokenHash, now = Date.now()) {
+  const s = get('SELECT s.created_at, s.last_seen_at, u.active FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ?', tokenHash);
+  return !!s && !!s.active && now - s.last_seen_at <= IDLE_MS && now - s.created_at <= ABSOLUTE_MS;
+}
+
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 const MFA_SETUP_ALLOWED = new Set(['GET /me', 'POST /mfa/setup', 'POST /mfa/enable', 'POST /logout']);
 
@@ -74,11 +81,6 @@ function requireUser(req, res, next) {
   next();
 }
 
-function requireAdmin(req, res, next) {
-  if (!req.user?.access?.isAdmin) throw new HttpError(403, 'Acesso restrito a administradores.');
-  next();
-}
-
 // Middleware do quiosque: token do dispositivo no cabeçalho Authorization.
 // A filial SEMPRE vem do dispositivo — nunca do que o tablet envia.
 function requireDevice(req, res, next) {
@@ -93,4 +95,4 @@ function requireDevice(req, res, next) {
   next();
 }
 
-module.exports = { createSession, destroySession, destroyUserSessions, requireUser, requireAdmin, requireDevice };
+module.exports = { createSession, destroySession, destroyUserSessions, sessionValid, requireUser, requireDevice };

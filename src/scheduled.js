@@ -11,7 +11,7 @@ const { branchRecipientList, whatsappRecipients } = require('./alerts');
 const whatsappQr = require('./whatsapp-qr');
 const templates = require('./templates');
 const { publicUrl } = require('./config');
-const { accessFor } = require('./permissions');
+const { accessFor, can } = require('./permissions');
 
 const fmtNps = (n) => (n === null || n === undefined ? '—' : n.toLocaleString('pt-BR', { maximumFractionDigits: 1 }));
 const pct = (v, t) => (t ? Math.round((v / t) * 100) + '%' : '—');
@@ -47,6 +47,11 @@ async function sendWeeklyReport({ force = false, now = Date.now() } = {}) {
     const scoped = !accessFor(r.user).scopeAll;
     if (scoped && !get('SELECT 1 FROM user_branches WHERE user_id = ?', r.user.id)) continue;
     const { buffer, stats } = await reportFor(r.user, period, 'Relatório automático');
+    // O PowerPoint só vai para quem pode exportá-lo no painel (e para os e-mails extras, definidos pelo administrador).
+    const withPptx = can(r.user, 'dashboard', 'pptx');
+    const tpl = templates.current('weekly', 'email');
+    const override = withPptx ? null : { subject: tpl.subject, title: tpl.title, button: tpl.button, footer: tpl.footer,
+      intro: tpl.intro.replace(/\s*O relatório completo em PowerPoint está anexado\.?/i, '').trim() || 'Resumo de {periodo}.' };
     const o = stats.overall;
     const open = get(`SELECT COUNT(*) AS n FROM cases c ${scoped ? 'JOIN user_branches ub ON ub.branch_id = c.branch_id AND ub.user_id = ?' : ''}
       WHERE c.status IN ('aberto','em_contato')`, ...(scoped ? [r.user.id] : [])).n;
@@ -58,10 +63,10 @@ async function sendWeeklyReport({ force = false, now = Date.now() } = {}) {
       rows: [['NPS', fmtNps(o.nps)], ['Respostas', String(stats.totalResponses)], ['Promotores', pct(o.promoters, o.total)],
         ['Detratores', pct(o.detractors, o.total)], ['Casos pendentes', String(open)],
         ...stats.ranking.slice(0, 5).map((b) => [`${b.position}º ${b.name}`, `NPS ${fmtNps(b.nps)}${b.goal !== null ? ` (meta ${b.goal})` : ''}`])],
-      buttonUrl: `${publicUrl}/admin/`,
+      buttonUrl: `${publicUrl}/admin/`, override,
     });
     if (queueEmail({ to: r.email, subject: m.subject, text: m.text, html: m.html, kind: 'weekly_report',
-      attachment: buffer, attachmentName: `relatorio-nps-${period.to}.pptx` })) sent++;
+      ...(withPptx ? { attachment: buffer, attachmentName: `relatorio-nps-${period.to}.pptx` } : {}) })) sent++;
   }
   audit(null, 'report.weekly_queued', { sent, period }, null);
   return { sent, period };

@@ -449,6 +449,7 @@
     return {
       uuid: state.uuid,
       surveyId: s.id,
+      surveyVersion: s.version, // o servidor compara com a versão atual (regras mudaram depois?)
       startedAt: state.startedAt,
       submittedAt: Date.now(),
       lang,

@@ -101,6 +101,12 @@ test('com respostas, as regras ainda podem mudar; a cópia leva as regras', asyn
   // Obrigatória do caminho: exigida de quem começou depois da mudança, não de quem começou antes.
   assert.equal((await send([[0, 7], [1, 'Bom']])).status, 400);
   assert.equal((await send([[0, 7], [1, 'Bom']], { startedAt: before, submittedAt: before + 30_000 })).status, 201);
+  // Tablet offline que ainda exibe a versão antiga: o cliente começou DEPOIS da mudança, mas na versão antiga.
+  const now = Date.now();
+  assert.equal((await send([[0, 7], [1, 'Bom']], { startedAt: now - 60_000, submittedAt: now, surveyVersion: before })).status, 201,
+    'vale a versão exibida, não o horário de início');
+  const version = get('SELECT updated_at AS v FROM surveys WHERE id = ?', survey).v;
+  assert.equal((await send([[0, 7], [1, 'Bom']], { surveyVersion: version })).status, 400, 'na versão atual a obrigatória é exigida');
   const dup = (await admin.req('POST', `/api/admin/surveys/${survey}/duplicate`)).json.id;
   const copy = (await admin.req('GET', `/api/admin/surveys/${dup}`)).json.questions;
   assert.deepEqual(copy.map((x) => x.jumps), q.map((x) => x.jumps));

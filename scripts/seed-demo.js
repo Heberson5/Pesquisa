@@ -6,6 +6,7 @@ const { get, run, tx } = require('../src/db');
 const { hashPassword, passwordPolicyError } = require('../src/security');
 const { encrypt, lookup } = require('../src/vault');
 const { GESTOR_DEFAULT } = require('../src/permissions');
+const { localDay } = require('../src/time');
 
 if (process.env.NODE_ENV === 'production') { console.error('seed:demo não pode rodar em produção.'); process.exit(1); }
 if (get('SELECT 1 FROM surveys LIMIT 1')) { console.error('O banco já possui dados; seed ignorado.'); process.exit(0); }
@@ -66,11 +67,12 @@ tx(() => {
       // ~30% das respostas vieram pelo QR Code; a maioria autorizou a localização (cidade/UF/região).
       const viaQr = Math.random() < 0.3;
       const place = viaQr && Math.random() < 0.75 ? PLACES[rnd(0, PLACES.length - 1)] : null;
-      const rid = run(`INSERT INTO responses (uuid, survey_id, branch_id, device_id, started_at, submitted_at, received_at, channel, geo_city, geo_uf, geo_region, geo_lat, geo_lng, device_label)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      const rid = run(`INSERT INTO responses (uuid, survey_id, branch_id, device_id, started_at, submitted_at, received_at, channel, geo_city, geo_uf, geo_region, geo_lat, geo_lng, device_label, local_day)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       crypto.randomUUID(), surveyId, b.id, viaQr ? null : devId, t - rnd(20, 90) * 1000, t, t, viaQr ? 'link' : 'tablet',
       place?.[0] ?? null, place?.[1] ?? null, place?.[2] ?? null, place?.[3] ?? null, place?.[4] ?? null,
-      viaQr ? ['iPhone · Safari', 'Android (celular) · Chrome', 'Android (celular) · Samsung Internet', 'iPhone · Instagram'][rnd(0, 3)] : (devName || null)).lastInsertRowid;
+      viaQr ? ['iPhone · Safari', 'Android (celular) · Chrome', 'Android (celular) · Samsung Internet', 'iPhone · Instagram'][rnd(0, 3)] : (devName || null),
+      localDay(t)).lastInsertRowid; // dia local já gravado: aparece nos filtros mesmo com o servidor rodando
       const happy = Math.random() * 100 < b.bias + 30;
       const score = happy ? rnd(8, 10) : rnd(2, 8);
       const nps0 = Math.max(0, Math.min(10, score + rnd(-1, 1)));

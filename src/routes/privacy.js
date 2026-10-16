@@ -12,7 +12,7 @@ const { isEmail } = require('../notify');
 const { rateLimiter } = require('../security');
 
 const router = express.Router();
-router.use(requireUser, need('cfg_lgpd', 'titular'), require('../live').afterWrite('respostas'), rateLimiter({ windowMs: 60_000, max: 30 }));
+router.use(requireUser, need('cfg_lgpd', 'titular'), rateLimiter({ windowMs: 60_000, max: 30 }));
 
 function matches(body) {
   const phone = body?.phone ? normPhone(str(body.phone, { field: 'telefone', max: 30 })) : null;
@@ -60,7 +60,8 @@ function anonymize(ids) {
   });
 }
 
-router.post('/erase', (req, res) => {
+// Só a exclusão muda as respostas: localizar e exportar não avisam os painéis abertos.
+router.post('/erase', require('../live').afterWrite('respostas'), (req, res) => {
   if (req.body?.confirm !== true) throw bad('Confirme a exclusão.');
   const { rows } = matches(req.body);
   anonymize(rows.map((r) => r.id));

@@ -37,8 +37,11 @@
     clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.add('hidden'), 4000);
   }
 
+  // Identifica esta aba nas gravações: o aviso de tempo real que volta da minha própria gravação não conta como
+  // "alteração em outro lugar" — mas a mesma pessoa em outra aba ou aparelho conta.
+  const TAB_ID = [...crypto.getRandomValues(new Uint8Array(12))].map((b) => b.toString(16).padStart(2, '0')).join('');
   async function api(path, opts = {}) {
-    const headers = { ...(opts.headers || {}) };
+    const headers = { ...(opts.headers || {}), 'X-Tab-Id': TAB_ID };
     let body = opts.body;
     if (body !== undefined && !(body instanceof Blob)) { headers['Content-Type'] = 'application/json'; body = JSON.stringify(body); }
     if (opts.method && opts.method !== 'GET') headers['X-CSRF-Token'] = csrf || '';
@@ -348,11 +351,13 @@
     permissoes: ['permissoes', 'usuarios'], configuracoes: ['configuracoes'], auditoria: '*', conta: ['conta'] };
   // Telas com formulário: se a pessoa já começou a mexer, não recarrega por cima — mostra um aviso com "Atualizar".
   const EDITING_PAGES = new Set(['configuracoes', 'permissoes', 'conta', 'pesquisas']);
-  let live = null; let livePending = false; let liveTimer = null; let refreshMe = false; let pageDirty = false;
+  let live = null; let livePending = false; let liveTimer = null; let refreshMe = false; let pageDirty = false; let liveFromOthers = false;
   function startLive() {
     if (live || typeof EventSource === 'undefined') return;
     live = new EventSource('/api/admin/events');
     live.addEventListener('change', (e) => { try { onLive(JSON.parse(e.data)); } catch { /* aviso inválido */ } });
+    // Canal fechado de vez (sessão expirou ou saiu em outra aba): confere a sessão, que leva ao login se preciso.
+    live.addEventListener('error', () => { if (live && live.readyState === 2) { live = null; api('/me').catch(() => {}); } });
   }
   function stopLive() { if (live) { live.close(); live = null; } }
   function onLive(d) {
@@ -362,6 +367,7 @@
     const [, name = 'dashboard'] = location.hash.split('/');
     const areas = LIVE_AREAS[name];
     if (areas && (areas === '*' || areas.includes(d.area))) livePending = true;
+    if (d.by !== TAB_ID) liveFromOthers = true; // a gravação feita nesta aba não é "alteração em outro lugar"
     clearTimeout(liveTimer);
     liveTimer = setTimeout(flushLive, 350);
   }
@@ -376,8 +382,13 @@
     if (!livePending) return;
     if (document.querySelector('.modal-bg')) return; // espera a janela fechar
     const [, name = 'dashboard'] = location.hash.split('/');
-    if (pageDirty && EDITING_PAGES.has(name)) { showLiveBanner(); return; }
-    livePending = false;
+    if (pageDirty && EDITING_PAGES.has(name)) {
+      // Formulário em edição: só avisa se outra pessoa mudou algo; a minha própria gravação já está na tela.
+      if (liveFromOthers) showLiveBanner(); else livePending = false;
+      liveFromOthers = false;
+      return;
+    }
+    livePending = false; liveFromOthers = false;
     await route({ soft: true });
   }
   // Mexer num formulário marca a tela como "em edição" (filtros não contam: eles já recarregam a tela).
