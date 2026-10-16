@@ -26,7 +26,8 @@ const SCREENS = [
   ['Permissões', 'permissoes'], ['Novo perfil', 'permissoes', clickText('button', 'Novo perfil')],
   ...['Identidade visual', 'Ícones do menu', 'Ícones das respostas', 'E-mail e WhatsApp', 'Modelos de mensagem', 'Alertas e relatórios', 'Segurança e LGPD']
     .map((t) => [`Configurações · ${t}`, 'configuracoes', async (p) => { await selectTab(p, t); }]),
-  ['Auditoria', 'auditoria'], ['Minha conta', 'conta'], ['Ativar 2FA', 'conta', clickText('button', 'Ativar 2FA')],
+  ['Auditoria', 'auditoria'], ['Ajuda', 'ajuda/qr-code'], ['Busca na ajuda', 'ajuda', async (p) => { await p.fill('.help-search input', 'whatsapp'); await p.waitForTimeout(500); }],
+  ['Novidades', 'novidades'], ['Minha conta', 'conta'], ['Ativar 2FA', 'conta', clickText('button', 'Ativar 2FA')],
 ];
 
 // Guias: no celular viram uma lista de seleção; em telas largas, botões.

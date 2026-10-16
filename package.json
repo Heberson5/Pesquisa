@@ -1,6 +1,6 @@
 {
   "name": "pesquisa-satisfacao",
-  "version": "0.1.0",
+  "version": "1.5.0",
   "private": true,
   "description": "Sistema de coleta de pesquisa de satisfação (NPS) multi-filial com modo quiosque para tablets",
   "main": "server.js",
@@ -14,7 +14,9 @@
     "create-admin": "node --disable-warning=ExperimentalWarning scripts/create-admin.js",
     "seed:demo": "node --disable-warning=ExperimentalWarning scripts/seed-demo.js",
     "test": "node --disable-warning=ExperimentalWarning --test tests/*.test.js",
-    "test:telas": "node --disable-warning=ExperimentalWarning scripts/check-responsive.js"
+    "test:telas": "node --disable-warning=ExperimentalWarning scripts/check-responsive.js",
+    "docs:prints": "node --disable-warning=ExperimentalWarning scripts/screenshots.js",
+    "docs:manual": "node scripts/build-docs.js"
   },
   "dependencies": {
     "baileys": "7.0.0-rc14",

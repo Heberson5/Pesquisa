@@ -274,6 +274,8 @@ db.exec(`CREATE TABLE IF NOT EXISTS roles (
   updated_at INTEGER NOT NULL
 );`);
 addColumnIfMissing('users', 'role_id', 'role_id INTEGER REFERENCES roles(id)');
+// Última versão cuja janela "O que há de novo" a pessoa já viu.
+addColumnIfMissing('users', 'last_seen_version', 'last_seen_version TEXT');
 // Sessão do WhatsApp conectado por QR Code (chaves da conexão), sempre criptografada.
 db.exec('CREATE TABLE IF NOT EXISTS wa_auth (k TEXT PRIMARY KEY, v TEXT NOT NULL);');
 // Textos editáveis de cada tipo de envio (e-mail e WhatsApp). Sem linha = texto padrão do sistema.

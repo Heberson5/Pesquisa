@@ -1,0 +1,90 @@
+[
+  {
+    "version": "1.5.0", "date": "2026-10-16",
+    "items": [
+      { "type": "novo", "title": "Perfis e permissões por menu", "image": "permissoes.jpg", "help": "permissoes",
+        "text": "Crie perfis como \"Supervisor regional\" e marque, em cada menu, o que o perfil pode ver, incluir, editar e excluir, além de ações específicas como exportar CSV ou ver o contato do cliente. O servidor confere tudo, e as mudanças vão para a auditoria." },
+      { "type": "novo", "title": "WhatsApp conectado pelo QR Code", "image": "config-envios.jpg", "help": "email-whatsapp",
+        "text": "Conecte o número da empresa lendo um QR Code, como no WhatsApp Web. Os alertas vão para várias pessoas, um por vez, com pausa sorteada de 15 a 60 segundos entre cada envio. A API oficial da Meta continua disponível." },
+      { "type": "novo", "title": "Textos das mensagens com prévia", "image": "config-modelos-whatsapp.jpg", "help": "modelos-mensagem",
+        "text": "Edite o texto de cada aviso, no e-mail e no WhatsApp, com variáveis como {filial} e {nota}, e veja na hora como a mensagem vai chegar." },
+      { "type": "novo", "title": "Foto em Minha conta", "image": "minha-conta.jpg", "help": "minha-conta",
+        "text": "Envie uma foto, recorte em círculo e ajuste o zoom. Ela aparece no menu, na lista de usuários e nos casos." },
+      { "type": "novo", "title": "Manual de ajuda e notas de versão", "image": "ajuda.jpg", "help": "como-funciona",
+        "text": "Menu Ajuda com artigos por assunto, busca e o botão \"?\" em cada tela. Cada pessoa vê os artigos das telas que pode abrir. As novidades de cada versão ficam neste menu." },
+      { "type": "melhoria", "title": "Prazos de guarda de até 10 anos", "image": "config-lgpd.jpg", "help": "lgpd", "highlight": true,
+        "text": "Comentários, contatos, localização e auditoria podem ser guardados por até 10 anos, escolhidos em anos. A localização ganhou prazo próprio. As notas continuam sem prazo, porque são a base dos relatórios." },
+      { "type": "melhoria", "title": "Todo o painel ajustado para celular", "image": "celular-configuracoes.jpg", "highlight": true,
+        "text": "No celular, as guias viram uma lista de seleção, as janelas ocupam a tela inteira com os botões sempre visíveis e os botões ficaram maiores para o toque. Um teste automático confere 31 telas em 360 px." },
+      { "type": "melhoria", "title": "2FA também para perfis que alteram o sistema",
+        "text": "Quando a empresa exige 2FA, ele vale para administradores e para qualquer perfil que possa alterar usuários, permissões ou configurações." },
+      { "type": "correcao", "title": "Prazo de \"10 anos\" apagava dados uns dias antes",
+        "text": "A limpeza automática contava meses de 30 dias. Agora usa o mês médio do calendário, então 10 anos são 10 anos." },
+      { "type": "correcao", "title": "\"null\" aparecia em Configurações e no QR Code",
+        "text": "Um texto \"null\" aparecia acima das guias de Configurações e na janela do QR Code de uma filial ainda sem link." },
+      { "type": "correcao", "title": "Esc não fechava as janelas",
+        "text": "A tecla Esc agora fecha a janela aberta." }
+    ]
+  },
+  {
+    "version": "1.4.0", "date": "2026-10-10",
+    "items": [
+      { "type": "novo", "title": "Fuso horário por filial", "image": "filial-editar.jpg", "help": "filiais",
+        "text": "Cada filial usa o fuso informado pelo tablet, um fuso fixo ou o fuso da empresa. Horário de funcionamento, campanhas e alertas seguem o fuso da filial." }
+    ]
+  },
+  {
+    "version": "1.3.0", "date": "2026-10-05",
+    "items": [
+      { "type": "novo", "title": "Localização das respostas pelo QR Code", "help": "qr-code",
+        "text": "Com a autorização do cliente, o sistema grava cidade, estado e região aproximados, sem serviços externos. Aparece em Respostas, nos filtros e no quadro \"Origem das respostas\"." },
+      { "type": "novo", "title": "E-mail e WhatsApp configurados pelo painel", "help": "email-whatsapp",
+        "text": "Servidor de e-mail e WhatsApp da Meta configurados na tela, com senha e token criptografados e botões de teste." },
+      { "type": "melhoria", "title": "Painel no celular", "image": "celular-painel.jpg",
+        "text": "No celular, o menu vira uma gaveta e as tabelas viram cartões." },
+      { "type": "melhoria", "title": "Auditoria em português simples", "help": "auditoria",
+        "text": "Cada ação aparece como uma frase, com filtros por tipo e destaque para o que merece atenção." },
+      { "type": "melhoria", "title": "Respostas com localização e dispositivo", "help": "respostas",
+        "text": "Novas colunas mostram onde a resposta foi dada e em qual tablet ou tipo de celular." },
+      { "type": "melhoria", "title": "Tela do tablet sempre acesa, com escurecimento",
+        "text": "O tablet fica aceso e escurece depois de um tempo sem toque, para economizar bateria." },
+      { "type": "melhoria", "title": "Exclusão de respostas só para administrador",
+        "text": "Apagar respostas passou a ser restrito e registrado na auditoria." },
+      { "type": "correcao", "title": "Código de pareamento do tablet sumia",
+        "text": "O código agora fica na tela pelos 15 minutos de validade." }
+    ]
+  },
+  {
+    "version": "1.2.0", "date": "2026-10-04",
+    "items": [
+      { "type": "novo", "title": "Implantação em produção",
+        "text": "Imagem Docker endurecida, HTTPS automático (Caddy) ou nginx, backup diário e testes automáticos a cada alteração." },
+      { "type": "melhoria", "title": "Revisão de segurança",
+        "text": "Revisão completa de segurança e da documentação de implantação." }
+    ]
+  },
+  {
+    "version": "1.1.0", "date": "2026-10-04",
+    "items": [
+      { "type": "novo", "title": "Casos de clientes insatisfeitos", "image": "caso-detalhe.jpg", "help": "casos",
+        "text": "Cada nota de 0 a 6 abre um caso com status, responsável e histórico, e avisa a filial por e-mail, webhook ou WhatsApp." },
+      { "type": "novo", "title": "QR Code por filial", "image": "filial-qrcode.jpg", "help": "qr-code",
+        "text": "O cliente responde no próprio celular. Cartaz pronto para imprimir e proteção contra abuso." },
+      { "type": "novo", "title": "Verificação em duas etapas e recuperação de senha", "help": "entrar-2fa",
+        "text": "Código do aplicativo autenticador, 10 códigos de recuperação e \"Esqueci minha senha\" por e-mail." },
+      { "type": "novo", "title": "Campanhas, perguntas condicionais e idiomas", "help": "campanhas",
+        "text": "Pesquisas temporárias por período, perguntas que aparecem conforme a resposta e pesquisas em português, inglês e espanhol." },
+      { "type": "novo", "title": "Relatório semanal, metas e ranking", "help": "alertas-relatorios",
+        "text": "PowerPoint semanal por e-mail, meta de NPS por filial e ranking na visão geral." },
+      { "type": "novo", "title": "LGPD", "help": "lgpd",
+        "text": "Aviso de privacidade, contato só com consentimento, pedidos do titular e limpeza automática por prazo." }
+    ]
+  },
+  {
+    "version": "1.0.0", "date": "2026-10-03",
+    "items": [
+      { "type": "novo", "title": "Primeira versão", "help": "como-funciona",
+        "text": "Pesquisa de satisfação multi-filial com tablets em modo quiosque, NPS, painel com filtros, exportação em CSV e PowerPoint, perfis de administrador e gestor de filial e auditoria." }
+    ]
+  }
+]

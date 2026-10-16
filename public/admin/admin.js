@@ -226,10 +226,12 @@
   let displays = {};
   let contactModes = {};
   let permCatalog = null;
+  let appVersion = '';
+  const hasNews = () => !!me && me.lastSeenVersion !== appVersion;
   async function loadMe() {
     const r = await api('/me');
     if (r.mfaSetupRequired) { csrf = r.csrf; showMfaSetup(true); throw new Error('401'); }
-    me = r.user; csrf = r.csrf; questionTypes = r.questionTypes; displays = r.displays; settings = r.settings; contactModes = r.contactModes; permCatalog = r.permCatalog;
+    me = r.user; csrf = r.csrf; questionTypes = r.questionTypes; displays = r.displays; settings = r.settings; contactModes = r.contactModes; permCatalog = r.permCatalog; appVersion = r.appVersion;
     applyBranding({ companyName: settings.companyName, primaryColor: settings.primaryColor, accentColor: settings.accentColor,
       logoUrl: settings.logoMediaId ? '/media/' + settings.logoMediaId : null });
   }
@@ -247,8 +249,14 @@
     ['permissoes', 'Permissões', pagePermissions, () => can('permissoes'), 'Administração'],
     ['configuracoes', 'Configurações', pageSettings, () => CFG_GROUPS.some((g) => can(g)), 'Administração'],
     ['auditoria', 'Auditoria', pageAudit, () => can('auditoria'), 'Administração'],
-    ['conta', 'Minha conta', pageAccount, null, 'Administração'],
+    ['ajuda', 'Ajuda', pageHelp, null, 'Suporte'],
+    ['novidades', 'Novidades', pageNews, null, 'Suporte'],
+    ['conta', 'Minha conta', pageAccount, null, 'Suporte'],
   ];
+  // Artigo do manual de cada tela (botão "?").
+  const HELP_FOR = { dashboard: 'visao-geral', casos: 'casos', respostas: 'respostas', pesquisas: 'pesquisas', filiais: 'filiais', dispositivos: 'tablets',
+    usuarios: 'usuarios', permissoes: 'permissoes', auditoria: 'auditoria', conta: 'minha-conta', novidades: 'como-funciona',
+    configuracoes: () => ({ identidade: 'identidade', menu: 'identidade', respostas: 'identidade', envios: 'email-whatsapp', modelos: 'modelos-mensagem', alertas: 'alertas-relatorios', seguranca: 'lgpd' })[settingsTab] || 'identidade' };
   const visiblePages = () => PAGES.filter((p) => !p[3] || p[3]());
   const menuIcon = (id) => settings?.menuIcons?.[id] || window.Icons.MENU_DEFAULTS[id];
 
@@ -275,7 +283,8 @@
           branding.logoUrl ? null : h('span', { class: 'brand-name' }, branding.companyName)),
         groups.map((g) => h('div', { class: 'nav' }, h('div', { class: 'nav-label' }, g),
           visible.filter((p) => p[4] === g).map(([id, label]) => h('a', { href: '#/' + id, class: id === active ? 'active' : null, title: label,
-            onclick: () => shell.classList.remove('mobile-open') }, icon(menuIcon(id)), h('span', {}, label))))),
+            onclick: () => shell.classList.remove('mobile-open') }, icon(menuIcon(id)), h('span', {}, label),
+            id === 'novidades' && hasNews() ? h('span', { class: 'nav-badge', title: 'Versão nova' }, 'novo') : null)))),
         h('div', { class: 'spacer' }),
         h('div', { class: 'side-foot' },
           h('button', { class: 'side-btn', title: dark ? 'Tema claro' : 'Tema escuro', onclick: () => { prefs.set('theme', dark ? 'light' : 'dark'); applyTheme(); route(); } },
@@ -284,14 +293,24 @@
           h('div', { class: 'who', title: me.name }, avatar(me),
             h('div', { class: 'who-text' }, h('b', {}, me.name), h('span', {}, me.access.roleName))),
           h('button', { class: 'side-btn', title: 'Sair', onclick: async () => { await api('/logout', { method: 'POST' }).catch(() => {}); me = null; showLogin(); } },
-            icon('logout'), h('span', {}, 'Sair')))),
+            icon('logout'), h('span', {}, 'Sair')),
+          h('a', { class: 'version', href: '#/novidades', title: 'Notas de versão' }, 'v' + appVersion))),
       h('div', {},
         h('div', { class: 'mobile-bar' },
           h('button', { class: 'btn secondary icon-only', 'aria-label': 'Abrir menu', onclick: () => shell.classList.add('mobile-open') }, icon('menu')),
-          h('b', {}, branding.companyName)),
-        h('main', { class: 'main' }, content)));
+          h('b', {}, branding.companyName),
+          helpLink(active, 'mobile-help')),
+        h('main', { class: 'main' }, content, helpLink(active, 'help-fab'))));
     shell.addEventListener('click', (e) => { if (e.target === shell) shell.classList.remove('mobile-open'); });
     root.replaceChildren(shell);
+  }
+
+  // Botão "?": abre o artigo do manual sobre a tela atual.
+  function helpLink(active, cls) {
+    const target = HELP_FOR[active];
+    if (!target) return null;
+    return h('a', { class: cls, title: 'Ajuda desta tela', 'aria-label': 'Ajuda desta tela',
+      onclick: (e) => { e.preventDefault(); location.hash = '#/ajuda/' + (typeof target === 'function' ? target() : target); } , href: '#/ajuda' }, icon('help', 20));
   }
 
   async function route() {
@@ -305,6 +324,7 @@
     const container = h('div', {}, h('p', { class: 'muted' }, 'Carregando…'));
     layout(page[0], container);
     try { container.replaceChildren(await page[2](param)); } catch (e) { if (e.message !== '401') container.replaceChildren(h('div', { class: 'card bad' }, e.message)); }
+    maybeShowNews();
   }
   window.addEventListener('hashchange', route);
 
@@ -1921,6 +1941,153 @@
       h('div', { class: 'card filters' }, h('label', { class: 'f' }, 'Tipo', cat), h('label', { class: 'f' }, 'Buscar', search),
         h('label', { class: 'chk' }, onlyAlerts, 'Mostrar só o que merece atenção')),
       list);
+  }
+
+  // ------------------------------------------------------------ ajuda (manual) e novidades (notas de versão)
+  // Os textos ficam em public/admin/ajuda/*.md e novidades.json. O Markdown é convertido em elementos da página
+  // (nunca em HTML livre): títulos, listas, dicas, imagens do próprio manual e links internos.
+  const helpCache = {};
+  async function helpIndex() {
+    if (!helpCache.index) helpCache.index = await fetch('/admin/ajuda/index.json', { cache: 'no-cache' }).then((r) => r.json());
+    return helpCache.index.filter((a) => !a.perm || a.perm.some((m) => can(m)));
+  }
+  async function helpText(slug) {
+    if (!helpCache[slug]) helpCache[slug] = await fetch(`/admin/ajuda/${slug}.md`, { cache: 'no-cache' }).then((r) => (r.ok ? r.text() : ''));
+    return helpCache[slug];
+  }
+  // Texto em linha: **negrito**, `código`, [texto](#/ajuda/artigo) e links https.
+  function mdInline(text, mark) {
+    const out = [];
+    const re = /(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\((?:#\/[a-z0-9/_-]*|https:\/\/[^)\s]+)\))/g;
+    let last = 0;
+    const plain = (t) => {
+      if (!mark) return [t];
+      const parts = []; const low = t.toLowerCase(); let i = 0; let j;
+      while (mark && (j = low.indexOf(mark, i)) !== -1) { parts.push(t.slice(i, j), h('mark', {}, t.slice(j, j + mark.length))); i = j + mark.length; }
+      parts.push(t.slice(i)); return parts;
+    };
+    for (const m of text.matchAll(re)) {
+      if (m.index > last) out.push(...plain(text.slice(last, m.index)));
+      const t = m[0];
+      if (t.startsWith('**')) out.push(h('b', {}, ...plain(t.slice(2, -2))));
+      else if (t.startsWith('`')) out.push(h('span', { class: 'kbd' }, t.slice(1, -1)));
+      else { const [, label, url] = /^\[([^\]]+)\]\((.+)\)$/.exec(t); out.push(h('a', url.startsWith('https:') ? { href: url, target: '_blank', rel: 'noopener noreferrer' } : { href: url }, label)); }
+      last = m.index + t.length;
+    }
+    if (last < text.length) out.push(...plain(text.slice(last)));
+    return out;
+  }
+  function mdRender(md, mark) {
+    const box = h('div', { class: 'md' });
+    let list = null; let para = [];
+    const flush = () => { if (para.length) { box.append(h('p', {}, mdInline(para.join(' '), mark))); para = []; } };
+    for (const raw of md.split('\n')) {
+      const line = raw.trimEnd();
+      let m;
+      if (!line.trim()) { flush(); list = null; continue; }
+      if ((m = /^(#{2,3}) (.+)$/.exec(line))) { flush(); list = null; box.append(h(m[1].length === 2 ? 'h3' : 'h4', {}, mdInline(m[2], mark))); continue; }
+      if ((m = /^!\[([^\]]*)\]\((img\/[a-z0-9-]+\.(?:jpg|png))\)$/.exec(line))) {
+        flush(); list = null;
+        box.append(h('figure', {}, h('img', { src: '/admin/ajuda/' + m[2], alt: m[1], loading: 'lazy' }), m[1] ? h('figcaption', {}, m[1]) : null)); continue;
+      }
+      if ((m = /^> (.+)$/.exec(line))) { flush(); list = null; box.append(h('div', { class: 'tip' }, mdInline(m[1], mark))); continue; }
+      if ((m = /^(-|\d+\.) (.+)$/.exec(line))) {
+        flush();
+        const tag = m[1] === '-' ? 'ul' : 'ol';
+        if (!list || list.tagName.toLowerCase() !== tag) { list = h(tag, { class: tag === 'ol' ? 'steps-n' : '' }); box.append(list); }
+        list.append(h('li', {}, h('span', {}, mdInline(m[2], mark)))); continue;
+      }
+      list = null; para.push(line.trim());
+    }
+    flush();
+    return box;
+  }
+
+  let helpQuery = '';
+  async function pageHelp(slug) {
+    const index = await helpIndex();
+    const texts = Object.fromEntries(await Promise.all(index.map(async (a) => [a.slug, await helpText(a.slug)])));
+    const current = index.find((a) => a.slug === slug) || index[0];
+    const search = h('input', { type: 'search', value: helpQuery, placeholder: 'Buscar no manual (ex.: QR Code, senha, WhatsApp)', 'aria-label': 'Buscar no manual' });
+    const nav = h('nav', { class: 'help-nav', 'aria-label': 'Artigos do manual' });
+    const article = h('article', { class: 'help-article card' });
+    const results = h('div');
+    const plainText = (md) => md.replace(/!\[[^\]]*\]\([^)]*\)/g, '').replace(/[#*`>]/g, '').replace(/\[([^\]]+)\]\([^)]*\)/g, '$1');
+    const drawNav = () => {
+      const groups = [...new Set(index.map((a) => a.group))];
+      nav.replaceChildren(...groups.map((g) => h('div', {}, h('div', { class: 'nav-label' }, g),
+        index.filter((a) => a.group === g).map((a) => h('a', { href: '#/ajuda/' + a.slug, class: a.slug === current.slug ? 'active' : null }, a.title)))));
+    };
+    const drawArticle = () => {
+      const who = !current.perm ? 'Todos os perfis' : 'Quem tem acesso a ' + current.perm.map((m) => permCatalog?.modules.find((x) => x.key === m)?.label || m).join(' ou ');
+      article.replaceChildren(h('div', { class: 'row small muted' }, h('span', { class: 'badge' }, current.group), h('span', {}, who), h('span', {}, `· atualizado na versão ${current.updated}`)),
+        h('h2', { class: 'help-title' }, current.title), mdRender(texts[current.slug], helpQuery.trim().toLowerCase() || null));
+    };
+    const drawResults = () => {
+      const q = search.value.trim().toLowerCase();
+      helpQuery = search.value;
+      if (q.length < 2) { results.replaceChildren(); article.classList.remove('hidden'); drawArticle(); return; }
+      const found = index.map((a) => {
+        const t = plainText(texts[a.slug]); const low = t.toLowerCase(); const at = low.indexOf(q);
+        const inTitle = a.title.toLowerCase().includes(q);
+        if (at === -1 && !inTitle) return null;
+        const start = Math.max(0, at - 60);
+        return { a, snippet: at === -1 ? t.slice(0, 140) : (start ? '…' : '') + t.slice(start, at + q.length + 90) + '…', score: inTitle ? 0 : 1 };
+      }).filter(Boolean).sort((x, y) => x.score - y.score);
+      article.classList.add('hidden');
+      results.replaceChildren(h('div', { class: 'card' }, h('h2', {}, `${found.length} ${found.length === 1 ? 'artigo encontrado' : 'artigos encontrados'} para "${search.value.trim()}"`),
+        found.length ? found.map(({ a, snippet }) => h('a', { class: 'help-hit', href: '#/ajuda/' + a.slug }, h('b', {}, mdInline(a.title, q)), h('span', { class: 'small muted' }, mdInline(snippet.replace(/\s+/g, ' '), q))))
+          : h('p', { class: 'muted' }, 'Nada encontrado. Tente outra palavra, como "tablet", "relatório" ou "senha".')));
+    };
+    search.addEventListener('input', drawResults);
+    drawNav(); drawResults();
+    return h('div', {}, pageHead('Ajuda', 'Manual do painel, por assunto. Cada pessoa vê os artigos das telas que pode abrir.'),
+      h('div', { class: 'help-search card' }, icon('search', 18), search),
+      h('div', { class: 'help-layout' }, nav, h('div', {}, results, article)));
+  }
+
+  let newsCache = null;
+  const NEWS_TYPE = { novo: ['Novo', 'ok'], melhoria: ['Melhoria', 'info'], correcao: ['Correção', 'warn'] };
+  async function newsData() { if (!newsCache) newsCache = await fetch('/admin/novidades.json', { cache: 'no-cache' }).then((r) => r.json()); return newsCache; }
+  let newsFilter = '';
+  async function pageNews() {
+    const versions = await newsData();
+    const list = h('div');
+    const chips = h('div', { class: 'row chips', role: 'group', 'aria-label': 'Filtrar por tipo' });
+    const draw = () => {
+      chips.replaceChildren(...[['', 'Tudo'], ...Object.entries(NEWS_TYPE).map(([k, [l]]) => [k, l])].map(([k, l]) =>
+        h('button', { class: 'chip' + (newsFilter === k ? ' active' : ''), 'aria-pressed': String(newsFilter === k), onclick: () => { newsFilter = k; draw(); } }, l)));
+      list.replaceChildren(...versions.map((v) => {
+        const items = v.items.filter((i) => !newsFilter || i.type === newsFilter);
+        if (!items.length) return null;
+        return h('section', { class: 'release' },
+          h('div', { class: 'release-head' }, h('h2', {}, 'Versão ' + v.version), h('span', { class: 'small muted' }, v.date.split('-').reverse().join('/')),
+            v.version === appVersion ? h('span', { class: 'badge ok' }, 'versão atual') : null),
+          h('div', { class: 'release-items' }, items.map((i) => h('div', { class: 'card release-item' + (i.image ? '' : ' no-img') },
+            h('div', {}, h('span', { class: 'badge ' + NEWS_TYPE[i.type][1] }, NEWS_TYPE[i.type][0]), h('h3', {}, i.title), h('p', { class: 'small muted' }, i.text),
+              i.help ? h('a', { class: 'small', href: '#/ajuda/' + i.help }, 'Como usar →') : null),
+            i.image ? h('img', { src: '/admin/ajuda/img/' + i.image, alt: 'Print: ' + i.title, loading: 'lazy' }) : null))));
+      }).filter(Boolean));
+    };
+    draw();
+    return h('div', {}, pageHead('Novidades', 'O que mudou em cada versão do sistema'), chips, list);
+  }
+
+  // Janela "O que há de novo": aparece uma vez por pessoa a cada versão nova.
+  let newsShown = false;
+  async function maybeShowNews() {
+    if (newsShown || !hasNews() || location.hash.startsWith('#/novidades')) return;
+    newsShown = true;
+    try {
+      const v = (await newsData()).find((x) => x.version === appVersion);
+      await api('/me/seen-version', { method: 'POST' });
+      me.lastSeenVersion = appVersion;
+      if (!v || document.querySelector('.modal-bg')) return;
+      const close = modal(`O que há de novo na versão ${v.version}`, h('div', { class: 'whats-new' },
+        h('ul', {}, v.items.filter((i) => i.type === 'novo' || i.highlight).slice(0, 6).map((i) => h('li', {}, h('b', {}, i.title), h('div', { class: 'small muted' }, i.text))))),
+      [{ label: 'Ver todas as novidades', onClick: (c) => { c(); location.hash = '#/novidades'; } }]);
+      void close;
+    } catch { /* sem novidades: segue normalmente */ }
   }
 
   // ------------------------------------------------------------ recorte da foto de perfil

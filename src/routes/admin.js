@@ -42,12 +42,14 @@ router.post('/logout', (req, res) => {
   res.json({ ok: true });
 });
 
+const APP_VERSION = require('../../package.json').version;
+
 router.get('/me', (req, res) => {
-  const u = get('SELECT totp_enabled, notify_detractors, notify_reports, notify_offline, whatsapp FROM users WHERE id = ?', req.user.id);
+  const u = get('SELECT totp_enabled, notify_detractors, notify_reports, notify_offline, whatsapp, last_seen_version FROM users WHERE id = ?', req.user.id);
   res.json({ user: { id: req.user.id, name: req.user.name, email: req.user.email, role: req.user.role, access: perm.publicAccess(req.user), mfaEnabled: !!u.totp_enabled, whatsapp: u.whatsapp || '',
-    photo_at: photoAt(req.user.id),
+    photo_at: photoAt(req.user.id), lastSeenVersion: u.last_seen_version || null,
     notify: { detractors: !!u.notify_detractors, reports: !!u.notify_reports, offline: !!u.notify_offline } },
-  mfaSetupRequired: req.user.mfaSetupRequired, csrf: req.user.csrf,
+  mfaSetupRequired: req.user.mfaSetupRequired, csrf: req.user.csrf, appVersion: APP_VERSION,
   questionTypes: QUESTION_TYPES, displays: DISPLAYS, langs: LANG_LABELS, contactModes: CONTACT_MODES, permCatalog: perm.catalog(), settings: req.user.mfaSetupRequired ? null : settingsFor(req.user) });
 });
 
@@ -67,6 +69,12 @@ function settingsFor(user) {
   for (const [g, list] of Object.entries(SETTINGS_GROUPS)) if (can(user, g, 'ver')) list.forEach((k) => keys.add(k));
   return Object.fromEntries(Object.entries(s).filter(([k]) => keys.has(k)));
 }
+
+// A pessoa viu a janela "O que há de novo" desta versão (não aparece de novo).
+router.post('/me/seen-version', (req, res) => {
+  run('UPDATE users SET last_seen_version = ? WHERE id = ?', APP_VERSION, req.user.id);
+  res.json({ ok: true, version: APP_VERSION });
+});
 
 // Preferências de notificação do próprio usuário.
 router.put('/me/notifications', (req, res) => {
