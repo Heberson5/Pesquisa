@@ -11,7 +11,7 @@ const { decrypt } = require('../vault');
 const { need, can, accessFor } = require('../permissions');
 
 const router = express.Router();
-router.use(requireUser, need('casos', 'ver'));
+router.use(requireUser, need('casos', 'ver'), require('../live').afterWrite('casos'));
 
 const STATUS = { aberto: 'Aberto', em_contato: 'Em contato', resolvido: 'Resolvido', sem_retorno: 'Sem retorno' };
 const CLOSED = new Set(['resolvido', 'sem_retorno']);

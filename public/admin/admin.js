@@ -68,7 +68,7 @@
     const bg = h('div', { class: 'modal-bg', onclick: (e) => { if (e.target === bg) close(); } });
     // Esc fecha a janela (só a de cima, se houver mais de uma).
     const onKey = (e) => { if (e.key === 'Escape' && document.querySelector('.modal-bg:last-of-type') === bg) close(); };
-    const close = () => { bg.remove(); document.removeEventListener('keydown', onKey); };
+    const close = () => { bg.remove(); document.removeEventListener('keydown', onKey); if (livePending) setTimeout(flushLive, 50); };
     document.addEventListener('keydown', onKey);
     bg.append(h('div', { class: 'modal', role: 'dialog', 'aria-modal': 'true' },
       h('h2', {}, title), content,
@@ -129,6 +129,7 @@
   }
 
   async function showLogin(msg) {
+    stopLive();
     const email = h('input', { type: 'email', required: true, autocomplete: 'username', placeholder: 'seu@email.com' });
     const pw = h('input', { type: 'password', required: true, autocomplete: 'current-password', placeholder: '••••••••••' });
     const { form, err } = formOf([h('label', { class: 'f' }, 'E-mail', email), h('label', { class: 'f' }, 'Senha', pw)], 'Entrar', async () => {
@@ -232,6 +233,7 @@
   async function loadMe() {
     const r = await api('/me');
     if (r.mfaSetupRequired) { csrf = r.csrf; showMfaSetup(true); throw new Error('401'); }
+    startLive();
     me = r.user; csrf = r.csrf; questionTypes = r.questionTypes; displays = r.displays; settings = r.settings; contactModes = r.contactModes; permCatalog = r.permCatalog; appVersion = r.appVersion;
     applyBranding({ companyName: settings.companyName, primaryColor: settings.primaryColor, accentColor: settings.accentColor,
       logoUrl: settings.logoMediaId ? '/media/' + settings.logoMediaId : null });
@@ -314,19 +316,78 @@
       onclick: (e) => { e.preventDefault(); location.hash = '#/ajuda/' + (typeof target === 'function' ? target() : target); } , href: '#/ajuda' }, icon('help', 20));
   }
 
-  async function route() {
-    document.querySelectorAll('.modal-bg').forEach((m) => m.remove()); // janela aberta não sobrevive à troca de página
+  // soft = atualização em tempo real: monta a página nova por trás e troca de uma vez (sem "Carregando…" nem pulo de rolagem).
+  async function route({ soft = false } = {}) {
+    if (!soft) document.querySelectorAll('.modal-bg').forEach((m) => m.remove()); // janela aberta não sobrevive à troca de página
     const reset = /^#\/redefinir\/([A-Za-z0-9_-]{20,100})$/.exec(location.hash);
     if (reset) return showReset(reset[1]);
     if (!me) { try { await loadMe(); } catch { return; } }
     const [, name = 'dashboard', param] = location.hash.split('/');
     const pages = visiblePages();
     const page = pages.find((p) => p[0] === name) || pages[0];
+    pageDirty = false; hideLiveBanner();
+    if (soft) {
+      const y = window.scrollY;
+      try { const content = await page[2](param); layout(page[0], h('div', {}, content)); window.scrollTo(0, y); } catch { /* fica a tela atual */ }
+      return;
+    }
     const container = h('div', {}, h('p', { class: 'muted' }, 'Carregando…'));
     layout(page[0], container);
     try { container.replaceChildren(await page[2](param)); } catch (e) { if (e.message !== '401') container.replaceChildren(h('div', { class: 'card bad' }, e.message)); }
     maybeShowNews();
   }
+
+  // ------------------------------------------------------------ tempo real
+  // O servidor avisa (Server-Sent Events) quando algo muda: cadastro ou alteração feita por qualquer pessoa,
+  // resposta nova do tablet ou do QR Code, caso aberto. A tela atual busca os dados de novo, se depender da área.
+  const LIVE_AREAS = { dashboard: ['respostas', 'filiais', 'pesquisas'], casos: ['casos', 'respostas', 'usuarios'], respostas: ['respostas', 'filiais', 'pesquisas'],
+    pesquisas: ['pesquisas', 'filiais'], filiais: ['filiais', 'pesquisas', 'tablets'], dispositivos: ['tablets', 'filiais'], usuarios: ['usuarios', 'permissoes', 'filiais'],
+    permissoes: ['permissoes', 'usuarios'], configuracoes: ['configuracoes'], auditoria: '*', conta: ['conta'] };
+  // Telas com formulário: se a pessoa já começou a mexer, não recarrega por cima — mostra um aviso com "Atualizar".
+  const EDITING_PAGES = new Set(['configuracoes', 'permissoes', 'conta', 'pesquisas']);
+  let live = null; let livePending = false; let liveTimer = null; let refreshMe = false; let pageDirty = false;
+  function startLive() {
+    if (live || typeof EventSource === 'undefined') return;
+    live = new EventSource('/api/admin/events');
+    live.addEventListener('change', (e) => { try { onLive(JSON.parse(e.data)); } catch { /* aviso inválido */ } });
+  }
+  function stopLive() { if (live) { live.close(); live = null; } }
+  function onLive(d) {
+    if (d.area === 'filiais') cache.branches = null;
+    if (d.area === 'pesquisas') cache.surveys = null;
+    if (['permissoes', 'usuarios', 'conta', 'configuracoes'].includes(d.area)) refreshMe = true; // o meu perfil ou a marca podem ter mudado
+    const [, name = 'dashboard'] = location.hash.split('/');
+    const areas = LIVE_AREAS[name];
+    if (areas && (areas === '*' || areas.includes(d.area))) livePending = true;
+    clearTimeout(liveTimer);
+    liveTimer = setTimeout(flushLive, 350);
+  }
+  async function flushLive() {
+    if (!me) return;
+    if (refreshMe) {
+      refreshMe = false;
+      const before = JSON.stringify([me.access, settings?.companyName, settings?.primaryColor, settings?.logoMediaId]);
+      try { await loadMe(); } catch { return; }
+      if (JSON.stringify([me.access, settings?.companyName, settings?.primaryColor, settings?.logoMediaId]) !== before) livePending = true;
+    }
+    if (!livePending) return;
+    if (document.querySelector('.modal-bg')) return; // espera a janela fechar
+    const [, name = 'dashboard'] = location.hash.split('/');
+    if (pageDirty && EDITING_PAGES.has(name)) { showLiveBanner(); return; }
+    livePending = false;
+    await route({ soft: true });
+  }
+  // Mexer num formulário marca a tela como "em edição" (filtros não contam: eles já recarregam a tela).
+  document.addEventListener('input', (e) => { if (e.target.closest?.('main') && !e.target.closest('.filters, .help-search')) pageDirty = true; });
+  function showLiveBanner() {
+    if (document.querySelector('.live-banner')) return;
+    document.body.append(h('div', { class: 'live-banner', role: 'status' }, icon('refresh', 16), 'Há alterações feitas em outro lugar.',
+      h('button', { class: 'btn sm', onclick: () => { livePending = false; route({ soft: true }); } }, 'Atualizar'),
+      h('button', { class: 'btn secondary sm', onclick: hideLiveBanner }, 'Depois')));
+  }
+  function hideLiveBanner() { document.querySelector('.live-banner')?.remove(); }
+  // Tablets: online/offline muda com o tempo, sem gravação; a tela confere a cada minuto.
+  setInterval(() => { if (me && location.hash.startsWith('#/dispositivos')) { livePending = true; flushLive(); } }, 60_000);
   window.addEventListener('hashchange', route);
 
   // No celular as linhas das tabelas viram cartões; cada célula ganha o nome da coluna (CSS usa data-label).

@@ -35,6 +35,10 @@ const PAIR_TTL_MS = 15 * 60_000;
 const loginLimiter = rateLimiter({ windowMs: 15 * 60_000, max: 20, message: 'Muitas tentativas. Aguarde 15 minutos.' });
 
 router.use(requireUser);
+// Tempo real: avisa os outros painéis abertos quando algo é gravado; /events é o canal de avisos.
+const live = require('../live');
+router.use(live.afterWrite());
+router.get('/events', live.subscribe);
 
 router.post('/logout', (req, res) => {
   destroySession(req, res);

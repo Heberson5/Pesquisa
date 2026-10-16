@@ -12,7 +12,7 @@ const { isEmail } = require('../notify');
 const { rateLimiter } = require('../security');
 
 const router = express.Router();
-router.use(requireUser, need('cfg_lgpd', 'titular'), rateLimiter({ windowMs: 60_000, max: 30 }));
+router.use(requireUser, need('cfg_lgpd', 'titular'), require('../live').afterWrite('respostas'), rateLimiter({ windowMs: 60_000, max: 30 }));
 
 function matches(body) {
   const phone = body?.phone ? normPhone(str(body.phone, { field: 'telefone', max: 30 })) : null;

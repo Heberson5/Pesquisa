@@ -187,7 +187,13 @@ function saveResponse({ branch, deviceId = null, deviceLabel = null, channel, bo
     }
     return { created: true, id: Number(r.lastInsertRowid) };
   });
-  if (result.created) alerts.onResponse(result.id);
+  if (result.created) {
+    const caseId = alerts.onResponse(result.id);
+    // Tempo real: os painéis que enxergam esta filial atualizam Visão geral, Respostas e Casos.
+    const live = require('./live');
+    live.publish('respostas', { branchId: branch.id });
+    if (caseId) live.publish('casos', { branchId: branch.id });
+  }
   return result;
 }
 
