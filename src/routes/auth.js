@@ -10,7 +10,8 @@ const totp = require('../totp');
 const { encrypt, decrypt, lookup } = require('../vault');
 const { isPrivileged } = require('../permissions');
 const { getSettings } = require('../settings');
-const { queueEmail, renderEmail } = require('../notify');
+const { queueEmail } = require('../notify');
+const templates = require('../templates');
 const { publicUrl } = require('../config');
 
 const router = express.Router();
@@ -107,14 +108,9 @@ router.post('/password/forgot', forgotLimiter, forgotPerEmail, (req, res) => {
     const token = randomToken(32);
     run('DELETE FROM password_resets WHERE user_id = ? OR expires_at < ?', user.id, Date.now());
     run('INSERT INTO password_resets (token_hash, user_id, created_at, expires_at) VALUES (?,?,?,?)', sha256(token), user.id, Date.now(), Date.now() + RESET_TTL);
-    const s = getSettings();
-    const { html, text } = renderEmail({
-      brand: s, title: 'Redefinição de senha',
-      intro: `Olá, ${user.name}. Recebemos um pedido para redefinir sua senha do painel. O link vale por 30 minutos e só pode ser usado uma vez. Se não foi você, ignore este e-mail — sua senha continua a mesma.`,
-      button: { label: 'Criar nova senha', url: `${publicUrl}/admin/#/redefinir/${token}` },
-      footer: `Pedido feito a partir do IP ${req.ip}.`,
-    });
-    queueEmail({ to: user.email, subject: `${s.companyName}: redefinição de senha`, text, html, kind: 'password_reset' });
+    const link = `${publicUrl}/admin/#/redefinir/${token}`;
+    const m = templates.emailFor('reset', { destinatario: user.name, link_redefinir: link, ip: req.ip }, { buttonUrl: link });
+    queueEmail({ to: user.email, subject: m.subject, text: m.text, html: m.html, kind: 'password_reset' });
     audit(user.id, 'password.reset_requested', null, req.ip);
   } else {
     audit(null, 'password.reset_unknown', { email: mail.slice(0, 80) }, req.ip);

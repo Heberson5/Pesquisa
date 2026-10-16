@@ -13,7 +13,7 @@ const { can, need, needAny } = perm;
 const { HttpError, bad, str, int, bool, id, email, dateParam } = require('../validate');
 const { QUESTION_TYPES, DISPLAYS, LANGS, LANG_LABELS, CONTACT_MODES, loadSurvey, normalizeQuestions, normalizeI18n, npsFromCounts } = require('../surveys');
 const { getSettings, saveSettings, emailList } = require('../settings');
-const { queueEmail, queueWhatsApp, renderEmail, processOutbox, outboxStatus, webhookSecret, whatsappCheck } = require('../notify');
+const { queueEmail, queueWhatsApp, processOutbox, outboxStatus, webhookSecret, whatsappCheck } = require('../notify');
 const delivery = require('../delivery');
 const zones = require('../zones');
 const { responseFilter, computeStats, computeBreakdown, reportFor, NPS_AGG, NPS_JOIN, npsRow } = require('../stats');
@@ -22,6 +22,7 @@ const QRCode = require('qrcode');
 const { encrypt, decrypt, lookup } = require('../vault');
 const { publicUrl, timezone: companyTz } = require('../config');
 const { parseLocal } = require('../time');
+const templates = require('../templates');
 
 const router = express.Router();
 const { MEDIA_DIR } = require('../db');
@@ -765,9 +766,8 @@ router.get('/settings/notifications', needAny(['cfg_envios', 'ver'], ['cfg_alert
 
 const testLimiter = rateLimiter({ windowMs: 60 * 60_000, max: 5, keyFn: (req) => 'test:' + req.user.id, message: 'Limite de testes atingido. Aguarde um pouco.' });
 router.post('/settings/test-email', need('cfg_envios', 'editar'), testLimiter, async (req, res) => {
-  const s = getSettings();
-  const { html, text } = renderEmail({ brand: s, title: 'E-mail de teste', intro: 'Se você recebeu esta mensagem, o envio de e-mails do sistema de pesquisa está funcionando.' });
-  queueEmail({ to: req.user.email, subject: `${s.companyName}: e-mail de teste`, text, html, kind: 'test' });
+  const m = templates.emailFor('test', { destinatario: req.user.name });
+  queueEmail({ to: req.user.email, subject: m.subject, text: m.text, html: m.html, kind: 'test' });
   await processOutbox(5);
   const last = get("SELECT status, last_error FROM outbox WHERE kind = 'test' ORDER BY id DESC LIMIT 1");
   res.json({ sent: last.status === 'sent', error: last.last_error });
@@ -792,6 +792,72 @@ router.put('/settings', (req, res) => {
   const saved = saveSettings(req.body);
   audit(req.user.id, 'settings.update', { companyName: saved.companyName }, req.ip);
   res.json(settingsFor(req.user));
+});
+
+// ---------------------------------------------------------------- modelos de mensagem (textos dos envios)
+router.get('/templates', need('cfg_modelos', 'ver'), (req, res) => res.json(templates.overview()));
+
+const templateParams = (req) => {
+  const { kind, channel } = req.params;
+  if (!Object.hasOwn(templates.KINDS, kind) || !templates.KINDS[kind].channels.includes(channel)) throw new HttpError(404, 'Modelo não encontrado.');
+  return { kind, channel };
+};
+
+router.put('/templates/:kind/:channel', need('cfg_modelos', 'editar'), (req, res) => {
+  const { kind, channel } = templateParams(req);
+  const saved = templates.save(kind, channel, req.body, req.user.id);
+  audit(req.user.id, 'template.update', { kind, channel }, req.ip);
+  res.json(saved);
+});
+
+router.delete('/templates/:kind/:channel', need('cfg_modelos', 'editar'), (req, res) => {
+  const { kind, channel } = templateParams(req);
+  const saved = templates.restore(kind, channel);
+  audit(req.user.id, 'template.restore', { kind, channel }, req.ip);
+  res.json(saved);
+});
+
+// Prévia com dados de exemplo, montada pela mesma função do envio real. O texto ainda não salvo vem no corpo.
+// O HTML do e-mail fica guardado por 2 minutos e é aberto numa moldura isolada (sem scripts).
+const previews = new Map();
+const previewRows = { detractor: [['Filial', 'Loja Centro · Campinas'], ['Nota', '3'], ['Quando', '16/10/2026 14:32'], ['O que podemos melhorar?', 'Esperei 40 minutos para ser atendido.'],
+  ['Cliente pediu contato', 'Mariana S.'], ['Telefone', '(19) 99812-4410']],
+offline: [['Filial', 'Loja Centro · Campinas'], ['Tablet', 'Tablet do caixa 2'], ['Último contato', '16/10/2026 13:58']],
+weekly: [['NPS', '+48'], ['Respostas', '412'], ['Promotores', '61%'], ['Detratores', '13%'], ['Casos pendentes', '7'], ['1º Loja Centro', 'NPS +62 (meta 50)']] };
+router.post('/templates/:kind/:channel/preview', need('cfg_modelos', 'ver'), (req, res) => {
+  const { kind, channel } = templateParams(req);
+  const vars = templates.sampleVars(kind);
+  if (channel === 'whatsapp') return res.json({ text: templates.whatsappFor(kind, vars, { override: req.body }) });
+  const m = templates.emailFor(kind, vars, { rows: previewRows[kind] || [], buttonUrl: '#', override: req.body });
+  const now = Date.now();
+  for (const [k, v] of previews) if (v.exp < now) previews.delete(k);
+  if (previews.size > 500) previews.clear();
+  const token = crypto.randomBytes(18).toString('base64url');
+  previews.set(token, { html: m.html, user: req.user.id, exp: now + 120_000 });
+  res.json({ subject: m.subject, text: m.text, url: `/api/admin/templates/preview/${token}` });
+});
+
+router.get('/templates/preview/:token', (req, res) => {
+  const p = previews.get(String(req.params.token));
+  if (!p || p.user !== req.user.id || p.exp < Date.now()) throw new HttpError(404, 'Prévia expirada. Abra de novo.');
+  // Só esta página pode ser exibida dentro do painel; sem scripts, sem links ativos e com estilos do próprio e-mail.
+  res.set({ 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Frame-Options': 'SAMEORIGIN',
+    'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'self'; sandbox" });
+  res.send(p.html);
+});
+
+// Envia o modelo (salvo) com dados de exemplo para a própria pessoa.
+router.post('/templates/:kind/:channel/test', need('cfg_modelos', 'ver'), testLimiter, async (req, res) => {
+  const { kind, channel } = templateParams(req);
+  const vars = { ...templates.sampleVars(kind), destinatario: req.user.name };
+  if (channel === 'email') {
+    const m = templates.emailFor(kind, vars, { rows: previewRows[kind] || [], buttonUrl: `${publicUrl}/admin/` });
+    queueEmail({ to: req.user.email, subject: '[Teste] ' + m.subject, text: m.text, html: m.html, kind: 'test' });
+    await processOutbox(5);
+    const last = get("SELECT status, last_error FROM outbox WHERE kind = 'test' AND channel = 'email' ORDER BY id DESC LIMIT 1");
+    return res.json({ sent: last?.status === 'sent', error: last?.last_error || null, to: req.user.email });
+  }
+  throw bad('O envio de teste pelo WhatsApp usa a conexão por QR Code (em Configurações → E-mail e WhatsApp).');
 });
 
 // ---------------------------------------------------------------- relatório PowerPoint

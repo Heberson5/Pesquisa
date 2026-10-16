@@ -2,12 +2,13 @@
 // Envios automáticos: relatório semanal em PowerPoint e alerta de tablet sem sinal.
 const { get, all, run, audit } = require('./db');
 const { getSettings } = require('./settings');
-const { queueEmail, renderEmail } = require('./notify');
+const { queueEmail } = require('./notify');
 const { reportFor } = require('./stats');
 const { localNow, formatLocal } = require('./time');
 const zones = require('./zones');
 const { hoursStatus } = require('./responses');
-const { branchRecipients } = require('./alerts');
+const { branchRecipientList } = require('./alerts');
+const templates = require('./templates');
 const { publicUrl } = require('./config');
 const { accessFor } = require('./permissions');
 
@@ -48,16 +49,17 @@ async function sendWeeklyReport({ force = false, now = Date.now() } = {}) {
     const o = stats.overall;
     const open = get(`SELECT COUNT(*) AS n FROM cases c ${scoped ? 'JOIN user_branches ub ON ub.branch_id = c.branch_id AND ub.user_id = ?' : ''}
       WHERE c.status IN ('aberto','em_contato')`, ...(scoped ? [r.user.id] : [])).n;
-    const { html, text } = renderEmail({
-      brand: s, title: 'Relatório semanal de satisfação',
-      intro: `Resumo de ${period.from.split('-').reverse().join('/')} a ${period.to.split('-').reverse().join('/')}. O relatório completo em PowerPoint está anexado.`,
+    const m = templates.emailFor('weekly', {
+      destinatario: r.user.name && r.user.id ? r.user.name : 'equipe',
+      periodo: `${period.from.split('-').reverse().join('/')} a ${period.to.split('-').reverse().join('/')}`,
+      nps: fmtNps(o.nps), respostas: String(stats.totalResponses), casos_pendentes: String(open), link_painel: `${publicUrl}/admin/`,
+    }, {
       rows: [['NPS', fmtNps(o.nps)], ['Respostas', String(stats.totalResponses)], ['Promotores', pct(o.promoters, o.total)],
         ['Detratores', pct(o.detractors, o.total)], ['Casos pendentes', String(open)],
         ...stats.ranking.slice(0, 5).map((b) => [`${b.position}º ${b.name}`, `NPS ${fmtNps(b.nps)}${b.goal !== null ? ` (meta ${b.goal})` : ''}`])],
-      button: { label: 'Abrir o painel', url: `${publicUrl}/admin/` },
-      footer: 'Para deixar de receber, desmarque "Relatório semanal" em Minha conta.',
+      buttonUrl: `${publicUrl}/admin/`,
     });
-    if (queueEmail({ to: r.email, subject: `${s.companyName}: relatório semanal (NPS ${fmtNps(o.nps)})`, text, html, kind: 'weekly_report',
+    if (queueEmail({ to: r.email, subject: m.subject, text: m.text, html: m.html, kind: 'weekly_report',
       attachment: buffer, attachmentName: `relatorio-nps-${period.to}.pptx` })) sent++;
   }
   audit(null, 'report.weekly_queued', { sent, period }, null);
@@ -75,14 +77,12 @@ function checkOfflineTablets(now = Date.now()) {
   for (const d of devices) {
     const branch = get('SELECT * FROM branches WHERE id = ?', d.branch_id);
     if (!hoursStatus(branch, now, zones.forBranch(branch, d)).open) continue; // fora do expediente, tablet desligado é esperado
-    const { html, text } = renderEmail({
-      brand: s, title: `Tablet sem sinal — ${d.branch_name}`,
-      intro: `O tablet "${d.name}" não se comunica com o sistema há mais de ${s.offlineAlert.minutes} minutos, durante o horário de funcionamento. Verifique se está ligado, conectado ao Wi-Fi e com a pesquisa aberta.`,
-      rows: [['Filial', d.branch_name], ['Tablet', d.name], ['Último contato', formatLocal(d.last_seen_at, zones.forBranch(branch, d))]],
-      button: { label: 'Ver tablets no painel', url: `${publicUrl}/admin/#/dispositivos` },
-    });
-    for (const to of branchRecipients(d.branch_id, 'notify_offline')) {
-      queueEmail({ to, subject: `[Alerta] Tablet sem sinal: ${d.name} (${d.branch_name})`, text, html, kind: 'device_offline' });
+    const last = formatLocal(d.last_seen_at, zones.forBranch(branch, d));
+    const vars = { filial: d.branch_name, tablet: d.name, minutos: String(s.offlineAlert.minutes), ultimo_contato: last, link_painel: `${publicUrl}/admin/#/dispositivos` };
+    for (const to of branchRecipientList(d.branch_id, 'notify_offline')) {
+      const m = templates.emailFor('offline', { ...vars, destinatario: to.name || 'equipe' },
+        { rows: [['Filial', d.branch_name], ['Tablet', d.name], ['Último contato', last]], buttonUrl: vars.link_painel });
+      queueEmail({ to: to.email, subject: m.subject, text: m.text, html: m.html, kind: 'device_offline' });
     }
     run('UPDATE devices SET offline_alerted_at = ? WHERE id = ?', now, d.id);
     alerted++;

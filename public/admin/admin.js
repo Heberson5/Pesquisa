@@ -56,7 +56,7 @@
   const icon = (name, size = 20, opts = {}) => window.Icons.svg(name, { size, ...opts });
   // Permissões do perfil de quem está logado (o servidor confere de novo em cada ação).
   const can = (mod, act = 'ver') => !!me?.access && (me.access.isAdmin || me.access.perms.includes(`${mod}.${act}`));
-  const CFG_GROUPS = ['cfg_marca', 'cfg_alertas', 'cfg_envios', 'cfg_lgpd'];
+  const CFG_GROUPS = ['cfg_marca', 'cfg_alertas', 'cfg_envios', 'cfg_modelos', 'cfg_lgpd'];
   const initials = (name) => String(name || '?').split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join('');
   // Foto da pessoa (ou as iniciais, para quem não tem foto). u = { id, name, photo_at }.
   const avatar = (u, cls = '') => (u?.id && u.photo_at
@@ -1254,13 +1254,17 @@
     };
     // [aba, rótulo, ícone, permissão]
     const tabs = [['identidade', 'Identidade visual', 'palette', 'cfg_marca'], ['menu', 'Ícones do menu', 'layout', 'cfg_marca'], ['respostas', 'Ícones das respostas', 'star', 'cfg_marca'],
-      ['envios', 'E-mail e WhatsApp', 'mail', 'cfg_envios'], ['alertas', 'Alertas e relatórios', 'bell', 'cfg_alertas'], ['seguranca', 'Segurança e LGPD', 'shield', 'cfg_lgpd']]
+      ['envios', 'E-mail e WhatsApp', 'mail', 'cfg_envios'], ['modelos', 'Modelos de mensagem', 'message', 'cfg_modelos'], ['alertas', 'Alertas e relatórios', 'bell', 'cfg_alertas'],
+      ['seguranca', 'Segurança e LGPD', 'shield', 'cfg_lgpd']]
       .filter((t) => can(t[3]));
     if (!tabs.some((t) => t[0] === settingsTab)) settingsTab = tabs[0][0];
-    const TAB = { identidade: identityTab, menu: menuTab, respostas: ratingTab, envios: deliveryTab, alertas: alertsTab, seguranca: securityTab };
+    const TAB = { identidade: identityTab, menu: menuTab, respostas: ratingTab, envios: deliveryTab, modelos: templatesTab, alertas: alertsTab, seguranca: securityTab };
+    // Abas com botões de salvar próprios não usam o "Salvar configurações" do topo.
+    const OWN_SAVE = new Set(['envios', 'modelos']);
     const renderTab = async () => {
       const group = tabs.find((t) => t[0] === settingsTab)[3];
       const content = await TAB[settingsTab](st, renderTab);
+      saveBtn?.classList.toggle('hidden', OWN_SAVE.has(settingsTab));
       // Sem permissão de editar, a aba aparece só para consulta.
       const ro = !can(group, 'editar');
       body.replaceChildren(...[h('div', { class: 'tabs' }, tabs.map(([k, label, ic]) => h('button', { class: settingsTab === k ? 'active' : '',
@@ -1268,9 +1272,9 @@
       ro ? h('p', { class: 'small muted' }, icon('lock', 14), ' Somente consulta: o seu perfil não pode alterar esta aba.') : null,
       ro ? h('fieldset', { class: 'ro', disabled: true }, content) : content].filter(Boolean));
     };
+    const saveBtn = editableKeys.length ? h('button', { class: 'btn', onclick: save }, 'Salvar configurações') : null;
     await renderTab();
-    return h('div', {}, pageHead('Configurações', 'Marca, ícones, alertas, relatórios, segurança e LGPD',
-      editableKeys.length ? h('button', { class: 'btn', onclick: save }, 'Salvar configurações') : null), body);
+    return h('div', {}, pageHead('Configurações', 'Marca, ícones, mensagens, alertas, relatórios, segurança e LGPD', saveBtn), body);
   }
 
   function identityTab(st, rerender) {
@@ -1498,6 +1502,126 @@
   }
   const renderAgain = () => { if (location.hash.startsWith('#/configuracoes')) route(); };
 
+  // ------------------------------------------------------------ aba: modelos de mensagem
+  // Formatação do WhatsApp na prévia (*negrito*, _itálico_, ~riscado~ e links), montada com nós de texto — nunca HTML.
+  function waText(text) {
+    const box = h('div', { class: 'wa-text' });
+    const re = /(\*[^*\n]+\*|_[^_\n]+_|~[^~\n]+~|https?:\/\/[^\s]+)/g;
+    String(text).split('\n').forEach((line, i) => {
+      if (i) box.append(h('br'));
+      let last = 0;
+      for (const m of line.matchAll(re)) {
+        if (m.index > last) box.append(line.slice(last, m.index));
+        const t = m[0];
+        box.append(t.startsWith('http') ? h('span', { class: 'wa-link' }, t) : h(t[0] === '*' ? 'b' : t[0] === '_' ? 'i' : 's', {}, t.slice(1, -1)));
+        last = m.index + t.length;
+      }
+      if (last < line.length) box.append(line.slice(last));
+    });
+    return box;
+  }
+
+  // O e-mail tem 600 px de largura: a prévia mostra em tamanho real e reduz proporcionalmente para caber na coluna.
+  function mailFrame(url) {
+    const W = 640; const H = 620;
+    const frame = h('iframe', { src: url, title: 'Prévia do e-mail', sandbox: '' });
+    const box = h('div', { class: 'mail-frame' }, frame);
+    const fit = () => {
+      const k = Math.min(1, (box.clientWidth || W) / W);
+      frame.style.width = W + 'px'; frame.style.height = H + 'px'; frame.style.transform = `scale(${k})`;
+      box.style.height = Math.round(H * k) + 'px';
+    };
+    new ResizeObserver(fit).observe(box);
+    requestAnimationFrame(fit);
+    return box;
+  }
+
+  let tplKind = 'detractor'; let tplChannel = 'whatsapp';
+  async function templatesTab() {
+    const kinds = await api('/templates');
+    if (!kinds.some((k) => k.key === tplKind)) tplKind = kinds[0].key;
+    const editable = can('cfg_modelos', 'editar');
+    const wrap = h('div', { class: 'tpl-layout' });
+    const draw = () => {
+      const k = kinds.find((x) => x.key === tplKind);
+      if (!k.channels.includes(tplChannel)) tplChannel = k.channels[0];
+      const tpl = { ...k.templates[tplChannel] };
+      const fields = tplChannel === 'email'
+        ? [['subject', 'Assunto', 'input', 200], ['title', 'Título', 'input', 200], ['intro', 'Texto', 'textarea', 1500], ['button', 'Texto do botão', 'input', 60], ['footer', 'Rodapé', 'textarea', 500]]
+        : [['text', 'Texto da mensagem', 'textarea', 2000]];
+      const inputs = {}; let lastFocus = null;
+      const err = h('p', { class: 'bad small', role: 'alert' });
+      const preview = h('div', { class: 'tpl-preview' });
+      let timer = null; let seq = 0;
+      const refresh = () => {
+        clearTimeout(timer);
+        timer = setTimeout(async () => {
+          const my = ++seq;
+          try {
+            const r = await api(`/templates/${k.key}/${tplChannel}/preview`, { method: 'POST', body: body() });
+            if (my !== seq) return;
+            err.textContent = '';
+            preview.replaceChildren(tplChannel === 'whatsapp'
+              ? h('div', { class: 'phone' }, h('div', { class: 'phone-head' }, h('span', { class: 'phone-av' }, initials(settings.companyName)), h('div', {}, h('b', {}, settings.companyName), h('small', {}, 'online'))),
+                h('div', { class: 'phone-body' }, h('span', { class: 'phone-day' }, 'HOJE'), h('div', { class: 'bubble' }, waText(r.text), h('span', { class: 'bubble-time' }, '14:32'))))
+              : h('div', { class: 'mail-preview' }, h('div', { class: 'mail-meta' }, h('div', {}, 'Assunto: ', h('b', {}, r.subject)), h('div', {}, 'Para: ', me.email)),
+                mailFrame(r.url)));
+          } catch (ex) { if (my === seq) err.textContent = ex.message; }
+        }, 350);
+      };
+      const body = () => Object.fromEntries(Object.entries(inputs).map(([f, el]) => [f, el.value]));
+      for (const [f, label, type, max] of fields) {
+        const el = h(type, { class: 'tpl-field', maxlength: String(max), rows: type === 'textarea' ? (f === 'text' ? '10' : '3') : null, disabled: !editable,
+          oninput: refresh, onfocus: (e) => { lastFocus = e.target; } });
+        el.value = tpl[f] || '';
+        inputs[f] = el;
+      }
+      const insert = (txt) => {
+        const el = lastFocus || inputs.text || inputs.intro;
+        const a = el.selectionStart ?? el.value.length; const b = el.selectionEnd ?? a;
+        el.value = el.value.slice(0, a) + txt + el.value.slice(b); el.focus(); el.selectionStart = el.selectionEnd = a + txt.length; refresh();
+      };
+      const wrapSel = (mark) => {
+        const el = inputs.text; const a = el.selectionStart; const b = el.selectionEnd;
+        el.value = el.value.slice(0, a) + mark + el.value.slice(a, b) + mark + el.value.slice(b); el.focus(); el.selectionStart = a + 1; el.selectionEnd = b + 1; refresh();
+      };
+      const act = async (fn) => { try { await fn(); } catch (ex) { toast(ex.message, true); } };
+      const reload = async () => { const fresh = await api('/templates'); kinds.splice(0, kinds.length, ...fresh); draw(); };
+      wrap.replaceChildren(
+        h('div', { class: 'tpl-list' }, kinds.map((x) => h('button', { class: 'tpl-item' + (x.key === tplKind ? ' active' : ''), onclick: () => { tplKind = x.key; draw(); } },
+          h('b', {}, x.label), h('span', {}, x.channels.map((c) => (c === 'email' ? 'E-mail' : 'WhatsApp')).join(' · '),
+            Object.values(x.templates).some((t) => t.custom) ? ' · personalizado' : '')))),
+        h('div', { class: 'card tpl-editor' },
+          h('p', { class: 'small muted' }, k.description),
+          h('div', { class: 'tabs sub' }, k.channels.map((c) => h('button', { class: c === tplChannel ? 'active' : '', onclick: () => { tplChannel = c; draw(); } },
+            icon(c === 'email' ? 'mail' : 'message', 16), c === 'email' ? 'E-mail' : 'WhatsApp'))),
+          tplChannel === 'whatsapp' ? h('div', { class: 'row between' }, h('span', { class: 'small muted' }, 'Usado no WhatsApp conectado pelo QR Code. Na API oficial da Meta vale o modelo aprovado lá.'),
+            editable ? h('div', { class: 'row fmt' }, [['*', 'B', 'Negrito'], ['_', 'I', 'Itálico'], ['~', 'S', 'Riscado']].map(([m, l, t]) => h('button', { class: 'btn secondary sm', title: t, type: 'button', onclick: () => wrapSel(m) }, l))) : null) : null,
+          fields.map(([f, label]) => h('label', { class: 'f' }, label, inputs[f])),
+          tplChannel === 'email' ? h('p', { class: 'small muted' }, 'A tabela com os dados do envio (filial, nota, comentários, contato…) entra automaticamente abaixo do texto.') : null,
+          h('div', {}, h('div', { class: 'small muted' }, editable ? 'Clique para inserir no campo:' : 'Variáveis disponíveis:'),
+            h('div', { class: 'var-chips' }, k.vars.map((v) => h('button', { class: 'var-chip', type: 'button', title: `${v.label} — ex.: ${v.sample}`, disabled: !editable, onclick: () => insert(`{${v.key}}`) }, `{${v.key}}`)))),
+          err,
+          h('div', { class: 'row between' },
+            editable && tpl.custom ? h('button', { class: 'btn secondary', onclick: () => act(async () => {
+              if (!confirm('Voltar ao texto padrão do sistema? O texto atual será descartado.')) return;
+              await api(`/templates/${k.key}/${tplChannel}`, { method: 'DELETE' }); toast('Texto padrão restaurado.'); await reload();
+            }) }, icon('refresh', 16), 'Restaurar texto padrão') : h('span', { class: 'small muted' }, tpl.custom ? `Personalizado em ${fmtDate(tpl.updated_at)}` : 'Texto padrão do sistema'),
+            h('div', { class: 'row' },
+              tplChannel === 'email' ? h('button', { class: 'btn secondary', onclick: () => act(async () => {
+                const r = await api(`/templates/${k.key}/email/test`, { method: 'POST' });
+                r.sent ? toast(`Teste enviado para ${r.to}.`) : toast('Falhou: ' + (r.error || 'confira o e-mail em "E-mail e WhatsApp"'), true);
+              }) }, icon('mail', 16), 'Enviar teste para mim') : null,
+              editable ? h('button', { class: 'btn', onclick: () => act(async () => {
+                await api(`/templates/${k.key}/${tplChannel}`, { method: 'PUT', body: body() }); toast('Modelo salvo. Os próximos envios já usam este texto.'); await reload();
+              }) }, 'Salvar modelo') : null))),
+        h('div', { class: 'tpl-side' }, h('div', { class: 'small muted tpl-side-title' }, 'Prévia · dados de exemplo'), preview));
+      refresh();
+    };
+    draw();
+    return wrap;
+  }
+
   // Prazos de guarda em anos (até 10). Um valor antigo em meses que não feche em anos continua na lista.
   function retentionCard(st) {
     const r = st.retention;
@@ -1563,6 +1687,7 @@
   const CASE_STATUS = { aberto: 'Aberto', em_contato: 'Em contato', resolvido: 'Resolvido', sem_retorno: 'Sem retorno' };
   const ROLE = { admin: 'Administrador', gestor: 'Gestor' };
   const CHANNEL = { tablet: 'tablet', link: 'QR Code' };
+  const TPL_KIND = { detractor: 'Cliente insatisfeito', offline: 'Tablet sem sinal', weekly: 'Relatório semanal', reset: 'Redefinição de senha', test: 'Mensagem de teste' };
   const AUDIT_CATS = { acesso: 'Acesso ao sistema', conta: 'Senhas e segurança da conta', usuarios: 'Usuários', cadastros: 'Filiais, pesquisas e configurações',
     tablets: 'Tablets', dados: 'Respostas, casos e relatórios', lgpd: 'Privacidade (LGPD)', sistema: 'Rotinas automáticas' };
   const dayBR = (iso) => (/^\d{4}-\d{2}-\d{2}$/.test(iso || '') ? iso.split('-').reverse().join('/') : iso);
@@ -1608,6 +1733,8 @@
       }
       case 'user.photo': return E('conta', '', d.set ? 'Trocou a própria foto de perfil' : 'Removeu a própria foto de perfil');
       case 'user.photo_removed': return E('usuarios', 'warn', `Removeu a foto de perfil de ${d.email || '#' + d.id}`);
+      case 'template.update': return E('cadastros', '', `Alterou o texto da mensagem "${TPL_KIND[d.kind] || d.kind}" (${d.channel === 'email' ? 'e-mail' : 'WhatsApp'})`);
+      case 'template.restore': return E('cadastros', '', `Voltou ao texto padrão da mensagem "${TPL_KIND[d.kind] || d.kind}" (${d.channel === 'email' ? 'e-mail' : 'WhatsApp'})`);
       case 'role.create': return E('usuarios', '', `Criou o perfil de acesso "${d.name}"`, `${d.scope === 'all' ? 'Todas as filiais' : 'Só as filiais do usuário'} · ${plural((d.perms || []).length, 'permissão', 'permissões')}.`);
       case 'role.update': {
         const bits = [];

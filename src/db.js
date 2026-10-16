@@ -274,6 +274,15 @@ db.exec(`CREATE TABLE IF NOT EXISTS roles (
   updated_at INTEGER NOT NULL
 );`);
 addColumnIfMissing('users', 'role_id', 'role_id INTEGER REFERENCES roles(id)');
+// Textos editáveis de cada tipo de envio (e-mail e WhatsApp). Sem linha = texto padrão do sistema.
+db.exec(`CREATE TABLE IF NOT EXISTS message_templates (
+  kind TEXT NOT NULL,
+  channel TEXT NOT NULL CHECK (channel IN ('email','whatsapp')),
+  data TEXT NOT NULL,
+  updated_at INTEGER NOT NULL,
+  updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  PRIMARY KEY (kind, channel)
+);`);
 // Foto de perfil (já recortada e reduzida no navegador). Fica no banco e só é servida para quem está logado.
 db.exec(`CREATE TABLE IF NOT EXISTS user_photos (
   user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,

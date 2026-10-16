@@ -3,7 +3,8 @@
 // Webhook e WhatsApp recebem só o mínimo (filial, nota, link) — dados pessoais ficam no painel.
 const { get, all, run } = require('./db');
 const { getSettings } = require('./settings');
-const { queueEmail, queueWebhook, queueWhatsApp, renderEmail } = require('./notify');
+const { queueEmail, queueWebhook, queueWhatsApp } = require('./notify');
+const templates = require('./templates');
 const { decrypt } = require('./vault');
 const { publicUrl } = require('./config');
 const zones = require('./zones');
@@ -17,19 +18,23 @@ const parseList = (json) => { try { const v = JSON.parse(json || '[]'); return A
 const PREF_COLUMNS = { notify_detractors: 'casos', notify_reports: 'dashboard', notify_offline: 'tablets' };
 function usersToNotify(branchId, prefColumn) {
   if (!Object.hasOwn(PREF_COLUMNS, prefColumn)) throw new Error('Preferência inválida.');
-  return all(`SELECT id, email, whatsapp, role, role_id FROM users WHERE active = 1 AND ${prefColumn} = 1`).filter((u) => {
+  return all(`SELECT id, name, email, whatsapp, role, role_id FROM users WHERE active = 1 AND ${prefColumn} = 1`).filter((u) => {
     const a = accessFor(u);
     if (!a.isAdmin && !a.perms.has(PREF_COLUMNS[prefColumn] + '.ver')) return false;
     return a.scopeAll || !!get('SELECT 1 FROM user_branches WHERE user_id = ? AND branch_id = ?', u.id, branchId);
   });
 }
 
-// Destinatários de e-mail de uma filial: lista da filial + usuários que querem o aviso.
-function branchRecipients(branchId, prefColumn) {
+// Destinatários de e-mail de uma filial: lista da filial + usuários que querem o aviso. Sem repetir e-mail;
+// o nome (quando é um usuário) entra no texto como {destinatario}.
+function branchRecipientList(branchId, prefColumn) {
   const b = get('SELECT alert_emails FROM branches WHERE id = ?', branchId);
-  const users = usersToNotify(branchId, prefColumn).map((u) => u.email);
-  return [...new Set([...parseList(b?.alert_emails), ...users].map((e) => String(e).toLowerCase()))];
+  const out = new Map();
+  for (const u of usersToNotify(branchId, prefColumn)) out.set(String(u.email).toLowerCase(), u.name);
+  for (const e of parseList(b?.alert_emails)) if (!out.has(String(e).toLowerCase())) out.set(String(e).toLowerCase(), null);
+  return [...out].map(([email, name]) => ({ email, name }));
 }
+const branchRecipients = (branchId, prefColumn) => branchRecipientList(branchId, prefColumn).map((r) => r.email);
 
 function onResponse(responseId) {
   const r = get(`SELECT r.*, b.name AS branch_name, b.timezone AS branch_tz FROM responses r JOIN branches b ON b.id = r.branch_id WHERE r.id = ?`, responseId);
@@ -50,20 +55,24 @@ function notifyDetractor(r, score, caseId) {
   const comments = all(`SELECT q.text, a.value_text FROM answers a JOIN questions q ON q.id = a.question_id
       WHERE a.response_id = ? AND q.type = 'text' AND a.value_text IS NOT NULL`, r.id);
   const hasContact = !!r.contact_consent_at && !r.anonymized_at;
+  const when = new Date(r.submitted_at).toLocaleString('pt-BR', { timeZone: zones.forBranch({ id: r.branch_id, timezone: r.branch_tz }), dateStyle: 'short', timeStyle: 'short' });
+  const contactName = hasContact ? decrypt(r.contact_name_enc) : null;
+  const contactPhone = hasContact ? decrypt(r.contact_phone_enc) : null;
+  // Variáveis dos modelos de mensagem (Configurações → Modelos de mensagem).
+  const vars = { filial: r.branch_name, nota: String(score), data_hora: when, canal: r.channel === 'link' ? 'QR Code' : 'tablet',
+    comentario: comments.map((c) => c.value_text).join(' / ').slice(0, 300), cliente: contactName || '', telefone_cliente: contactPhone || '', link_caso: url };
   if (s.alerts.detractorEmail) {
-    const rows = [['Filial', r.branch_name], ['Nota', String(score)], ['Quando', new Date(r.submitted_at).toLocaleString('pt-BR', { timeZone: zones.forBranch({ id: r.branch_id, timezone: r.branch_tz }) })]];
+    const rows = [['Filial', r.branch_name], ['Nota', String(score)], ['Quando', when]];
     for (const c of comments) rows.push([c.text, c.value_text]);
     if (hasContact) {
-      rows.push(['Cliente pediu contato', decrypt(r.contact_name_enc) || '(sem nome)']);
-      const phone = decrypt(r.contact_phone_enc); const mail = decrypt(r.contact_email_enc);
-      if (phone) rows.push(['Telefone', phone]);
+      rows.push(['Cliente pediu contato', contactName || '(sem nome)']);
+      const mail = decrypt(r.contact_email_enc);
+      if (contactPhone) rows.push(['Telefone', contactPhone]);
       if (mail) rows.push(['E-mail', mail]);
     }
-    const { html, text } = renderEmail({ brand: s, title: `Cliente insatisfeito — ${r.branch_name}`,
-      intro: `Uma resposta com nota ${score} acabou de chegar. Um caso foi aberto para tratamento.`, rows,
-      button: { label: 'Abrir o caso no painel', url }, footer: 'Você recebe este aviso porque está cadastrado para alertas desta filial. Ajuste em Minha conta.' });
-    for (const to of branchRecipients(r.branch_id, 'notify_detractors')) {
-      queueEmail({ to, subject: `[Alerta] Nota ${score} em ${r.branch_name}`, text, html, kind: 'detractor' });
+    for (const to of branchRecipientList(r.branch_id, 'notify_detractors')) {
+      const m = templates.emailFor('detractor', { ...vars, destinatario: to.name || 'equipe' }, { rows, buttonUrl: url });
+      queueEmail({ to: to.email, subject: m.subject, text: m.text, html: m.html, kind: 'detractor' });
     }
   }
   if (s.alerts.webhookUrl) {
@@ -78,4 +87,4 @@ function notifyDetractor(r, score, caseId) {
   }
 }
 
-module.exports = { onResponse, branchRecipients, usersToNotify, parseList, DETRACTOR_MAX };
+module.exports = { onResponse, branchRecipients, branchRecipientList, usersToNotify, parseList, DETRACTOR_MAX };

@@ -48,10 +48,10 @@ function renderEmail({ title, intro, rows = [], button = null, footer = '', bran
 <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;background:#fff;border-radius:12px;overflow:hidden">
 <tr><td style="background:${color};color:#fff;padding:18px 24px;font-weight:bold;font-size:16px">${company}</td></tr>
 <tr><td style="padding:24px"><h1 style="margin:0 0 12px;font-size:20px;color:#0f172a">${escapeHtml(title)}</h1>
-<p style="margin:0 0 16px;color:#334155;line-height:1.5">${escapeHtml(intro)}</p>
+<p style="margin:0 0 16px;color:#334155;line-height:1.5;white-space:pre-line">${escapeHtml(intro)}</p>
 ${tableRows ? `<table role="presentation" style="font-size:14px;margin-bottom:16px">${tableRows}</table>` : ''}
 ${button ? `<a href="${escapeHtml(button.url)}" style="display:inline-block;background:${color};color:#fff;text-decoration:none;padding:12px 20px;border-radius:8px;font-weight:bold">${escapeHtml(button.label)}</a>` : ''}
-${footer ? `<p style="margin:20px 0 0;color:#94a3b8;font-size:12px">${escapeHtml(footer)}</p>` : ''}
+${footer ? `<p style="margin:20px 0 0;color:#94a3b8;font-size:12px;white-space:pre-line">${escapeHtml(footer)}</p>` : ''}
 </td></tr></table></td></tr></table></body></html>`;
   const text = [title, '', intro, '', ...rows.map(([k, v]) => `${k}: ${v}`), button ? `\n${button.label}: ${button.url}` : '', footer ? `\n${footer}` : ''].join('\n');
   return { html, text };
