@@ -24,7 +24,7 @@ tx(() => {
   const adminId = run("INSERT INTO users (name, email, password_hash, role, created_at) VALUES (?,?,?,'admin',?)",
     'Administrador Demo', 'admin@demo.local', hashPassword(adminPw), now).lastInsertRowid;
   const week = JSON.stringify([null, ...Array(5).fill({ open: '08:00', close: '20:00' }), { open: '09:00', close: '14:00' }]);
-  const branches = [['SP01', 'São Paulo — Paulista', 'São Paulo', 62, 50], ['RJ01', 'Rio — Barra', 'Rio de Janeiro', 35, 40], ['BH01', 'Belo Horizonte — Savassi', 'Belo Horizonte', 15, 30]]
+  const branches = [['SP01', 'São Paulo — Paulista', 'São Paulo', 62, 75], ['RJ01', 'Rio — Barra', 'Rio de Janeiro', 35, 70], ['BH01', 'Belo Horizonte — Savassi', 'Belo Horizonte', 15, 65]]
     .map(([code, name, city, bias, goal]) => ({ id: run('INSERT INTO branches (code, name, city, nps_goal, hours_json, alert_emails, created_at) VALUES (?,?,?,?,?,?,?)',
       code, name, city, goal, null, JSON.stringify([`gerente.${code.toLowerCase()}@demo.local`]), now).lastInsertRowid, bias }));
   void week;

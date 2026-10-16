@@ -13,7 +13,7 @@ const templates = require('./templates');
 const { publicUrl } = require('./config');
 const { accessFor } = require('./permissions');
 
-const fmtNps = (n) => (n === null || n === undefined ? '—' : (n > 0 ? '+' : '') + n.toLocaleString('pt-BR'));
+const fmtNps = (n) => (n === null || n === undefined ? '—' : n.toLocaleString('pt-BR', { maximumFractionDigits: 1 }));
 const pct = (v, t) => (t ? Math.round((v / t) * 100) + '%' : '—');
 const META_KEY = 'state.weeklyReportLastSent';
 

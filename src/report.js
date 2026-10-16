@@ -24,10 +24,11 @@ function isDark(c) {
   const [r, g, b] = [(n >> 16) & 255, (n >> 8) & 255, n & 255];
   return (0.299 * r + 0.587 * g + 0.114 * b) < 150;
 }
-const fmtNps = (n) => (n === null || n === undefined ? '—' : (n > 0 ? '+' : '') + n.toLocaleString('pt-BR'));
+const fmtNps = (n) => (n === null || n === undefined ? '—' : n.toLocaleString('pt-BR', { maximumFractionDigits: 1 }));
 const pct = (v, t) => (t ? Math.round((v / t) * 100) + '%' : '—');
 const fmtDay = (iso) => (iso ? iso.split('-').reverse().join('/') : null);
-const npsColor = (n) => (n === null ? MUTED : n >= 50 ? GOOD : n >= 0 ? 'C27C0E' : BAD);
+// NPS de 0 a 100: verde a partir de 75, amarelo de 50 a 74, vermelho abaixo de 50.
+const npsColor = (n) => (n === null ? MUTED : n >= 75 ? GOOD : n >= 50 ? 'C27C0E' : BAD);
 
 // Dimensões de PNG/JPEG/GIF/WEBP lendo o cabeçalho (para não distorcer a logo).
 function imageSize(buf) {
@@ -201,7 +202,7 @@ async function buildReport({ settings, stats, surveys, filters, mediaDir, genera
     const days = stats.trend.map((t) => fmtDay(t.day).slice(0, 5));
     ev.addChart(pres.charts.LINE, [{ name: 'NPS', labels: days, values: stats.trend.map((t) => t.nps ?? 0) }],
       { ...chartBase(), x: M, y: 1.35, w: W - 2 * M, h: 3.3, chartColors: [primary], lineSize: 2.5, lineDataSymbol: 'circle', lineDataSymbolSize: 6,
-        valAxisMinVal: -100, valAxisMaxVal: 100, valAxisMajorUnit: 50, showLegend: false, showTitle: true, title: 'NPS por dia', objectName: 'NPS por dia' });
+        valAxisMinVal: 0, valAxisMaxVal: 100, valAxisMajorUnit: 25, showLegend: false, showTitle: true, title: 'NPS por dia (0 a 100)', objectName: 'NPS por dia' });
     ev.addChart(pres.charts.BAR, [{ name: 'Respostas', labels: days, values: stats.trend.map((t) => t.responses) }],
       { ...chartBase(), x: M, y: 4.75, w: W - 2 * M, h: 2.1, barDir: 'col', chartColors: [accent], showLegend: false,
         showTitle: true, title: 'Respostas por dia', showValue: stats.trend.length <= 20, dataLabelPosition: 'outEnd', objectName: 'Respostas por dia' });
@@ -214,9 +215,9 @@ async function buildReport({ settings, stats, surveys, filters, mediaDir, genera
     const sorted = [...stats.byBranch].sort((a, b) => (b.nps ?? -999) - (a.nps ?? -999));
     const chartH = Math.max(3.2, Math.min(5.4, 0.8 + sorted.length * 0.55));
     br.addChart(pres.charts.BAR, [{ name: 'NPS', labels: sorted.map((b) => b.name), values: sorted.map((b) => b.nps ?? 0) }],
-      { ...chartBase(), x: M, y: 1.4, w: 5.7, h: chartH, barDir: 'bar', catAxisOrientation: 'maxMin', valAxisMinVal: -100, valAxisMaxVal: 100,
-        valAxisMajorUnit: 50, catAxisLabelPos: 'low', chartColors: sorted.map((b) => npsColor(b.nps)), showValue: true, dataLabelPosition: 'outEnd',
-        dataLabelFormatCode: '+0.0;-0.0;0', showLegend: false, showTitle: true, title: 'NPS (−100 a +100)', objectName: 'NPS por filial' });
+      { ...chartBase(), x: M, y: 1.4, w: 5.7, h: chartH, barDir: 'bar', catAxisOrientation: 'maxMin', valAxisMinVal: 0, valAxisMaxVal: 100,
+        valAxisMajorUnit: 25, catAxisLabelPos: 'low', chartColors: sorted.map((b) => npsColor(b.nps)), showValue: true, dataLabelPosition: 'outEnd',
+        dataLabelFormatCode: '0.0', showLegend: false, showTitle: true, title: 'NPS (0 a 100)', objectName: 'NPS por filial' });
     const head = ['Filial', 'Respostas', 'Promotores', 'Detratores', 'NPS'].map((t) => ({ text: t, options: { bold: true, fontSize: 11, color: MUTED, fill: { color: SOFT } } }));
     const rows = sorted.map((b) => [b.name, String(b.responses), pct(b.promoters, b.total), pct(b.detractors, b.total),
       { text: fmtNps(b.nps), options: { bold: true, color: npsColor(b.nps) } }]);

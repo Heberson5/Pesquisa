@@ -185,7 +185,7 @@ function branchInput(body) {
     active: body?.active === undefined ? 1 : (bool(body.active) ? 1 : 0),
     alert_emails: JSON.stringify(body?.alert_emails === undefined ? [] : emailList(body.alert_emails, 10)),
     alert_phones: JSON.stringify(phoneList(body?.alert_phones)),
-    nps_goal: body?.nps_goal === undefined || body.nps_goal === null || body.nps_goal === '' ? null : int(body.nps_goal, { field: 'meta de NPS', min: -100, max: 100 }),
+    nps_goal: body?.nps_goal === undefined || body.nps_goal === null || body.nps_goal === '' ? null : int(body.nps_goal, { field: 'meta de NPS', min: 0, max: 100 }),
     hours_json: hoursInput(body?.hours),
     timezone: timezoneInput(body?.timezone),
   };

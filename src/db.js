@@ -277,6 +277,12 @@ addColumnIfMissing('users', 'role_id', 'role_id INTEGER REFERENCES roles(id)');
 // Dia da resposta no calendário do tablet/filial (AAAA-MM-DD). Filtros e gráficos usam este dia, nunca o fuso do servidor.
 addColumnIfMissing('responses', 'local_day', 'local_day TEXT');
 db.exec('CREATE INDEX IF NOT EXISTS idx_responses_local_day ON responses(local_day)');
+// NPS passou para a escala de 0 a 100: metas gravadas na escala antiga (−100 a +100) são convertidas uma vez.
+if (!db.prepare("SELECT 1 FROM settings WHERE key = 'state.npsScale'").get()) {
+  db.exec(`UPDATE branches SET nps_goal = CAST(ROUND((nps_goal + 100) / 2.0) AS INTEGER) WHERE nps_goal IS NOT NULL;
+    UPDATE settings SET value = CAST(CAST(ROUND((CAST(value AS REAL) + 100) / 2.0) AS INTEGER) AS TEXT) WHERE key = 'defaultNpsGoal' AND value <> 'null';
+    INSERT INTO settings (key, value) VALUES ('state.npsScale', '"0-100"');`);
+}
 // Última versão cuja janela "O que há de novo" a pessoa já viu.
 addColumnIfMissing('users', 'last_seen_version', 'last_seen_version TEXT');
 // Sessão do WhatsApp conectado por QR Code (chaves da conexão), sempre criptografada.

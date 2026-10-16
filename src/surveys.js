@@ -191,7 +191,9 @@ function npsFromCounts(promoters, passives, detractors) {
   const total = promoters + passives + detractors;
   return {
     total, promoters, passives, detractors,
-    nps: total ? Math.round(((promoters - detractors) / total) * 1000) / 10 : null,
+    // Escala de 0 a 100: 0 = só detratores, 50 = promotores e detratores empatados, 100 = só promotores.
+    // (Equivale ao NPS clássico de −100 a +100 convertido: (clássico + 100) ÷ 2.)
+    nps: total ? Math.round((50 + ((promoters - detractors) / total) * 50) * 10) / 10 : null,
   };
 }
 

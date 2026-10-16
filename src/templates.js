@@ -42,7 +42,7 @@ const KINDS = {
   weekly: {
     label: 'Relatório semanal', description: 'E-mail com o PowerPoint da semana anexado. Cada pessoa recebe só as filiais dela.',
     channels: ['email'],
-    vars: [...COMMON, V('periodo', 'Período do relatório', '06/10/2026 a 12/10/2026'), V('nps', 'NPS da semana', '+48'),
+    vars: [...COMMON, V('periodo', 'Período do relatório', '06/10/2026 a 12/10/2026'), V('nps', 'NPS da semana', '74'),
       V('respostas', 'Total de respostas', '412'), V('casos_pendentes', 'Casos pendentes', '7'), V('link_painel', 'Link do painel', 'https://pesquisa.suaempresa.com.br/admin/')],
     email: {
       subject: '{empresa}: relatório semanal (NPS {nps})', title: 'Relatório semanal de satisfação',

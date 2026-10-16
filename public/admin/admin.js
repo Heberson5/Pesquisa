@@ -24,8 +24,9 @@
   }
   const fmtDate = (t) => (t ? new Date(t).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : '—');
   const fmtDateTz = (t, tz) => { try { return t ? new Date(t).toLocaleString('pt-BR', { timeZone: tz || undefined, dateStyle: 'short', timeStyle: 'short' }) : '—'; } catch { return fmtDate(t); } };
-  const fmtNps = (n) => (n === null || n === undefined ? '—' : (n > 0 ? '+' : '') + n.toLocaleString('pt-BR'));
-  const npsClass = (n) => (n === null ? '' : n >= 50 ? 'good' : n >= 0 ? 'midc' : 'bad');
+  // NPS na escala de 0 a 100: verde a partir de 75, amarelo de 50 a 74, vermelho abaixo de 50.
+  const fmtNps = (n) => (n === null || n === undefined ? '—' : n.toLocaleString('pt-BR', { maximumFractionDigits: 1 }));
+  const npsClass = (n) => (n === null ? '' : n >= 75 ? 'good' : n >= 50 ? 'midc' : 'bad');
   const qLabel = (q) => (/[?:!.]$/.test(q) ? q + ' ' : q + ': ');
   const isoDay = (d) => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
 
@@ -495,9 +496,9 @@
     const maxR = Math.max(1, ...trend.map((t) => t.responses));
     const x = (i) => P + (trend.length === 1 ? (W - 2 * P) / 2 : (i * (W - 2 * P)) / (trend.length - 1));
     const bw = Math.max(2, Math.min(24, (W - 2 * P) / trend.length - 4));
-    const yN = (v) => H - P - ((v + 100) / 200) * (H - 2 * P);
+    const yN = (v) => H - P - (v / 100) * (H - 2 * P);
     const svg = h('svg', { svg: true, viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: 'none', role: 'img', 'aria-label': 'Evolução de respostas e NPS' });
-    svg.append(h('line', { svg: true, x1: P, x2: W - P, y1: yN(0), y2: yN(0), class: 'zero', 'stroke-dasharray': '4 4' }));
+    svg.append(h('line', { svg: true, x1: P, x2: W - P, y1: yN(50), y2: yN(50), class: 'zero', 'stroke-dasharray': '4 4' }));
     trend.forEach((t, i) => {
       const bh = (t.responses / maxR) * (H - 2 * P) * 0.6;
       svg.append(h('rect', { svg: true, x: x(i) - bw / 2, y: H - P - bh, width: bw, height: bh, class: 'tbar', rx: 3 },
@@ -506,8 +507,8 @@
     const pts = trend.map((t, i) => (t.nps === null ? null : `${x(i)},${yN(t.nps)}`)).filter(Boolean);
     if (pts.length) svg.append(h('polyline', { svg: true, points: pts.join(' '), class: 'tline' }));
     trend.forEach((t, i) => { if (t.nps !== null) svg.append(h('circle', { svg: true, cx: x(i), cy: yN(t.nps), r: 3.5, class: 'tpt' })); });
-    svg.append(h('text', { svg: true, x: 2, y: yN(100) + 4, 'font-size': 11, class: 'tlabel' }, '+100'));
-    svg.append(h('text', { svg: true, x: 2, y: yN(-100) + 4, 'font-size': 11, class: 'tlabel' }, '-100'));
+    svg.append(h('text', { svg: true, x: 2, y: yN(100) + 4, 'font-size': 11, class: 'tlabel' }, '100'));
+    svg.append(h('text', { svg: true, x: 2, y: yN(0) + 4, 'font-size': 11, class: 'tlabel' }, '0'));
     return h('div', { class: 'chart' }, svg, h('div', { class: 'legend' }, h('span', {}, '▮ Respostas por dia'), h('span', {}, '— NPS do dia')));
   }
 
@@ -936,7 +937,7 @@
       const name = h('input', { value: b.name || '', maxlength: '100' });
       const city = h('input', { value: b.city || '', maxlength: '100' });
       const active = h('input', { type: 'checkbox', checked: b.id ? !!b.active : true });
-      const goal = h('input', { type: 'number', min: '-100', max: '100', value: b.nps_goal ?? '', placeholder: `Padrão: ${settings?.defaultNpsGoal ?? '—'}` });
+      const goal = h('input', { type: 'number', min: '0', max: '100', value: b.nps_goal ?? '', placeholder: `Padrão: ${settings?.defaultNpsGoal ?? '—'}` });
       const emails = h('textarea', { rows: '2', placeholder: 'gerente@empresa.com (um por linha)', value: parseList(b.alert_emails).join('\n') });
       const phones = h('textarea', { rows: '2', placeholder: '5511999990000 (DDI + DDD + número)', value: parseList(b.alert_phones).join('\n') });
       // Horário: sem horário = sempre aberto.
@@ -1409,7 +1410,7 @@
     day.value = String(st.weeklyReport.weekday);
     const hour = h('input', { type: 'number', min: '0', max: '23', value: st.weeklyReport.hour, oninput: (e) => { st.weeklyReport.hour = Number(e.target.value); } });
     const extra = h('textarea', { rows: '2', placeholder: 'diretoria@empresa.com (um por linha)', value: st.weeklyReport.extraEmails.join('\n'), oninput: (e) => { st.weeklyReport.extraEmails = lines(e.target); } });
-    const goal = h('input', { type: 'number', min: '-100', max: '100', value: st.defaultNpsGoal ?? '', oninput: (e) => { st.defaultNpsGoal = e.target.value === '' ? null : Number(e.target.value); } });
+    const goal = h('input', { type: 'number', min: '0', max: '100', value: st.defaultNpsGoal ?? '', oninput: (e) => { st.defaultNpsGoal = e.target.value === '' ? null : Number(e.target.value); } });
     const offMin = h('input', { type: 'number', min: '10', max: '1440', value: st.offlineAlert.minutes, oninput: (e) => { st.offlineAlert.minutes = Number(e.target.value); } });
     const dimAfter = h('input', { type: 'number', min: '5', max: '3600', value: st.screen.dimAfterSeconds, oninput: (e) => { st.screen.dimAfterSeconds = Number(e.target.value); } });
     const dimLevel = h('input', { type: 'range', min: '20', max: '90', step: '5', value: st.screen.dimLevel });

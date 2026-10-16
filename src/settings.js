@@ -29,7 +29,7 @@ const DEFAULTS = {
   // No modo QR as mensagens saem uma por vez, com pausa sorteada entre o mínimo e o máximo (15 a 60 s).
   whatsapp: { mode: 'meta', minDelaySec: 15, maxDelaySec: 60 },
   weeklyReport: { enabled: false, weekday: 1, hour: 8, extraEmails: [] },
-  defaultNpsGoal: 50,
+  defaultNpsGoal: 75, // escala de 0 a 100
   offlineAlert: { enabled: true, minutes: 30 },
   // Tela do tablet: mantém acesa e escurece (economiza bateria) depois de um tempo sem toque.
   screen: { keepAwake: true, dim: true, dimAfterSeconds: 30, dimLevel: 70 },
@@ -159,7 +159,7 @@ function saveSettings(input) {
     if (w.hour !== undefined) next.weeklyReport.hour = int(w.hour, { field: 'hora', min: 0, max: 23 });
     if (w.extraEmails !== undefined) next.weeklyReport.extraEmails = emailList(w.extraEmails);
   }
-  if (input.defaultNpsGoal !== undefined) next.defaultNpsGoal = input.defaultNpsGoal === null ? null : int(input.defaultNpsGoal, { field: 'meta de NPS', min: -100, max: 100 });
+  if (input.defaultNpsGoal !== undefined) next.defaultNpsGoal = input.defaultNpsGoal === null ? null : int(input.defaultNpsGoal, { field: 'meta de NPS', min: 0, max: 100 });
   else next.defaultNpsGoal = cur.defaultNpsGoal;
   next.offlineAlert = { ...cur.offlineAlert };
   if (input.offlineAlert !== undefined) {

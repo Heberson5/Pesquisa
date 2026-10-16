@@ -7,7 +7,9 @@ Escolha o período (**De** e **Até**), a filial, a pesquisa, o canal (tablet ou
 
 ## Como ler o NPS
 - **Promotores**: notas 9 e 10. **Neutros**: 7 e 8. **Detratores**: 0 a 6.
-- **NPS = % de promotores − % de detratores**. Vai de −100 a +100.
+- O **NPS vai de 0 a 100**: 0 quando todos são detratores, 50 quando promotores e detratores empatam e 100 quando todos são promotores.
+- Cores: **verde** a partir de 75, **amarelo** de 50 a 74 e **vermelho** abaixo de 50.
+- Quem estiver acostumado à conta clássica (% de promotores − % de detratores, de −100 a +100) chega ao mesmo número fazendo (clássico + 100) ÷ 2.
 - Só entram no NPS as perguntas marcadas como **"Entra na análise de NPS"** no editor da pesquisa.
 
 ## O que mais aparece
