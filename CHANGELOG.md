@@ -36,8 +36,14 @@ Gerado a partir de `public/admin/novidades.json` (o mesmo conteúdo do menu **No
   ![Todo o painel ajustado para celular](public/admin/ajuda/img/celular-configuracoes.jpg)
 
 - **2FA também para perfis que alteram o sistema.** Quando a empresa exige 2FA, ele vale para administradores e para qualquer perfil que possa alterar usuários, permissões ou configurações.
+- **NPS de 0 a 100.** O NPS agora vai de 0 a 100, como no padrão usado pela empresa: 50 é o ponto de equilíbrio entre promotores e detratores. As metas já cadastradas foram convertidas automaticamente para a nova escala.
+- **Painel em tempo real.** Ativar um QR Code, cadastrar ou alterar algo aparece na hora para todos que estão com o painel aberto, assim como as respostas e casos novos, sem recarregar a página. Se você estiver editando um formulário, um aviso oferece a atualização sem perder o que foi digitado.
+- **Cards de Promotores e Detratores abrem as respostas.** Na Visão geral, clique em Promotores ou Detratores para ver as respostas daquele grupo, com o mesmo período e filial.
+- **Seta discreta para recolher o menu.** A seta para recolher e expandir o menu lateral fica no alto, ao lado do nome, e só se destaca ao passar o mouse.
+- **Marca Sauberlich System © no tablet.** As telas do tablet e do QR Code mostram, discretamente, a marca do sistema.
 
 ### Correção
+- **Respostas depois das 23h apareciam no dia seguinte.** Cada resposta agora conta no dia do horário local do tablet (o fuso da filial), em filtros, gráficos, casos, relatórios e CSV, qualquer que seja o fuso do servidor.
 - **Prazo de "10 anos" apagava dados uns dias antes.** A limpeza automática contava meses de 30 dias. Agora usa o mês médio do calendário, então 10 anos são 10 anos.
 - **"null" aparecia em Configurações e no QR Code.** Um texto "null" aparecia acima das guias de Configurações e na janela do QR Code de uma filial ainda sem link.
 - **Esc não fechava as janelas.** A tecla Esc agora fecha a janela aberta.

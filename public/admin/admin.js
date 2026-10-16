@@ -273,17 +273,21 @@
       const now = !shell.classList.contains('collapsed');
       shell.classList.toggle('collapsed', now);
       prefs.set('sidebar', now ? 'collapsed' : 'open');
-      collapseBtn.replaceChildren(icon(now ? 'chevrons-right' : 'chevrons-left'), h('span', {}, 'Recolher menu'));
+      collapseBtn.replaceChildren(icon(now ? 'chevron-right' : 'chevron-left', 16));
       collapseBtn.title = now ? 'Expandir menu' : 'Recolher menu';
+      collapseBtn.setAttribute('aria-label', collapseBtn.title);
+      collapseBtn.setAttribute('aria-expanded', String(!now));
     };
-    const collapseBtn = h('button', { class: 'side-btn collapse-btn', onclick: toggleCollapse, title: collapsed ? 'Expandir menu' : 'Recolher menu' },
-      icon(collapsed ? 'chevrons-right' : 'chevrons-left'), h('span', {}, 'Recolher menu'));
+    // Recolher/expandir: só uma seta pequena no topo da barra, discreta (fica nítida ao passar o mouse).
+    const collapseBtn = h('button', { class: 'collapse-btn', onclick: toggleCollapse, title: collapsed ? 'Expandir menu' : 'Recolher menu',
+      'aria-label': collapsed ? 'Expandir menu' : 'Recolher menu', 'aria-expanded': String(!collapsed) }, icon(collapsed ? 'chevron-right' : 'chevron-left', 16));
     shell.append(
       h('nav', { class: 'side', 'aria-label': 'Menu principal' },
         h('div', { class: 'brand' },
           branding.logoUrl ? h('img', { class: 'brand-logo', src: branding.logoUrl, alt: branding.companyName }) : null,
           h('span', { class: 'brand-mark' + (branding.logoUrl ? ' hidden' : '') }, initials(branding.companyName)),
-          branding.logoUrl ? null : h('span', { class: 'brand-name' }, branding.companyName)),
+          branding.logoUrl ? null : h('span', { class: 'brand-name' }, branding.companyName),
+          collapseBtn),
         groups.map((g) => h('div', { class: 'nav' }, h('div', { class: 'nav-label' }, g),
           visible.filter((p) => p[4] === g).map(([id, label]) => h('a', { href: '#/' + id, class: id === active ? 'active' : null, title: label,
             onclick: () => shell.classList.remove('mobile-open') }, icon(menuIcon(id)), h('span', {}, label),
@@ -292,7 +296,6 @@
         h('div', { class: 'side-foot' },
           h('button', { class: 'side-btn', title: dark ? 'Tema claro' : 'Tema escuro', onclick: () => { prefs.set('theme', dark ? 'light' : 'dark'); applyTheme(); route(); } },
             icon(dark ? 'sun' : 'moon'), h('span', {}, dark ? 'Tema claro' : 'Tema escuro')),
-          collapseBtn,
           h('div', { class: 'who', title: me.name }, avatar(me),
             h('div', { class: 'who-text' }, h('b', {}, me.name), h('span', {}, me.access.roleName))),
           h('button', { class: 'side-btn', title: 'Sair', onclick: async () => { await api('/logout', { method: 'POST' }).catch(() => {}); me = null; showLogin(); } },

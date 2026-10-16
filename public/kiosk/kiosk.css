@@ -156,3 +156,7 @@ video.nap { position: fixed; width: 2px; height: 2px; opacity: .01; pointer-even
 .geo-chip { font: inherit; font-size: 14px; padding: 9px 14px; border-radius: 99px; border: 1px solid currentColor; background: transparent; color: inherit; opacity: .85; cursor: pointer; }
 .geo-chip.on { background: var(--accent); color: #1f2937; border-color: transparent; opacity: 1; font-weight: 700; }
 body.mode-link .welcome-wrap { min-height: calc(100dvh - 40px); }
+
+/* Marca do sistema: texto fixo, não depende da personalização da empresa. */
+.system-mark { position: fixed; right: 14px; bottom: max(8px, env(safe-area-inset-bottom)); z-index: 5; font-size: 12px; letter-spacing: .04em; color: var(--fg); opacity: .55; pointer-events: none; white-space: nowrap; }
+body.mode-link .system-mark { position: static; display: block; text-align: center; padding: 4px 16px max(12px, env(safe-area-inset-bottom)); }
