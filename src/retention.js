@@ -4,7 +4,8 @@ const { all, run } = require('./db');
 const { getSettings } = require('./settings');
 const { anonymize } = require('./routes/privacy');
 
-const MONTH = 30 * 86_400_000;
+// Mês médio do calendário: "10 anos" (120 meses) são 10 anos de verdade.
+const MONTH = (365.25 / 12) * 86_400_000;
 
 function applyRetention(now = Date.now()) {
   const r = getSettings().retention;
@@ -12,7 +13,7 @@ function applyRetention(now = Date.now()) {
   const contacts = all('SELECT id FROM responses WHERE anonymized_at IS NULL AND contact_consent_at IS NOT NULL AND submitted_at < ?', now - r.contactsMonths * MONTH).map((x) => x.id);
   anonymize(contacts);
   // Coordenadas aproximadas vencidas: mantém só cidade/UF/região (estatística), apaga o ponto no mapa.
-  const g = run('UPDATE responses SET geo_lat = NULL, geo_lng = NULL WHERE geo_lat IS NOT NULL AND submitted_at < ?', now - r.contactsMonths * MONTH);
+  const g = run('UPDATE responses SET geo_lat = NULL, geo_lng = NULL WHERE geo_lat IS NOT NULL AND submitted_at < ?', now - r.geoMonths * MONTH);
   // Comentários livres vencidos (podem conter dados pessoais escritos pelo cliente).
   const old = now - r.commentsMonths * MONTH;
   const c = run(`DELETE FROM answers WHERE question_id IN (SELECT id FROM questions WHERE type = 'text')

@@ -22,7 +22,8 @@ const DEFAULTS = {
   faceStyle: 'color', // carinhas coloridas ou monocromáticas
   requireAdminMfa: true, // 2FA obrigatório para administradores
   privacyText: 'Suas respostas são usadas apenas para melhorar nosso atendimento. Dados de contato e localização (cidade e estado aproximados, apenas pelo QR Code) só são coletados com sua autorização, ficam protegidos e podem ser excluídos a qualquer momento a seu pedido.',
-  retention: { commentsMonths: 24, contactsMonths: 12, auditMonths: 24 },
+  // Prazos de guarda (LGPD), em meses, até 10 anos. As notas (sem dados pessoais) ficam sem prazo: são a base dos relatórios.
+  retention: { commentsMonths: 24, contactsMonths: 12, geoMonths: 12, auditMonths: 24 },
   alerts: { detractorEmail: true, webhookUrl: null, whatsappTemplate: null, whatsappLanguage: 'pt_BR' },
   weeklyReport: { enabled: false, weekday: 1, hour: 8, extraEmails: [] },
   defaultNpsGoal: 50,
@@ -54,7 +55,12 @@ function getSettings() {
   const out = structuredClone(DEFAULTS);
   for (const { key, value } of all('SELECT key, value FROM settings')) {
     if (!Object.hasOwn(DEFAULTS, key)) continue;
-    try { out[key] = OBJECT_KEYS.includes(key) ? { ...DEFAULTS[key], ...JSON.parse(value) } : JSON.parse(value); } catch { /* ignora valor corrompido */ }
+    try {
+      const v = JSON.parse(value);
+      out[key] = OBJECT_KEYS.includes(key) ? { ...DEFAULTS[key], ...v } : v;
+      // Versões antigas não tinham prazo próprio para a localização: valia o dos contatos.
+      if (key === 'retention' && v && v.geoMonths === undefined) out.retention.geoMonths = out.retention.contactsMonths;
+    } catch { /* ignora valor corrompido */ }
   }
   return out;
 }
@@ -105,7 +111,7 @@ function saveSettings(input) {
   next.retention = { ...cur.retention };
   if (input.retention !== undefined) {
     obj(input.retention, 'retenção');
-    for (const [k, min, max] of [['commentsMonths', 1, 120], ['contactsMonths', 1, 60], ['auditMonths', 6, 120]]) {
+    for (const [k, min, max] of [['commentsMonths', 1, 120], ['contactsMonths', 1, 120], ['geoMonths', 1, 120], ['auditMonths', 6, 120]]) {
       if (input.retention[k] !== undefined) next.retention[k] = int(input.retention[k], { field: 'prazo de retenção', min, max });
     }
   }

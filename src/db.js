@@ -274,6 +274,13 @@ db.exec(`CREATE TABLE IF NOT EXISTS roles (
   updated_at INTEGER NOT NULL
 );`);
 addColumnIfMissing('users', 'role_id', 'role_id INTEGER REFERENCES roles(id)');
+// Foto de perfil (já recortada e reduzida no navegador). Fica no banco e só é servida para quem está logado.
+db.exec(`CREATE TABLE IF NOT EXISTS user_photos (
+  user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  mime TEXT NOT NULL,
+  data BLOB NOT NULL,
+  updated_at INTEGER NOT NULL
+);`);
 
 // Respostas antigas de tablet: copia o nome atual do tablet (depois disso, renomear não muda o histórico).
 db.exec("UPDATE responses SET device_label = (SELECT name FROM devices WHERE devices.id = responses.device_id) WHERE device_label IS NULL AND device_id IS NOT NULL");

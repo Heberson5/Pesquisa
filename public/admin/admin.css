@@ -332,3 +332,29 @@ fieldset.ro .btn { display: none; }
   .perm-matrix td:has(> .na) { display: none; }
   .perm-extra { justify-items: end; }
 }
+
+/* ---------- prazos de guarda */
+.ret-row { display: grid; grid-template-columns: minmax(0, 1fr) 170px; gap: 16px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.ret-row:last-child { border-bottom: 0; }
+.ret-row > :last-child { justify-self: stretch; }
+.ret-row .badge { white-space: normal; }
+@media (max-width: 640px) { .ret-row { grid-template-columns: minmax(0, 1fr); gap: 8px; } }
+
+/* ---------- foto de perfil */
+img.avatar { object-fit: cover; padding: 0; background: var(--surface-2); }
+.avatar.sm { width: 26px; height: 26px; font-size: 10px; }
+.avatar.xs { width: 20px; height: 20px; font-size: 9px; }
+.avatar.xl { width: 104px; height: 104px; font-size: 32px; }
+.person { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.person.small { gap: 6px; }
+.photo-card { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 20px; align-items: center; }
+.photo-card .big { font-size: 17px; }
+.photo-big { position: relative; border: 0; padding: 0; background: none; cursor: pointer; border-radius: 50%; box-shadow: 0 0 0 3px var(--surface), 0 0 0 4px var(--line); }
+.photo-big .cam { position: absolute; right: 0; bottom: 0; width: 32px; height: 32px; border-radius: 50%; background: var(--brand); color: #fff; display: grid; place-items: center; border: 2px solid var(--surface); }
+.cropper { display: grid; justify-items: center; gap: 12px; }
+.crop-wrap { position: relative; width: 260px; height: 260px; border-radius: 14px; overflow: hidden; touch-action: none; }
+.crop-wrap::after { content: ""; position: absolute; inset: 0; border-radius: 50%; box-shadow: 0 0 0 200px rgba(15,23,42,.55); outline: 2px solid #fff; outline-offset: -2px; pointer-events: none; }
+.crop-canvas { display: block; cursor: grab; width: 260px; height: 260px; }
+.crop-canvas:active { cursor: grabbing; }
+.crop-zoom { width: 260px; } .crop-zoom input { padding: 0; accent-color: var(--brand); }
+@media (max-width: 520px) { .photo-card { grid-template-columns: minmax(0, 1fr); justify-items: start; } }

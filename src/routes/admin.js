@@ -43,6 +43,7 @@ router.post('/logout', (req, res) => {
 router.get('/me', (req, res) => {
   const u = get('SELECT totp_enabled, notify_detractors, notify_reports, notify_offline, whatsapp FROM users WHERE id = ?', req.user.id);
   res.json({ user: { id: req.user.id, name: req.user.name, email: req.user.email, role: req.user.role, access: perm.publicAccess(req.user), mfaEnabled: !!u.totp_enabled, whatsapp: u.whatsapp || '',
+    photo_at: photoAt(req.user.id),
     notify: { detractors: !!u.notify_detractors, reports: !!u.notify_reports, offline: !!u.notify_offline } },
   mfaSetupRequired: req.user.mfaSetupRequired, csrf: req.user.csrf,
   questionTypes: QUESTION_TYPES, displays: DISPLAYS, langs: LANG_LABELS, contactModes: CONTACT_MODES, permCatalog: perm.catalog(), settings: req.user.mfaSetupRequired ? null : settingsFor(req.user) });
@@ -94,6 +95,47 @@ router.post('/me/password', loginLimiter, (req, res) => {
   res.json({ ok: true });
 });
 
+// ---------------------------------------------------------------- foto de perfil
+// O navegador recorta e reduz a foto (256×256); o servidor só aceita JPG, PNG ou WEBP pequenos, conferindo o conteúdo.
+const PHOTO_MAX = 400 * 1024;
+const PHOTO_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
+const photoAt = (uid) => get('SELECT updated_at FROM user_photos WHERE user_id = ?', uid)?.updated_at || null;
+
+router.put('/me/photo', express.raw({ type: () => true, limit: PHOTO_MAX }), (req, res) => {
+  if (!Buffer.isBuffer(req.body) || !req.body.length) throw bad('Arquivo vazio.');
+  const mime = sniffMime(req.body);
+  if (!PHOTO_TYPES.has(mime)) throw new HttpError(415, 'Use uma foto JPG, PNG ou WEBP.');
+  const now = Date.now();
+  run('INSERT INTO user_photos (user_id, mime, data, updated_at) VALUES (?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET mime = excluded.mime, data = excluded.data, updated_at = excluded.updated_at',
+    req.user.id, mime, req.body, now);
+  audit(req.user.id, 'user.photo', { set: true }, req.ip);
+  res.json({ photo_at: now });
+});
+
+router.delete('/me/photo', (req, res) => {
+  run('DELETE FROM user_photos WHERE user_id = ?', req.user.id);
+  audit(req.user.id, 'user.photo', { set: false }, req.ip);
+  res.json({ ok: true });
+});
+
+// Qualquer pessoa logada vê as fotos da equipe (aparecem em casos, usuários e no menu). Nunca em endereço público.
+router.get('/users/:id/photo', (req, res) => {
+  const p = get('SELECT mime, data FROM user_photos WHERE user_id = ?', id(req.params.id));
+  if (!p) throw new HttpError(404, 'Sem foto.');
+  res.set({ 'Content-Type': p.mime, 'Content-Disposition': 'inline', 'Cache-Control': 'private, max-age=86400' });
+  res.send(Buffer.from(p.data));
+});
+
+// Remover a foto de outra pessoa (foto inadequada). Trocar, só a própria pessoa.
+router.delete('/users/:id/photo', need('usuarios', 'editar'), (req, res) => {
+  const uid = id(req.params.id);
+  const u = get('SELECT * FROM users WHERE id = ?', uid);
+  if (!u) throw new HttpError(404, 'Usuário não encontrado.');
+  if (!perm.roleWithin(req.user, perm.roleOf(u))) throw new HttpError(403, 'Você não pode alterar uma pessoa com mais acesso que você.');
+  run('DELETE FROM user_photos WHERE user_id = ?', uid);
+  audit(req.user.id, 'user.photo_removed', { id: uid, email: u.email }, req.ip);
+  res.json({ ok: true });
+});
 
 const { scope, assertBranch, placeholders } = require('../scope');
 
@@ -557,7 +599,7 @@ router.get('/responses.csv', need('respostas', 'csv'), (req, res) => {
 // só nas filiais que enxerga, e ninguém muda o próprio perfil nem se desativa.
 function userView(u, links) {
   const a = perm.accessFor(u);
-  return { id: u.id, name: u.name, email: u.email, role: u.role, role_id: a.roleId, role_name: a.roleName, scope_all: a.scopeAll, active: u.active,
+  return { id: u.id, name: u.name, email: u.email, role: u.role, role_id: a.roleId, role_name: a.roleName, scope_all: a.scopeAll, active: u.active, photo_at: photoAt(u.id),
     locked_until: u.locked_until, created_at: u.created_at, totp_enabled: u.totp_enabled, branches: links.filter((l) => l.user_id === u.id).map((l) => l.branch_id) };
 }
 
@@ -653,6 +695,8 @@ router.put('/users/:id', need('usuarios', 'editar'), (req, res) => {
     if (u.password) run('UPDATE users SET password_hash = ?, failed_logins = 0, locked_until = NULL WHERE id = ?', hashPassword(u.password), uid);
     setUserBranches(uid, u.branches);
   });
+  // Usuário desativado: a foto dele é apagada.
+  if (!u.active) run('DELETE FROM user_photos WHERE user_id = ?', uid);
   // Mudança de perfil, desativação ou senha nova derrubam as sessões abertas do usuário.
   if (u.password || !u.active || u.roleRow.id !== before.id) destroyUserSessions(uid);
   if (resetMfa) resetUserMfa(uid);

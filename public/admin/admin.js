@@ -58,6 +58,10 @@
   const can = (mod, act = 'ver') => !!me?.access && (me.access.isAdmin || me.access.perms.includes(`${mod}.${act}`));
   const CFG_GROUPS = ['cfg_marca', 'cfg_alertas', 'cfg_envios', 'cfg_lgpd'];
   const initials = (name) => String(name || '?').split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join('');
+  // Foto da pessoa (ou as iniciais, para quem não tem foto). u = { id, name, photo_at }.
+  const avatar = (u, cls = '') => (u?.id && u.photo_at
+    ? h('img', { class: ('avatar ' + cls).trim(), src: `/api/admin/users/${u.id}/photo?v=${u.photo_at}`, alt: '', loading: 'lazy' })
+    : h('span', { class: ('avatar ' + cls).trim(), 'aria-hidden': 'true' }, initials(u?.name)));
 
   function modal(title, content, actions = []) {
     const bg = h('div', { class: 'modal-bg', onclick: (e) => { if (e.target === bg) close(); } });
@@ -274,7 +278,7 @@
           h('button', { class: 'side-btn', title: dark ? 'Tema claro' : 'Tema escuro', onclick: () => { prefs.set('theme', dark ? 'light' : 'dark'); applyTheme(); route(); } },
             icon(dark ? 'sun' : 'moon'), h('span', {}, dark ? 'Tema claro' : 'Tema escuro')),
           collapseBtn,
-          h('div', { class: 'who', title: me.name }, h('span', { class: 'avatar' }, initials(me.name)),
+          h('div', { class: 'who', title: me.name }, avatar(me),
             h('div', { class: 'who-text' }, h('b', {}, me.name), h('span', {}, me.access.roleName))),
           h('button', { class: 'side-btn', title: 'Sair', onclick: async () => { await api('/logout', { method: 'POST' }).catch(() => {}); me = null; showLogin(); } },
             icon('logout'), h('span', {}, 'Sair')))),
@@ -499,7 +503,7 @@
           h('td', { class: 'small' }, c.comment ? (c.comment.length > 90 ? c.comment.slice(0, 90) + '…' : c.comment) : h('span', { class: 'muted' }, '—'),
             c.has_contact ? h('div', {}, h('span', { class: 'badge ok' }, 'Pediu contato')) : null),
           h('td', {}, h('span', { class: 'badge ' + CASE_BADGE[c.status] }, r.statuses[c.status])),
-          h('td', { class: 'small' }, c.assignee || h('span', { class: 'muted' }, 'ninguém')),
+          h('td', { class: 'small' }, c.assignee ? h('div', { class: 'person' }, avatar({ id: c.assignee_id, name: c.assignee, photo_at: c.assignee_photo_at }, 'sm'), c.assignee) : h('span', { class: 'muted' }, 'ninguém')),
           h('td', {}, h('a', { class: 'btn secondary sm', href: '#/casos/' + c.id }, 'Abrir'))))
           : h('tr', {}, h('td', { colspan: '7', class: 'empty' }, 'Nenhum caso com esses filtros. 🎉')))),
       h('div', { class: 'row' },
@@ -543,7 +547,7 @@
       contact,
       h('h2', {}, 'Histórico'),
       c.notes.length ? h('ul', { class: 'timeline' }, c.notes.map((n) => h('li', {},
-        h('div', { class: 'small muted' }, `${fmtDate(n.at)} · ${n.user || 'sistema'}${n.status_to ? ` · ${c.statuses[n.status_from] || n.status_from} → ${c.statuses[n.status_to]}` : ''}`),
+        h('div', { class: 'small muted person' }, n.user ? avatar({ id: n.user_id, name: n.user, photo_at: n.photo_at }, 'xs') : null, `${fmtDate(n.at)} · ${n.user || 'sistema'}${n.status_to ? ` · ${c.statuses[n.status_from] || n.status_from} → ${c.statuses[n.status_to]}` : ''}`),
         n.text ? h('div', {}, n.text) : null))) : h('p', { class: 'small muted' }, 'Nenhuma ação registrada ainda.'),
       h('div', { class: 'form-grid' }, h('label', { class: 'f' }, 'Status', status), h('label', { class: 'f' }, 'Responsável', who)),
       editable ? h('label', { class: 'f' }, 'Anotação', note) : null),
@@ -964,7 +968,7 @@
           h('img', { class: 'poster-qr', src: info.qr, alt: 'QR Code da pesquisa' }),
           h('div', { class: 'poster-sub' }, 'Aponte a câmera do celular · leva menos de 1 minuto'),
           h('div', { class: 'poster-branch' }, b.name)) : h('p', { class: 'muted' }, 'O link desta filial ainda não foi criado.'),
-        info.url ? h('p', { class: 'small' }, h('code', { class: 'secret' }, info.url)) : null,
+        info.url ? h('p', { class: 'small' }, h('code', { class: 'secret' }, info.url)) : '',
         h('p', { class: 'small muted' }, info.enabled ? 'Ativo: qualquer pessoa com o QR pode responder (limite de 10 respostas por hora por aparelho).' : 'Desativado: o link não aceita respostas.'),
         h('div', { class: 'row' },
           info.url ? h('button', { class: 'btn secondary sm', onclick: () => { document.body.classList.add('printing-poster'); window.print(); document.body.classList.remove('printing-poster'); } }, 'Imprimir cartaz') : null,
@@ -1073,6 +1077,10 @@
         h('label', { class: 'f' }, 'Nome', name), h('label', { class: 'f' }, 'E-mail', email),
         h('label', { class: 'f' }, 'Perfil de acesso', role, roleHint),
         h('label', { class: 'f' }, 'Senha', pw), h('label', { class: 'chk' }, active, 'Ativo'),
+        u.id && u.photo_at && u.id !== me.id ? h('div', { class: 'row' }, avatar(u), h('button', { class: 'btn secondary sm', type: 'button', onclick: async (e) => {
+          if (!confirm(`Remover a foto de ${u.name}? A pessoa poderá enviar outra em Minha conta.`)) return;
+          try { await api(`/users/${u.id}/photo`, { method: 'DELETE' }); e.target.closest('.row').remove(); toast('Foto removida.'); } catch (ex) { toast(ex.message, true); }
+        } }, 'Remover foto')) : null,
         u.id && u.totp_enabled && u.id !== me.id && can('usuarios', 'mfa') ? h('label', { class: 'chk', title: 'Use quando a pessoa perdeu o celular' }, resetMfa, 'Resetar 2FA (perdeu o celular)') : null,
         h('div', {}, scopeHint, brBox)),
       [{ label: 'Salvar', onClick: async (close) => {
@@ -1091,7 +1099,7 @@
       h('div', { class: 'card table-wrap' }, h('table', {},
         h('thead', {}, h('tr', {}, h('th', {}, 'Nome'), h('th', {}, 'Perfil'), h('th', {}, 'Filiais'), h('th', {}, 'Status'), h('th', {}))),
         h('tbody', {}, users.map((u) => h('tr', {},
-          h('td', {}, h('b', {}, u.name), h('div', { class: 'small muted' }, u.email)),
+          h('td', {}, h('div', { class: 'person' }, avatar(u), h('div', {}, h('b', {}, u.name), h('div', { class: 'small muted' }, u.email)))),
           h('td', {}, u.role_name),
           h('td', { class: 'small' }, u.scope_all ? 'Todas' : (u.branches.map(bName).join(', ') || '—')),
           h('td', {}, h('span', { class: 'badge ' + (u.active ? 'ok' : 'off') }, u.active ? 'Ativo' : 'Inativo'),
@@ -1255,10 +1263,10 @@
       const content = await TAB[settingsTab](st, renderTab);
       // Sem permissão de editar, a aba aparece só para consulta.
       const ro = !can(group, 'editar');
-      body.replaceChildren(h('div', { class: 'tabs' }, tabs.map(([k, label, ic]) => h('button', { class: settingsTab === k ? 'active' : '',
+      body.replaceChildren(...[h('div', { class: 'tabs' }, tabs.map(([k, label, ic]) => h('button', { class: settingsTab === k ? 'active' : '',
         onclick: () => { settingsTab = k; renderTab(); } }, icon(ic, 16), label))),
       ro ? h('p', { class: 'small muted' }, icon('lock', 14), ' Somente consulta: o seu perfil não pode alterar esta aba.') : null,
-      ro ? h('fieldset', { class: 'ro', disabled: true }, content) : content);
+      ro ? h('fieldset', { class: 'ro', disabled: true }, content) : content].filter(Boolean));
     };
     await renderTab();
     return h('div', {}, pageHead('Configurações', 'Marca, ícones, alertas, relatórios, segurança e LGPD',
@@ -1490,9 +1498,33 @@
   }
   const renderAgain = () => { if (location.hash.startsWith('#/configuracoes')) route(); };
 
+  // Prazos de guarda em anos (até 10). Um valor antigo em meses que não feche em anos continua na lista.
+  function retentionCard(st) {
+    const r = st.retention;
+    const sel = (key, { six = false } = {}) => {
+      const opts = [...(six ? [[6, '6 meses']] : []), ...Array.from({ length: 10 }, (_, i) => [(i + 1) * 12, i === 0 ? '1 ano' : `${i + 1} anos`])];
+      if (!opts.some(([v]) => v === r[key])) opts.push([r[key], `${r[key]} meses`]);
+      opts.sort((a, b) => a[0] - b[0]);
+      const el = h('select', { onchange: (e) => { r[key] = Number(e.target.value); warn(); } }, opts.map(([v, l]) => h('option', { value: String(v) }, l)));
+      el.value = String(r[key]);
+      return el;
+    };
+    const lgpdWarn = h('span', { class: 'badge warn' }, 'Prazo longo: registre o motivo no controle de tratamento de dados da empresa');
+    const warn = () => lgpdWarn.classList.toggle('hidden', r.contactsMonths <= 24);
+    const row = (title, hint, control) => h('div', { class: 'ret-row' }, h('div', {}, h('b', {}, title), h('div', { class: 'small muted' }, hint)), control);
+    const card = h('div', { class: 'card' }, h('h2', {}, 'Por quanto tempo guardar os dados'),
+      h('p', { class: 'small muted' }, 'O sistema apaga sozinho, uma vez por dia, o que passar do prazo. O máximo é 10 anos.'),
+      row('Notas e respostas de múltipla escolha', 'Não têm dados pessoais. São a base do NPS, do ranking e dos relatórios.', h('span', { class: 'badge ok' }, 'Sem prazo · sempre guardadas')),
+      row('Comentários escritos pelo cliente', 'Podem conter nomes ou telefones digitados pelo cliente.', sel('commentsMonths')),
+      row('Contato do cliente (nome, telefone e e-mail)', h('span', {}, 'Só existe quando o cliente autorizou. É dado pessoal protegido pela LGPD. ', lgpdWarn), sel('contactsMonths')),
+      row('Localização aproximada (QR Code)', 'Depois do prazo apaga o ponto no mapa e mantém só cidade, UF e região.', sel('geoMonths')),
+      row('Registro de auditoria', 'Quem fez o quê no painel. Mínimo de 6 meses.', sel('auditMonths', { six: true })));
+    warn();
+    return card;
+  }
+
   async function securityTab(st) {
     const privacy = h('textarea', { rows: '5', maxlength: '1500', value: st.privacyText, oninput: (e) => { st.privacyText = e.target.value; } });
-    const num = (obj, k, min, max) => h('input', { type: 'number', min: String(min), max: String(max), value: obj[k], oninput: (e) => { obj[k] = Number(e.target.value); } });
     const phone = h('input', { placeholder: 'Telefone do titular' });
     const mail = h('input', { type: 'email', placeholder: 'ou e-mail' });
     const results = h('div');
@@ -1519,12 +1551,7 @@
         h('div', { class: 'card' }, h('h2', {}, 'Acesso ao painel'),
           chk(st.requireAdminMfa, (v) => { st.requireAdminMfa = v; }, 'Exigir verificação em duas etapas (2FA) de administradores e de perfis que alteram usuários, permissões ou configurações'),
           h('p', { class: 'small muted' }, 'Recomendado. Com isso ligado, quem tem esses perfis e ainda não usa 2FA é obrigado a configurá-lo no próximo login.')),
-        h('div', { class: 'card' }, h('h2', {}, 'Prazo de guarda dos dados (LGPD)'),
-          h('div', { class: 'form-grid' },
-            h('label', { class: 'f' }, 'Contatos (meses)', num(st.retention, 'contactsMonths', 1, 60)),
-            h('label', { class: 'f' }, 'Comentários (meses)', num(st.retention, 'commentsMonths', 1, 120)),
-            h('label', { class: 'f' }, 'Auditoria (meses)', num(st.retention, 'auditMonths', 6, 120))),
-          h('p', { class: 'small muted' }, 'Depois do prazo, os dados são apagados automaticamente. As notas numéricas (sem dados pessoais) são mantidas para o histórico do NPS.'))),
+        retentionCard(st)),
       h('div', { class: 'card' }, h('h2', {}, 'Aviso de privacidade exibido no tablet e no QR Code'), privacy),
       !can('cfg_lgpd', 'titular') ? null : h('div', { class: 'card' }, h('h2', {}, 'Pedido do titular (LGPD)'),
         h('p', { class: 'small muted' }, 'Quando um cliente pedir acesso ou exclusão dos dados dele, localize pelo telefone ou e-mail informado.'),
@@ -1579,6 +1606,8 @@
         if (d.resetMfa) bits.push('verificação em duas etapas reiniciada');
         return E('usuarios', d.active === 0 || d.active === false || d.resetMfa ? 'warn' : '', `Alterou o usuário ${d.email || '#' + d.id}`, bits.join(' · ') + '.');
       }
+      case 'user.photo': return E('conta', '', d.set ? 'Trocou a própria foto de perfil' : 'Removeu a própria foto de perfil');
+      case 'user.photo_removed': return E('usuarios', 'warn', `Removeu a foto de perfil de ${d.email || '#' + d.id}`);
       case 'role.create': return E('usuarios', '', `Criou o perfil de acesso "${d.name}"`, `${d.scope === 'all' ? 'Todas as filiais' : 'Só as filiais do usuário'} · ${plural((d.perms || []).length, 'permissão', 'permissões')}.`);
       case 'role.update': {
         const bits = [];
@@ -1658,6 +1687,50 @@
       list);
   }
 
+  // ------------------------------------------------------------ recorte da foto de perfil
+  // Recorta em círculo no navegador (arrastar para posicionar, zoom pela barra ou roda do mouse) e gera 256×256.
+  function photoCropper(file, onSave) {
+    const VIEW = 260; const OUT = 256;
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    const canvas = h('canvas', { width: String(VIEW), height: String(VIEW), class: 'crop-canvas', 'aria-label': 'Foto para recortar' });
+    const ctx = canvas.getContext('2d');
+    const zoom = h('input', { type: 'range', min: '100', max: '300', value: '100', 'aria-label': 'Zoom' });
+    let base = 1; let x = 0; let y = 0; // posição do centro da imagem em relação ao centro do quadro
+    const scale = () => base * (Number(zoom.value) / 100);
+    const clamp = () => {
+      const s = scale(); const maxX = Math.max(0, (img.width * s - VIEW) / 2); const maxY = Math.max(0, (img.height * s - VIEW) / 2);
+      x = Math.min(maxX, Math.max(-maxX, x)); y = Math.min(maxY, Math.max(-maxY, y));
+    };
+    const paint = (c, size) => {
+      const k = size / VIEW; const s = scale() * k;
+      c.fillStyle = '#ffffff'; c.fillRect(0, 0, size, size);
+      c.drawImage(img, size / 2 + x * k - (img.width * s) / 2, size / 2 + y * k - (img.height * s) / 2, img.width * s, img.height * s);
+    };
+    const draw = () => { clamp(); paint(ctx, VIEW); };
+    let drag = null;
+    canvas.addEventListener('pointerdown', (e) => { drag = { px: e.clientX, py: e.clientY, x, y }; canvas.setPointerCapture(e.pointerId); });
+    canvas.addEventListener('pointermove', (e) => { if (!drag) return; x = drag.x + e.clientX - drag.px; y = drag.y + e.clientY - drag.py; draw(); });
+    canvas.addEventListener('pointerup', () => { drag = null; });
+    canvas.addEventListener('wheel', (e) => { e.preventDefault(); zoom.value = String(Math.min(300, Math.max(100, Number(zoom.value) - Math.sign(e.deltaY) * 10))); draw(); }, { passive: false });
+    zoom.addEventListener('input', draw);
+    img.onload = () => { base = Math.max(VIEW / img.width, VIEW / img.height); draw(); };
+    img.onerror = () => { toast('Não foi possível abrir esta imagem.', true); document.querySelector('.modal-bg')?.remove(); };
+    img.src = url;
+    const close = modal('Ajustar foto', h('div', { class: 'cropper' },
+      h('div', { class: 'crop-wrap' }, canvas),
+      h('label', { class: 'f crop-zoom' }, 'Zoom', zoom),
+      h('p', { class: 'small muted' }, 'Arraste a foto para posicionar. Só a parte dentro do círculo aparece.')),
+    [{ label: 'Salvar foto', onClick: async (done) => {
+      const out = h('canvas', { width: String(OUT), height: String(OUT) });
+      paint(out.getContext('2d'), OUT);
+      let q = 0.9; let blob;
+      do { blob = await new Promise((r) => out.toBlob(r, 'image/jpeg', q)); q -= 0.15; } while (blob && blob.size > 350 * 1024 && q > 0.3);
+      try { await onSave(blob); URL.revokeObjectURL(url); done(); } catch (ex) { toast(ex.message, true); }
+    } }]);
+    void close;
+  }
+
   // ------------------------------------------------------------ minha conta
   async function pageAccount() {
     const cur = h('input', { type: 'password', autocomplete: 'current-password' });
@@ -1674,7 +1747,29 @@
       try { await api('/me/notifications', { method: 'PUT', body: { [key]: e.target.checked } }); me.notify[key] = e.target.checked; toast('Preferência salva.'); } catch (ex) { toast(ex.message, true); }
     } }), label);
     const wa = h('input', { value: me.whatsapp || '', placeholder: '5511999990000', inputmode: 'numeric', autocomplete: 'tel' });
+    const pick = h('input', { type: 'file', accept: 'image/jpeg,image/png,image/webp', class: 'hidden', onchange: (e) => {
+      const f = e.target.files[0]; e.target.value = '';
+      if (!f) return;
+      if (!/^image\/(jpeg|png|webp)$/.test(f.type)) return toast('Use uma foto JPG, PNG ou WEBP.', true);
+      if (f.size > 15 * 1024 * 1024) return toast('Foto maior que 15 MB.', true);
+      photoCropper(f, async (blob) => {
+        const r = await api('/me/photo', { method: 'PUT', body: blob, headers: { 'Content-Type': 'application/octet-stream' } });
+        me.photo_at = r.photo_at; toast('Foto salva.'); route();
+      });
+    } });
+    const photoCard = h('div', { class: 'card' }, h('h2', {}, 'Foto e perfil'),
+      h('div', { class: 'photo-card' },
+        h('button', { class: 'photo-big', type: 'button', title: 'Trocar foto', onclick: () => pick.click() }, avatar(me, 'xl'), h('span', { class: 'cam' }, icon('image', 16))),
+        h('div', { class: 'grid', style: null },
+          h('div', {}, h('b', { class: 'big' }, me.name), h('div', { class: 'small muted' }, `${me.access.roleName} · ${me.access.scopeAll ? 'todas as filiais' : 'filiais ligadas a você'}`)),
+          h('div', { class: 'row' }, pick, h('button', { class: 'btn sm', onclick: () => pick.click() }, me.photo_at ? 'Trocar foto' : 'Enviar foto'),
+            me.photo_at ? h('button', { class: 'btn secondary sm', onclick: async () => {
+              if (!confirm('Remover sua foto?')) return;
+              try { await api('/me/photo', { method: 'DELETE' }); me.photo_at = null; toast('Foto removida.'); route(); } catch (ex) { toast(ex.message, true); }
+            } }, 'Remover') : null),
+          h('div', { class: 'small muted' }, 'JPG, PNG ou WEBP. Você recorta e ajusta antes de salvar; a foto fica com 256 × 256 pixels e só aparece para quem está logado no painel.'))));
     return h('div', {}, pageHead('Minha conta', me.email),
+      photoCard,
       h('div', { class: 'grid c2' },
         h('div', { class: 'card' }, h('h2', {}, 'Verificação em duas etapas (2FA)'),
           h('p', {}, mfa.enabled ? h('span', { class: 'badge ok' }, icon('shield', 14), 'Ativa') : h('span', { class: 'badge warn' }, 'Desativada'),

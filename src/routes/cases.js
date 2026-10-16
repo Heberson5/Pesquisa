@@ -47,7 +47,8 @@ router.get('/', (req, res) => {
   const page = int(req.query.page || '1', { field: 'página', min: 1, max: 100000 });
   const f = caseFilter(req.user, req.query);
   const total = get(`SELECT COUNT(*) AS n FROM cases c ${f.sql}`, ...f.params).n;
-  const rows = all(`SELECT c.id, c.status, c.min_score, c.created_at, c.updated_at, c.resolved_at, b.name AS branch, u.name AS assignee,
+  const rows = all(`SELECT c.id, c.status, c.min_score, c.created_at, c.updated_at, c.resolved_at, b.name AS branch, u.name AS assignee, c.assignee_id,
+      (SELECT p.updated_at FROM user_photos p WHERE p.user_id = c.assignee_id) AS assignee_photo_at,
       (r.contact_consent_at IS NOT NULL AND r.anonymized_at IS NULL) AS has_contact, r.channel,
       (SELECT a.value_text FROM answers a JOIN questions q ON q.id = a.question_id AND q.type = 'text' WHERE a.response_id = r.id AND a.value_text IS NOT NULL LIMIT 1) AS comment
     FROM cases c JOIN branches b ON b.id = c.branch_id JOIN responses r ON r.id = c.response_id LEFT JOIN users u ON u.id = c.assignee_id
@@ -86,7 +87,8 @@ router.get('/:id', (req, res) => {
     contact = { name: decrypt(r.contact_name_enc), phone: decrypt(r.contact_phone_enc), email: decrypt(r.contact_email_enc), consentAt: r.contact_consent_at };
     audit(req.user.id, 'contact.view', { caseId: c.id }, req.ip); // acesso a dado pessoal fica registrado
   }
-  const notes = all(`SELECT n.at, n.text, n.status_from, n.status_to, u.name AS user FROM case_notes n LEFT JOIN users u ON u.id = n.user_id
+  const notes = all(`SELECT n.at, n.text, n.status_from, n.status_to, u.name AS user, n.user_id, (SELECT p.updated_at FROM user_photos p WHERE p.user_id = n.user_id) AS photo_at
+    FROM case_notes n LEFT JOIN users u ON u.id = n.user_id
     WHERE n.case_id = ? ORDER BY n.at`, c.id);
   res.json({ ...c, branch: r.branch, survey: r.survey, device: r.device, channel: r.channel, submitted_at: r.submitted_at,
     answers, contact, contactHidden: hasContact && !contact, notes, statuses: STATUS, assignable: assignable(c.branch_id) });
