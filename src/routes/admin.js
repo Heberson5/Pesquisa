@@ -21,7 +21,7 @@ const { resetUserMfa } = require('./auth');
 const QRCode = require('qrcode');
 const { encrypt, decrypt, lookup } = require('../vault');
 const { publicUrl, timezone: companyTz } = require('../config');
-const { parseLocal } = require('../time');
+const { parseLocal, formatLocal } = require('../time');
 const templates = require('../templates');
 const whatsappQr = require('../whatsapp-qr');
 
@@ -535,9 +535,15 @@ router.get('/surveys/:id/breakdown', need('dashboard', 'ver'), (req, res) => {
 function listResponses(user, query, limit, offset) {
   const f = responseFilter(user, query);
   const total = get(`SELECT COUNT(*) AS n FROM responses r ${f.sql}`, ...f.params).n;
-  const rows = all(`SELECT r.id, r.uuid, r.submitted_at, r.started_at, r.channel, r.lang, r.geo_lat, r.geo_lng, r.geo_city, r.geo_uf, r.geo_region, COALESCE(r.device_label, d.name) AS device_label, b.name AS branch, b.city AS branch_city, s.title AS survey, d.name AS device
+  const rows = all(`SELECT r.id, r.uuid, r.submitted_at, r.local_day, r.started_at, r.channel, r.lang, r.geo_lat, r.geo_lng, r.geo_city, r.geo_uf, r.geo_region, COALESCE(r.device_label, d.name) AS device_label, b.name AS branch, b.city AS branch_city, s.title AS survey, d.name AS device,
+      b.id AS branch_id, b.timezone AS branch_tz, d.timezone AS device_tz
       FROM responses r JOIN branches b ON b.id = r.branch_id JOIN surveys s ON s.id = r.survey_id
       LEFT JOIN devices d ON d.id = r.device_id ${f.sql} ORDER BY r.submitted_at DESC LIMIT ? OFFSET ?`, ...f.params, limit, offset);
+  // Fuso de cada resposta (o do tablet que respondeu, ou o da filial): a tela e o CSV mostram a hora local.
+  for (const r of rows) {
+    r.tz = zones.forBranch({ id: r.branch_id, timezone: r.branch_tz }, r.device_tz ? { timezone: r.device_tz } : null);
+    delete r.branch_tz; delete r.device_tz;
+  }
   if (rows.length) {
     const ans = all(`SELECT a.response_id, q.text, q.type, q.is_nps, a.value_num, a.value_text FROM answers a
         JOIN questions q ON q.id = a.question_id WHERE a.response_id IN (${placeholders(rows)}) ORDER BY q.position`, ...rows.map((r) => r.id));
@@ -595,7 +601,7 @@ router.get('/responses.csv', need('respostas', 'csv'), (req, res) => {
   const lines = [['Data/hora', 'Filial', 'Pesquisa', 'Dispositivo', 'Canal', 'Cidade da loja', 'Cidade (cliente)', 'UF (cliente)', 'Região (cliente)', 'Latitude aprox.', 'Longitude aprox.', ...questions].map(csvCell).join(';')];
   for (const r of rows) {
     const map = Object.fromEntries((r.answers || []).map((a) => [a.question, a.value]));
-    lines.push([new Date(r.submitted_at).toLocaleString('pt-BR'), r.branch, r.survey, r.device_label || r.device, r.channel === 'link' ? 'QR Code' : 'Tablet', r.branch_city,
+    lines.push([formatLocal(r.submitted_at, r.tz), r.branch, r.survey, r.device_label || r.device, r.channel === 'link' ? 'QR Code' : 'Tablet', r.branch_city,
       r.geo_city, r.geo_uf, r.geo_region, r.geo_lat, r.geo_lng, ...questions.map((q) => map[q])]
       .map(csvCell).join(';'));
   }

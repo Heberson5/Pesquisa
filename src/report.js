@@ -1,4 +1,5 @@
 'use strict';
+const { formatLocal } = require('./time');
 // Relatório PowerPoint (.pptx) com gráficos nativos (editáveis no PowerPoint),
 // logo e cores da empresa definidos em Configurações.
 const fs = require('node:fs');
@@ -137,7 +138,7 @@ async function buildReport({ settings, stats, surveys, filters, mediaDir, genera
   cover.addText([
     { text: settings.companyName, options: { bold: true, breakLine: true } },
     { text: `${period}  ·  ${scopeText}`, options: { breakLine: true } },
-    { text: `Gerado em ${new Date().toLocaleDateString('pt-BR')}`, options: { fontSize: 14 } },
+    { text: `Gerado em ${formatLocal(Date.now()).slice(0, 10)}`, options: { fontSize: 14 } },
   ], { placeholder: 'body' });
   // "selo" do NPS na capa: o motivo visual que se repete (círculos)
   cover.addShape(pres.shapes.OVAL, { x: W - M - 2.6, y: 2.4, w: 2.6, h: 2.6, fill: { color: accent }, line: { color: accent }, objectName: 'Selo NPS' });
@@ -277,7 +278,7 @@ async function buildReport({ settings, stats, surveys, filters, mediaDir, genera
       cm.addText('“', { x: x + 0.25, y: y + 0.3, w: 0.5, h: 0.5, fontSize: 24, bold: true, align: 'center', valign: 'middle', color: isDark(accent) ? 'FFFFFF' : INK, isTextBox: true, margin: 0 });
       const text = c.comment.length > 140 ? c.comment.slice(0, 137) + '…' : c.comment;
       cm.addText([{ text, options: { fontSize: 14, color: INK, breakLine: true } },
-        { text: `${c.branch} · ${new Date(c.submitted_at).toLocaleDateString('pt-BR')}`, options: { fontSize: 11, color: MUTED } }],
+        { text: `${c.branch} · ${c.day ? c.day.split('-').reverse().join('/') : formatLocal(c.submitted_at, c.tz).slice(0, 10)}`, options: { fontSize: 11, color: MUTED } }],
       { x: x + 0.95, y: y + 0.1, w: cw - 1.2, h: 0.95, valign: 'middle', isTextBox: true, margin: 0 });
     });
   }

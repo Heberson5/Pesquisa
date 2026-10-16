@@ -274,6 +274,9 @@ db.exec(`CREATE TABLE IF NOT EXISTS roles (
   updated_at INTEGER NOT NULL
 );`);
 addColumnIfMissing('users', 'role_id', 'role_id INTEGER REFERENCES roles(id)');
+// Dia da resposta no calendário do tablet/filial (AAAA-MM-DD). Filtros e gráficos usam este dia, nunca o fuso do servidor.
+addColumnIfMissing('responses', 'local_day', 'local_day TEXT');
+db.exec('CREATE INDEX IF NOT EXISTS idx_responses_local_day ON responses(local_day)');
 // Última versão cuja janela "O que há de novo" a pessoa já viu.
 addColumnIfMissing('users', 'last_seen_version', 'last_seen_version TEXT');
 // Sessão do WhatsApp conectado por QR Code (chaves da conexão), sempre criptografada.

@@ -4,7 +4,8 @@
 const express = require('express');
 const { get, all, run, tx, audit } = require('../db');
 const { requireUser } = require('../auth');
-const { HttpError, bad, str, int, id, dateParam } = require('../validate');
+const { HttpError, bad, str, int, id, dayParam } = require('../validate');
+const zones = require('../zones');
 const { scope, assertBranch, placeholders } = require('../scope');
 const { decrypt } = require('../vault');
 const { need, can, accessFor } = require('../permissions');
@@ -22,9 +23,10 @@ function caseFilter(user, q) {
     if (q.status === 'pendentes') where.push("c.status IN ('aberto','em_contato')"); else { where.push('c.status = ?'); params.push(q.status); }
   }
   if (q.branchId) { const b = id(q.branchId, 'filial'); assertBranch(user, b); where.push('c.branch_id = ?'); params.push(b); }
-  const from = dateParam(q.from, 'de'); const to = dateParam(q.to, 'até');
-  if (from !== null) { where.push('c.created_at >= ?'); params.push(from); }
-  if (to !== null) { where.push('c.created_at < ?'); params.push(to + 86_400_000); }
+  // Período pelo dia local da resposta que abriu o caso (fuso do tablet/filial).
+  const from = dayParam(q.from, 'de'); const to = dayParam(q.to, 'até');
+  if (from !== null) { where.push('(SELECT local_day FROM responses WHERE id = c.response_id) >= ?'); params.push(from); }
+  if (to !== null) { where.push('(SELECT local_day FROM responses WHERE id = c.response_id) <= ?'); params.push(to); }
   if (q.mine === '1') { where.push('c.assignee_id = ?'); params.push(user.id); }
   const s = scope(user);
   if (s) { where.push(s.length ? `c.branch_id IN (${placeholders(s)})` : '0'); params.push(...s); }
@@ -47,13 +49,13 @@ router.get('/', (req, res) => {
   const page = int(req.query.page || '1', { field: 'página', min: 1, max: 100000 });
   const f = caseFilter(req.user, req.query);
   const total = get(`SELECT COUNT(*) AS n FROM cases c ${f.sql}`, ...f.params).n;
-  const rows = all(`SELECT c.id, c.status, c.min_score, c.created_at, c.updated_at, c.resolved_at, b.name AS branch, u.name AS assignee, c.assignee_id,
+  const rows = all(`SELECT c.id, c.status, c.min_score, c.created_at, c.updated_at, c.resolved_at, b.name AS branch, b.id AS bid, b.timezone AS btz, u.name AS assignee, c.assignee_id,
       (SELECT p.updated_at FROM user_photos p WHERE p.user_id = c.assignee_id) AS assignee_photo_at,
       (r.contact_consent_at IS NOT NULL AND r.anonymized_at IS NULL) AS has_contact, r.channel,
       (SELECT a.value_text FROM answers a JOIN questions q ON q.id = a.question_id AND q.type = 'text' WHERE a.response_id = r.id AND a.value_text IS NOT NULL LIMIT 1) AS comment
     FROM cases c JOIN branches b ON b.id = c.branch_id JOIN responses r ON r.id = c.response_id LEFT JOIN users u ON u.id = c.assignee_id
     ${f.sql} ORDER BY CASE c.status WHEN 'aberto' THEN 0 WHEN 'em_contato' THEN 1 ELSE 2 END, c.created_at DESC LIMIT 25 OFFSET ?`, ...f.params, (page - 1) * 25);
-  res.json({ page, pageSize: 25, total, rows: rows.map((r) => ({ ...r, has_contact: !!r.has_contact })), statuses: STATUS });
+  res.json({ page, pageSize: 25, total, rows: rows.map(({ bid, btz, ...r }) => ({ ...r, has_contact: !!r.has_contact, tz: zones.forBranch({ id: bid, timezone: btz }) })), statuses: STATUS });
 });
 
 function loadCase(user, caseId) {
@@ -91,6 +93,7 @@ router.get('/:id', (req, res) => {
     FROM case_notes n LEFT JOIN users u ON u.id = n.user_id
     WHERE n.case_id = ? ORDER BY n.at`, c.id);
   res.json({ ...c, branch: r.branch, survey: r.survey, device: r.device, channel: r.channel, submitted_at: r.submitted_at,
+    tz: zones.forBranch({ id: r.branch_id, timezone: get('SELECT timezone FROM branches WHERE id = ?', r.branch_id)?.timezone }, r.device_id ? get('SELECT timezone FROM devices WHERE id = ?', r.device_id) : null),
     answers, contact, contactHidden: hasContact && !contact, notes, statuses: STATUS, assignable: assignable(c.branch_id) });
 });
 

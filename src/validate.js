@@ -47,4 +47,10 @@ function dateParam(v, field) {
   return t;
 }
 
-module.exports = { HttpError, bad, str, int, bool, id, email, UUID_RE, dateParam };
+// Dia do filtro (AAAA-MM-DD), comparado com o dia local de cada resposta. Retorna null se vazio.
+function dayParam(v, field) {
+  if (dateParam(v, field) === null) return null;
+  return v;
+}
+
+module.exports = { HttpError, bad, str, int, bool, id, email, UUID_RE, dateParam, dayParam };

@@ -455,7 +455,7 @@
         h('div', { class: 'card' }, h('h2', {}, 'NPS por pergunta marcada'), byQuestion),
         h('div', { class: 'card comments-card' }, h('h2', {}, 'Comentários recentes'), s.comments.length ? s.comments.map((c) => h('div', { class: 'comment' },
           h('span', { class: 'comment-icon' }, icon('message', 16)),
-          h('div', {}, h('div', {}, c.comment), h('div', { class: 'small muted' }, `${c.branch} · ${fmtDate(c.submitted_at)}`)))) : h('p', { class: 'muted' }, 'Sem comentários.'))));
+          h('div', {}, h('div', {}, c.comment), h('div', { class: 'small muted' }, `${c.branch} · ${fmtDateTz(c.submitted_at, c.tz)}`)))) : h('p', { class: 'muted' }, 'Sem comentários.'))));
   }
 
   // De onde vieram as respostas do QR Code (somente quem autorizou a localização).
@@ -533,7 +533,7 @@
       body.replaceChildren(h('div', { class: 'card table-wrap' }, h('table', {},
         h('thead', {}, h('tr', {}, h('th', {}, 'Quando'), h('th', {}, 'Filial'), h('th', {}, 'Nota'), h('th', {}, 'Comentário'), h('th', {}, 'Status'), h('th', {}, 'Responsável'), h('th', {}))),
         h('tbody', {}, r.rows.length ? r.rows.map((c) => h('tr', {},
-          h('td', {}, fmtDate(c.created_at), c.channel === 'link' ? h('div', { class: 'small muted' }, 'via QR Code') : null),
+          h('td', {}, fmtDateTz(c.created_at, c.tz), c.channel === 'link' ? h('div', { class: 'small muted' }, 'via QR Code') : null),
           h('td', {}, c.branch), h('td', {}, h('b', { class: 'bad' }, c.min_score)),
           h('td', { class: 'small' }, c.comment ? (c.comment.length > 90 ? c.comment.slice(0, 90) + '…' : c.comment) : h('span', { class: 'muted' }, '—'),
             c.has_contact ? h('div', {}, h('span', { class: 'badge ok' }, 'Pediu contato')) : null),
@@ -577,7 +577,7 @@
     const editable = can('casos', 'editar');
     status.disabled = !editable; who.disabled = !editable;
     modal(`Caso #${c.id} · ${c.branch}`, h('div', {},
-      h('p', { class: 'small muted' }, `${fmtDate(c.submitted_at)} · ${c.survey}${c.channel === 'link' ? ' · via QR Code' : c.device ? ' · ' + c.device : ''}`),
+      h('p', { class: 'small muted' }, `${fmtDateTz(c.submitted_at, c.tz)} · ${c.survey}${c.channel === 'link' ? ' · via QR Code' : c.device ? ' · ' + c.device : ''}`),
       h('ul', { class: 'answers' }, c.answers.map((a) => h('li', {}, h('b', {}, qLabel(a.question)), a.value))),
       contact,
       h('h2', {}, 'Histórico'),
@@ -641,7 +641,7 @@
         h('div', { class: 'table-wrap' }, h('table', {},
           h('thead', {}, h('tr', {}, h('th', {}, 'Data'), h('th', {}, 'Filial'), h('th', {}, 'Localização'), h('th', {}, 'Dispositivo'), h('th', {}, 'Pesquisa'), h('th', {}, 'Respostas'), isAdmin ? h('th', {}) : null)),
           h('tbody', {}, r.rows.length ? r.rows.map((x) => h('tr', {},
-            h('td', {}, fmtDate(x.submitted_at), x.lang && x.lang !== 'pt' ? h('div', {}, h('span', { class: 'badge' }, x.lang.toUpperCase())) : null),
+            h('td', {}, fmtDateTz(x.submitted_at, x.tz), x.lang && x.lang !== 'pt' ? h('div', {}, h('span', { class: 'badge' }, x.lang.toUpperCase())) : null),
             h('td', {}, x.branch),
             h('td', {}, locationBadge(x)),
             h('td', {}, deviceBadge(x)), h('td', {}, x.survey),

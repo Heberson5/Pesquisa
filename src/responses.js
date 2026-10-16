@@ -10,6 +10,23 @@ const { isEmail } = require('./notify');
 const { publicBranding } = require('./settings');
 const alerts = require('./alerts');
 const { timezone } = require('./config');
+const zones = require('./zones');
+const { localDay } = require('./time');
+
+// Respostas gravadas antes do "dia local": calcula pelo fuso atual da filial (uma vez, na atualização).
+(function backfillLocalDays() {
+  const { all } = require('./db');
+  const rows = all('SELECT r.id, r.submitted_at, r.branch_id, d.timezone AS device_tz FROM responses r LEFT JOIN devices d ON d.id = r.device_id WHERE r.local_day IS NULL');
+  if (!rows.length) return;
+  const branches = new Map();
+  tx(() => {
+    for (const r of rows) {
+      if (!branches.has(r.branch_id)) branches.set(r.branch_id, get('SELECT id, timezone FROM branches WHERE id = ?', r.branch_id));
+      const tz = zones.forBranch(branches.get(r.branch_id), r.device_tz ? { timezone: r.device_tz } : null);
+      run('UPDATE responses SET local_day = ? WHERE id = ?', localDay(r.submitted_at, tz), r.id);
+    }
+  });
+})();
 
 // ---------------------------------------------------------------- pesquisa vigente (com campanhas agendadas)
 // A campanha mais recente que cobre o momento vence; sem campanha, vale a pesquisa padrão da filial.
@@ -156,13 +173,15 @@ function saveResponse({ branch, deviceId = null, deviceLabel = null, channel, bo
 
   const result = tx(() => {
     if (get('SELECT 1 FROM responses WHERE uuid = ?', body.uuid.toLowerCase())) return { created: false };
+    // Dia no calendário do tablet (ou da filial, no QR Code): é o que vale nos filtros e gráficos.
+    const tz = zones.forBranch(branch, deviceId ? get('SELECT timezone FROM devices WHERE id = ?', deviceId) : null);
     const r = run(`INSERT INTO responses (uuid, survey_id, branch_id, device_id, started_at, submitted_at, received_at, channel, lang,
-        contact_name_enc, contact_phone_enc, contact_email_enc, contact_phone_lookup, contact_email_lookup, contact_consent_at, geo_lat, geo_lng, geo_city, geo_uf, geo_region, device_label)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        contact_name_enc, contact_phone_enc, contact_email_enc, contact_phone_lookup, contact_email_lookup, contact_consent_at, geo_lat, geo_lng, geo_city, geo_uf, geo_region, device_label, local_day)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     body.uuid.toLowerCase(), survey.id, branch.id, deviceId, startedAt, submittedAt, now, channel, lang,
     contact ? encrypt(contact.name) : null, contact ? encrypt(contact.phone) : null, contact ? encrypt(contact.email) : null,
     contact?.phone ? lookup('phone:' + contact.phone) : null, contact?.email ? lookup('email:' + contact.email) : null, contact ? now : null,
-    geo?.lat ?? null, geo?.lng ?? null, geo?.city ?? null, geo?.uf ?? null, geo?.region ?? null, deviceLabel ? String(deviceLabel).slice(0, 80) : null);
+    geo?.lat ?? null, geo?.lng ?? null, geo?.city ?? null, geo?.uf ?? null, geo?.region ?? null, deviceLabel ? String(deviceLabel).slice(0, 80) : null, localDay(submittedAt, tz));
     for (const { q, v } of normalized) {
       run('INSERT INTO answers (response_id, question_id, value_num, value_text) VALUES (?,?,?,?)', r.lastInsertRowid, q.id, v.num, v.text);
     }
