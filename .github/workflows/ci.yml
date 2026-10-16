@@ -31,7 +31,7 @@ jobs:
         run: npm audit --audit-level=moderate
 
   telas:
-    name: Telas em celular (360 px)
+    name: Telas em celular (320 e 360 px)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: testes
@@ -47,6 +47,8 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - name: Nenhuma tela com rolagem lateral ou conteúdo cortado
         run: npm run test:telas
+        env:
+          WIDTHS: 320,360
 
   imagem:
     name: Build da imagem Docker

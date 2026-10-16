@@ -164,7 +164,7 @@ label.chk input { width: 18px; height: 18px; accent-color: var(--brand); }
   .mobile-bar { display: flex; align-items: center; gap: 12px; padding: 12px 16px; background: var(--surface); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 20; }
   .main { padding: 18px 16px 40px; }
   .grid.c2, .grid.c3 { grid-template-columns: minmax(0, 1fr); }
-  .login-wrap { grid-template-columns: 1fr; }
+  .login-wrap { grid-template-columns: minmax(0, 1fr); }
   .login-hero { padding: 28px; min-height: 200px; }
   .menu-icon-row { grid-template-columns: 1fr; }
 }
@@ -181,7 +181,7 @@ label.chk input { width: 18px; height: 18px; accent-color: var(--brand); }
   .filters > *, label.f { flex: 1 1 140px; min-width: 0; }
   .filters input, .filters select { width: 100%; }
   .form-grid { grid-template-columns: minmax(0, 1fr); }
-  .btn { min-height: 44px; } /* área de toque confortável */
+  .btn { min-height: 44px; white-space: normal; text-align: center; } /* área de toque confortável; texto longo quebra linha */
   .btn.sm { min-height: 40px; }
   input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]), select { min-height: 44px; }
   label.chk { min-height: 36px; }
@@ -215,7 +215,8 @@ label.chk input { width: 18px; height: 18px; accent-color: var(--brand); }
   .menu-icon-row { gap: 10px; }
   .brand-slot { flex-wrap: wrap; }
   .style-grid, .style-grid.two { grid-template-columns: minmax(0, 1fr); }
-  .hbar { grid-template-columns: minmax(90px, 36%) 1fr 48px; gap: 8px; }
+  .hbar { grid-template-columns: minmax(0, 36%) minmax(0, 1fr) auto; gap: 8px; }
+  .hbar > span { overflow-wrap: anywhere; }
   .bars { gap: 4px; }
   .kpi .value { font-size: 28px; }
   /* janelas: tela inteira, com os botões sempre visíveis embaixo */
