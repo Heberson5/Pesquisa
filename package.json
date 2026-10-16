@@ -13,7 +13,8 @@
     "dev": "node --disable-warning=ExperimentalWarning --watch server.js",
     "create-admin": "node --disable-warning=ExperimentalWarning scripts/create-admin.js",
     "seed:demo": "node --disable-warning=ExperimentalWarning scripts/seed-demo.js",
-    "test": "node --disable-warning=ExperimentalWarning --test tests/*.test.js"
+    "test": "node --disable-warning=ExperimentalWarning --test tests/*.test.js",
+    "test:telas": "node --disable-warning=ExperimentalWarning scripts/check-responsive.js"
   },
   "dependencies": {
     "baileys": "7.0.0-rc14",
@@ -24,5 +25,8 @@
   },
   "overrides": {
     "image-size": "^2.0.4"
+  },
+  "devDependencies": {
+    "playwright": "1.56.1"
   }
 }

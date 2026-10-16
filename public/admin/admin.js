@@ -65,7 +65,10 @@
 
   function modal(title, content, actions = []) {
     const bg = h('div', { class: 'modal-bg', onclick: (e) => { if (e.target === bg) close(); } });
-    const close = () => bg.remove();
+    // Esc fecha a janela (só a de cima, se houver mais de uma).
+    const onKey = (e) => { if (e.key === 'Escape' && document.querySelector('.modal-bg:last-of-type') === bg) close(); };
+    const close = () => { bg.remove(); document.removeEventListener('keydown', onKey); };
+    document.addEventListener('keydown', onKey);
     bg.append(h('div', { class: 'modal', role: 'dialog', 'aria-modal': 'true' },
       h('h2', {}, title), content,
       h('div', { class: 'actions' }, h('button', { class: 'btn secondary', onclick: close }, actions.length ? 'Cancelar' : 'Fechar'),
@@ -322,6 +325,18 @@
     .observe(document.body, { childList: true, subtree: true });
 
   // Cabeçalho padrão das páginas: título, subtítulo e botões.
+  // Guias (abas): botões em telas largas; no celular viram uma lista de seleção com o nome da guia aberta.
+  // items = [[chave, rótulo, ícone?]]
+  const tabBar = (items, active, onPick, label = 'Guia') => [
+    h('div', { class: 'tabs has-select', role: 'tablist' }, items.map(([k, text, ic]) => h('button', { class: active === k ? 'active' : '', role: 'tab', 'aria-selected': String(active === k),
+      onclick: () => onPick(k) }, ic ? icon(ic, 16) : null, text))),
+    (() => {
+      const sel = h('select', { class: 'tabs-select', 'aria-label': label, onchange: (e) => onPick(e.target.value) }, items.map(([k, text]) => h('option', { value: k }, text)));
+      sel.value = active;
+      return h('label', { class: 'tabs-select-wrap' }, h('span', {}, label), sel);
+    })(),
+  ];
+
   const pageHead = (title, sub, ...actions) => h('div', { class: 'topbar' },
     h('div', {}, h('h1', {}, title), sub ? h('div', { class: 'sub' }, sub) : null), h('div', { class: 'row' }, ...actions));
 
@@ -1267,8 +1282,7 @@
       saveBtn?.classList.toggle('hidden', OWN_SAVE.has(settingsTab));
       // Sem permissão de editar, a aba aparece só para consulta.
       const ro = !can(group, 'editar');
-      body.replaceChildren(...[h('div', { class: 'tabs' }, tabs.map(([k, label, ic]) => h('button', { class: settingsTab === k ? 'active' : '',
-        onclick: () => { settingsTab = k; renderTab(); } }, icon(ic, 16), label))),
+      body.replaceChildren(...[...tabBar(tabs, settingsTab, (k) => { settingsTab = k; renderTab(); }, 'Parte das configurações'),
       ro ? h('p', { class: 'small muted' }, icon('lock', 14), ' Somente consulta: o seu perfil não pode alterar esta aba.') : null,
       ro ? h('fieldset', { class: 'ro', disabled: true }, content) : content].filter(Boolean));
     };
@@ -1678,6 +1692,8 @@
       const act = async (fn) => { try { await fn(); } catch (ex) { toast(ex.message, true); } };
       const reload = async () => { const fresh = await api('/templates'); kinds.splice(0, kinds.length, ...fresh); draw(); };
       wrap.replaceChildren(
+        (() => { const sel = h('select', { class: 'tpl-select', 'aria-label': 'Tipo de mensagem', onchange: (e) => { tplKind = e.target.value; draw(); } }, kinds.map((x) => h('option', { value: x.key }, x.label))); sel.value = tplKind;
+          return h('label', { class: 'tabs-select-wrap tpl-select-wrap' }, h('span', {}, 'Tipo de mensagem'), sel); })(),
         h('div', { class: 'tpl-list' }, kinds.map((x) => h('button', { class: 'tpl-item' + (x.key === tplKind ? ' active' : ''), onclick: () => { tplKind = x.key; draw(); } },
           h('b', {}, x.label), h('span', {}, x.channels.map((c) => (c === 'email' ? 'E-mail' : 'WhatsApp')).join(' · '),
             Object.values(x.templates).some((t) => t.custom) ? ' · personalizado' : '')))),
