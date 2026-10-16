@@ -1462,7 +1462,7 @@
     const phoneId = h('input', { value: d.whatsapp.phoneId, placeholder: 'Ex.: 109876543210987', inputmode: 'numeric', autocomplete: 'off' });
     const token = h('input', { type: 'password', autocomplete: 'new-password', placeholder: d.whatsapp.tokenSet ? '•••••••• (cadastrado — deixe em branco para manter)' : 'Token de acesso permanente' });
     const testPhone = h('input', { placeholder: '5511999990000 (opcional, para enviar um teste)', inputmode: 'numeric' });
-    const waCard = h('div', { class: 'card' }, h('h2', {}, 'WhatsApp (API oficial da Meta)'),
+    const metaCard = h('div', { class: 'card' }, h('h2', {}, 'WhatsApp (API oficial da Meta)'),
       h('p', {}, origin(d.whatsapp)),
       h('p', { class: 'small muted' }, 'Avisa por WhatsApp quando chega uma nota baixa. Os números que recebem são cadastrados em Filiais (campo WhatsApp) e, para cada pessoa, em Minha conta. O modelo da mensagem fica na aba "Alertas e relatórios".'),
       h('div', { class: 'form-grid' }, field('Identificador do número (Phone number ID)', phoneId, 'Painel da Meta → WhatsApp → Configuração da API.'),
@@ -1489,18 +1489,108 @@
           } catch (ex) { toast(ex.message, true); }
         } }, 'Testar conexão' + '')) : null);
 
+    // ----- WhatsApp: forma de conexão (QR Code do número da empresa, API oficial da Meta ou desligado)
+    const qr = await api('/whatsapp-qr');
+    const canEdit = can('cfg_envios', 'editar');
+    const mode = qr.config.mode;
+    const setMode = async (m) => {
+      try { await api('/settings', { method: 'PUT', body: { whatsapp: { mode: m } } }); toast(m === 'off' ? 'WhatsApp desligado: os alertas saem só por e-mail.' : 'Forma de conexão salva.'); rerender(); } catch (ex) { toast(ex.message, true); }
+    };
+    const modeOpt = (v, label, hint) => h('label', { class: 'radio-card' + (mode === v ? ' active' : '') },
+      h('input', { type: 'radio', name: 'wa-mode', value: v, checked: mode === v, disabled: !canEdit, onchange: () => setMode(v) }), h('span', {}, h('b', {}, label), h('small', {}, hint)));
+    const modeCard = h('div', { class: 'card' }, h('h2', {}, 'WhatsApp'),
+      h('p', { class: 'small muted' }, 'Avisos de cliente insatisfeito e de tablet sem sinal. Quem recebe: os números de cada filial (em Filiais) e o WhatsApp de cada pessoa (em Minha conta).'),
+      h('div', { class: 'radio-row' },
+        modeOpt('qr', 'QR Code (número da empresa)', 'Lê o QR no celular, como no WhatsApp Web. Texto livre, editável em Modelos de mensagem.'),
+        modeOpt('meta', 'API oficial da Meta', 'Exige conta comercial na Meta e um modelo aprovado por ela.'),
+        modeOpt('off', 'Desligado', 'Os alertas saem só por e-mail.')));
+    const waBlocks = [modeCard];
+    if (mode === 'qr') waBlocks.push(await whatsappQrCard(qr, rerender));
+    if (mode === 'meta') waBlocks.push(metaCard);
+    const waCard = h('div', {}, waBlocks);
+
     // ----- fila
     const queue = h('div', { class: 'card' }, h('h2', {}, 'Fila de envios'),
       h('p', { class: 'small muted' }, `Na fila: ${n.pending} · com falha nos últimos 7 dias: ${n.failed}. Se o servidor de e-mail cair, as mensagens ficam guardadas e são reenviadas sozinhas.`),
       n.recent.length ? h('div', { class: 'table-wrap' }, h('table', { class: 'small' },
         h('thead', {}, h('tr', {}, ['Quando', 'Tipo', 'Canal', 'Situação', 'Erro'].map((t) => h('th', {}, t)))),
-        h('tbody', {}, n.recent.map((o) => h('tr', {}, h('td', {}, fmtDate(o.created_at)), h('td', {}, ({ detractor: 'Cliente insatisfeito', report: 'Relatório', offline: 'Tablet sem sinal', test: 'Teste', reset: 'Senha' })[o.kind] || o.kind),
+        h('tbody', {}, n.recent.map((o) => h('tr', {}, h('td', {}, fmtDate(o.created_at)), h('td', {}, ({ detractor: 'Cliente insatisfeito', report: 'Relatório', weekly_report: 'Relatório', offline: 'Tablet sem sinal', device_offline: 'Tablet sem sinal', test: 'Teste', reset: 'Senha', password_reset: 'Senha', whatsapp_down: 'WhatsApp desconectado' })[o.kind] || o.kind),
           h('td', {}, ({ email: 'E-mail', whatsapp: 'WhatsApp', webhook: 'Webhook' })[o.channel] || o.channel),
           h('td', {}, h('span', { class: 'badge ' + (o.status === 'sent' ? 'ok' : o.status === 'failed' ? 'off' : 'warn') }, ({ sent: 'Enviado', failed: 'Falhou', pending: 'Na fila' })[o.status] || o.status)),
           h('td', { class: 'muted' }, o.last_error || '')))))) : h('p', { class: 'muted' }, 'Nenhum envio ainda.'));
-    return h('div', {}, h('div', { class: 'grid c2' }, mailCard, waCard), queue);
+    return h('div', {}, h('div', { class: 'grid c2 align-start' }, mailCard, waCard), queue);
   }
   const renderAgain = () => { if (location.hash.startsWith('#/configuracoes')) route(); };
+
+  // Conexão por QR Code: mostra o QR (atualiza sozinho enquanto espera a leitura), o número conectado,
+  // o intervalo entre envios e a fila com o horário sorteado de cada mensagem.
+  let qrPoll = null;
+  async function whatsappQrCard(info, rerender) {
+    clearTimeout(qrPoll);
+    const canConnect = can('cfg_envios', 'whatsapp');
+    const canEdit = can('cfg_envios', 'editar');
+    const box = h('div');
+    const KIND = { detractor: 'Cliente insatisfeito', device_offline: 'Tablet sem sinal', test: 'Teste' };
+    const draw = (st) => {
+      const act = (path, msg) => async () => {
+        try { const r = await api(path, { method: 'POST' }); if (msg) toast(msg); draw(r); } catch (ex) { toast(ex.message, true); }
+      };
+      const stateBox = st.state === 'connected'
+        ? h('div', { class: 'wa-state ok' }, h('span', { class: 'dot' }), h('div', {}, h('b', {}, 'Conectado'), st.me ? ` · +${st.me.number}${st.me.name ? ' (' + st.me.name + ')' : ''}` : '',
+          h('div', { class: 'small muted' }, st.since ? 'Desde ' + fmtDate(st.since) : '')))
+        : st.state === 'qr' ? h('div', { class: 'wa-state warn' }, h('span', { class: 'dot' }), h('b', {}, 'Aguardando a leitura do QR Code'))
+          : st.state === 'connecting' ? h('div', { class: 'wa-state warn' }, h('span', { class: 'dot' }), h('div', {}, h('b', {}, 'Conectando…'), st.lastError ? h('div', { class: 'small muted' }, st.lastError) : null))
+            : h('div', { class: 'wa-state off' }, h('span', { class: 'dot' }), h('div', {}, h('b', {}, 'Desconectado'), st.lastError ? h('div', { class: 'small muted' }, st.lastError) : null));
+      const qrImg = st.state === 'qr' && st.qr ? h('div', { class: 'wa-qr' }, h('img', { src: st.qr, alt: 'QR Code para conectar o WhatsApp' }), h('span', { class: 'small' }, 'O código muda a cada 20 segundos'))
+        : st.state === 'qr' && !canConnect ? h('p', { class: 'small muted' }, 'Só quem tem permissão para conectar o WhatsApp vê o QR Code.') : null;
+      const min = h('input', { type: 'number', min: '15', max: '60', value: st.config.minDelaySec, disabled: !canEdit });
+      const max = h('input', { type: 'number', min: '15', max: '60', value: st.config.maxDelaySec, disabled: !canEdit });
+      const fmtTime = (t) => (t ? new Date(t).toLocaleTimeString('pt-BR') : '—');
+      const queueRows = (st.queue || []).slice(0, 15);
+      box.replaceChildren(
+        h('div', { class: 'card' }, h('h2', {}, 'Conexão pelo QR Code'),
+          stateBox,
+          h('div', { class: 'wa-connect' },
+            qrImg,
+            st.state !== 'connected' ? h('ol', { class: 'steps small' },
+              h('li', {}, 'No celular da empresa, abra o WhatsApp e toque em ⋮ (ou Configurações) → Aparelhos conectados.'),
+              h('li', {}, 'Toque em "Conectar um aparelho" e aponte a câmera para o QR Code.'),
+              h('li', {}, 'Pronto: o estado muda para "Conectado". Os alertas passam a sair deste número.')) : null),
+          canConnect ? h('div', { class: 'row' },
+            st.state !== 'connected' ? h('button', { class: 'btn', onclick: act('/whatsapp-qr/connect') }, icon('refresh', 16), st.state === 'qr' ? 'Gerar novo QR Code' : 'Gerar QR Code') : null,
+            st.state !== 'off' || st.hasSession ? h('button', { class: 'btn danger', onclick: async () => {
+              if (!confirm('Desconectar o WhatsApp? Os alertas por WhatsApp param até alguém ler o QR Code de novo.')) return;
+              await act('/whatsapp-qr/disconnect', 'WhatsApp desconectado.')();
+            } }, 'Desconectar') : null) : null,
+          h('div', { class: 'notice' }, h('b', {}, 'Use um chip só para os alertas. '),
+            'Enviar só para a equipe, com pausa entre as mensagens, deixa o risco de bloqueio bem baixo, mas não zero: o WhatsApp não autoriza oficialmente a conexão por programas de terceiros. Peça para cada pessoa salvar o número. Se a conexão cair, os administradores recebem um e-mail e as mensagens esperam na fila por até 24 horas.')),
+        h('div', { class: 'card' }, h('h2', {}, 'Intervalo entre os envios'),
+          h('div', { class: 'form-grid two' }, h('label', { class: 'f' }, 'Mínimo (segundos)', min), h('label', { class: 'f' }, 'Máximo (segundos)', max)),
+          h('p', { class: 'small muted' }, 'Antes de cada mensagem o sistema sorteia uma pausa nessa faixa (de 15 a 60 segundos). O primeiro aviso sai na hora; com 4 pessoas, o último chega em cerca de 1 a 3 minutos.'),
+          canEdit ? h('button', { class: 'btn secondary', onclick: async () => {
+            try { await api('/settings', { method: 'PUT', body: { whatsapp: { minDelaySec: Number(min.value), maxDelaySec: Number(max.value) } } }); toast('Intervalo salvo.'); rerender(); } catch (ex) { toast(ex.message, true); }
+          } }, 'Salvar intervalo') : null),
+        h('div', { class: 'card' }, h('h2', {}, 'Fila do WhatsApp'),
+          queueRows.length ? h('div', { class: 'table-wrap' }, h('table', { class: 'small' },
+            h('thead', {}, h('tr', {}, ['Para', 'Mensagem', 'Horário', 'Pausa sorteada', 'Situação'].map((t) => h('th', {}, t)))),
+            h('tbody', {}, queueRows.map((q) => h('tr', {},
+              h('td', {}, h('b', {}, q.to)), h('td', {}, KIND[q.kind] || q.kind), h('td', {}, fmtTime(q.at)),
+              h('td', {}, q.gapSec ? `+${q.gapSec} s` : 'na hora'),
+              h('td', {}, h('span', { class: 'badge ' + (q.status === 'sent' ? 'ok' : q.status === 'failed' ? 'off' : 'warn'), title: q.error || null },
+                q.status === 'sent' ? 'Enviado' : q.status === 'failed' ? 'Falhou' : q.at > Date.now() ? `Em ${Math.max(1, Math.round((q.at - Date.now()) / 1000))} s` : 'Na fila'),
+              q.error && q.status !== 'sent' ? h('div', { class: 'small muted' }, q.error) : null))))))
+            : h('p', { class: 'muted small' }, 'Nenhuma mensagem nas últimas 24 horas.')));
+      // Enquanto espera a leitura, conecta ou há mensagens na fila, atualiza sozinho.
+      if (['qr', 'connecting'].includes(st.state) || (st.queue || []).some((q) => q.status === 'pending')) {
+        qrPoll = setTimeout(async () => {
+          if (!box.isConnected) return;
+          try { draw(await api('/whatsapp-qr')); } catch { /* sessão expirada etc. */ }
+        }, st.state === 'qr' ? 2000 : 4000);
+      }
+    };
+    draw(info);
+    return box;
+  }
 
   // ------------------------------------------------------------ aba: modelos de mensagem
   // Formatação do WhatsApp na prévia (*negrito*, _itálico_, ~riscado~ e links), montada com nós de texto — nunca HTML.
@@ -1733,6 +1823,9 @@
       }
       case 'user.photo': return E('conta', '', d.set ? 'Trocou a própria foto de perfil' : 'Removeu a própria foto de perfil');
       case 'user.photo_removed': return E('usuarios', 'warn', `Removeu a foto de perfil de ${d.email || '#' + d.id}`);
+      case 'whatsapp.connect': return E('cadastros', 'warn', 'Iniciou a conexão do WhatsApp pelo QR Code');
+      case 'whatsapp.disconnect': return E('cadastros', 'warn', 'Desconectou o WhatsApp (QR Code)', 'Os alertas por WhatsApp pararam até uma nova conexão.');
+      case 'whatsapp.logged_out': return E('sistema', 'bad', 'O WhatsApp foi desconectado pelo celular', 'É preciso ler o QR Code de novo para voltar a enviar alertas.');
       case 'template.update': return E('cadastros', '', `Alterou o texto da mensagem "${TPL_KIND[d.kind] || d.kind}" (${d.channel === 'email' ? 'e-mail' : 'WhatsApp'})`);
       case 'template.restore': return E('cadastros', '', `Voltou ao texto padrão da mensagem "${TPL_KIND[d.kind] || d.kind}" (${d.channel === 'email' ? 'e-mail' : 'WhatsApp'})`);
       case 'role.create': return E('usuarios', '', `Criou o perfil de acesso "${d.name}"`, `${d.scope === 'all' ? 'Todas as filiais' : 'Só as filiais do usuário'} · ${plural((d.perms || []).length, 'permissão', 'permissões')}.`);

@@ -22,7 +22,8 @@ const MODULES = [
   { key: 'cfg_marca', label: 'Configurações · Identidade e ícones', hint: 'Nome, cores, logo e ícones', group: 'Administração', ops: ['ver', 'editar'], extra: {} },
   { key: 'cfg_alertas', label: 'Configurações · Alertas e relatórios', hint: 'Alertas, relatório semanal, metas e tela do tablet', group: 'Administração', ops: ['ver', 'editar'],
     extra: { relatorio: 'Enviar o relatório semanal agora' } },
-  { key: 'cfg_envios', label: 'Configurações · E-mail e WhatsApp', hint: 'Servidor de e-mail, WhatsApp e fila de envios', group: 'Administração', ops: ['ver', 'editar'], extra: {} },
+  { key: 'cfg_envios', label: 'Configurações · E-mail e WhatsApp', hint: 'Servidor de e-mail, WhatsApp e fila de envios', group: 'Administração', ops: ['ver', 'editar'],
+    extra: { whatsapp: 'Conectar e desconectar o WhatsApp (QR Code)' } },
   { key: 'cfg_modelos', label: 'Configurações · Modelos de mensagem', hint: 'Textos dos alertas e e-mails, com prévia', group: 'Administração', ops: ['ver', 'editar'], extra: {} },
   { key: 'cfg_lgpd', label: 'Configurações · Segurança e LGPD', hint: '2FA obrigatório, prazos de guarda e aviso de privacidade', group: 'Administração', ops: ['ver', 'editar'],
     extra: { titular: 'Pedidos do titular (localizar, exportar e excluir dados)' } },
@@ -38,7 +39,7 @@ const GESTOR_DEFAULT = ['dashboard.ver', 'dashboard.pptx', 'casos.ver', 'casos.e
 
 // Permissões que permitem mudar quem acessa o quê ou a configuração do sistema: exigem 2FA (se a empresa exigir).
 const SENSITIVE = new Set(['usuarios.incluir', 'usuarios.editar', 'usuarios.mfa', 'permissoes.incluir', 'permissoes.editar', 'permissoes.excluir',
-  'cfg_marca.editar', 'cfg_alertas.editar', 'cfg_envios.editar', 'cfg_modelos.editar', 'cfg_lgpd.editar', 'cfg_lgpd.titular']);
+  'cfg_marca.editar', 'cfg_alertas.editar', 'cfg_envios.editar', 'cfg_envios.whatsapp', 'cfg_modelos.editar', 'cfg_lgpd.editar', 'cfg_lgpd.titular']);
 
 // Valida e normaliza a lista: só itens do catálogo; qualquer ação inclui "ver" do mesmo menu.
 function normalizePerms(list) {

@@ -23,6 +23,7 @@ const { encrypt, decrypt, lookup } = require('../vault');
 const { publicUrl, timezone: companyTz } = require('../config');
 const { parseLocal } = require('../time');
 const templates = require('../templates');
+const whatsappQr = require('../whatsapp-qr');
 
 const router = express.Router();
 const { MEDIA_DIR } = require('../db');
@@ -55,6 +56,7 @@ router.get('/me', (req, res) => {
 const SETTINGS_GROUPS = {
   cfg_marca: ['companyName', 'primaryColor', 'accentColor', 'logoMediaId', 'faviconMediaId', 'appIconMediaId', 'menuIcons', 'defaultDisplay', 'ratingIcon', 'colorScheme', 'faceStyle'],
   cfg_alertas: ['alerts', 'weeklyReport', 'defaultNpsGoal', 'offlineAlert', 'screen'],
+  cfg_envios: ['whatsapp'],
   cfg_lgpd: ['requireAdminMfa', 'privacyText', 'retention'],
 };
 const BASE_KEYS = ['companyName', 'primaryColor', 'accentColor', 'logoMediaId', 'menuIcons', 'defaultDisplay', 'ratingIcon', 'colorScheme', 'faceStyle', 'defaultNpsGoal'];
@@ -857,7 +859,31 @@ router.post('/templates/:kind/:channel/test', need('cfg_modelos', 'ver'), testLi
     const last = get("SELECT status, last_error FROM outbox WHERE kind = 'test' AND channel = 'email' ORDER BY id DESC LIMIT 1");
     return res.json({ sent: last?.status === 'sent', error: last?.last_error || null, to: req.user.email });
   }
-  throw bad('O envio de teste pelo WhatsApp usa a conexão por QR Code (em Configurações → E-mail e WhatsApp).');
+  // WhatsApp: só no modo QR Code (o texto livre não vale na API oficial da Meta). Vai para o seu WhatsApp de Minha conta.
+  if (getSettings().whatsapp.mode !== 'qr' || !whatsappQr.connected()) throw bad('Conecte o WhatsApp pelo QR Code (Configurações → E-mail e WhatsApp) para enviar o teste.');
+  const phone = get('SELECT whatsapp FROM users WHERE id = ?', req.user.id)?.whatsapp;
+  if (!phone) throw bad('Cadastre o seu WhatsApp em Minha conta para receber o teste.');
+  const at = whatsappQr.queue(phone, '[Teste] ' + templates.whatsappFor(kind, vars), 'test', req.user.name);
+  res.json({ queued: true, to: phone, inSeconds: Math.max(0, Math.round((at - Date.now()) / 1000)) });
+});
+
+// ---------------------------------------------------------------- WhatsApp conectado pelo QR Code
+// O QR Code dá acesso ao número da empresa: só aparece para quem tem a permissão de conectar.
+router.get('/whatsapp-qr', need('cfg_envios', 'ver'), (req, res) => {
+  res.json({ ...whatsappQr.publicStatus({ withQr: can(req.user, 'cfg_envios', 'whatsapp') }), config: getSettings().whatsapp, queue: whatsappQr.queueView() });
+});
+
+router.post('/whatsapp-qr/connect', need('cfg_envios', 'whatsapp'), async (req, res) => {
+  if (getSettings().whatsapp.mode !== 'qr') saveSettings({ whatsapp: { mode: 'qr' } });
+  await whatsappQr.connect();
+  audit(req.user.id, 'whatsapp.connect', null, req.ip);
+  res.json({ ...whatsappQr.publicStatus({ withQr: true }), config: getSettings().whatsapp, queue: whatsappQr.queueView() });
+});
+
+router.post('/whatsapp-qr/disconnect', need('cfg_envios', 'whatsapp'), async (req, res) => {
+  await whatsappQr.disconnect();
+  audit(req.user.id, 'whatsapp.disconnect', null, req.ip);
+  res.json({ ...whatsappQr.publicStatus(), config: getSettings().whatsapp, queue: whatsappQr.queueView() });
 });
 
 // ---------------------------------------------------------------- relatório PowerPoint

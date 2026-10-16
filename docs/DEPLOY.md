@@ -53,7 +53,17 @@ No primeiro login o sistema exige ativar o 2FA (Google Authenticator/Microsoft A
 3. **Filiais**: cadastre as filiais (e-mails de alerta, meta, horário).
 4. **Pesquisas**: ajuste a pesquisa e escolha a pesquisa padrão de cada filial.
 5. **Tablets**: gere o código e siga o **Guia de instalação** (docs/INSTALACAO-TABLET.md).
-6. **Usuários**: crie os gestores e vincule às filiais.
+6. **Permissões**: confira os perfis (o "Gestor de filial" já vem pronto) e crie outros se precisar.
+7. **Usuários**: crie as pessoas, escolha o perfil de cada uma e vincule às filiais.
+8. **Configurações → E-mail e WhatsApp**: escolha como o WhatsApp envia os alertas. No modo **QR Code**, leia o código
+   com o celular da empresa (WhatsApp → Aparelhos conectados). Use um chip só para os alertas.
+
+### WhatsApp pelo QR Code
+- O servidor precisa conseguir sair para `web.whatsapp.com` na porta 443 (é o padrão de uma VPS; só muda se houver um firewall de saída).
+- A sessão fica criptografada no banco, com a mesma chave dos outros segredos. Quem tem o backup do banco **e** a chave
+  consegue enviar mensagens como esse número: guarde os dois separados.
+- Ao atualizar ou reiniciar o servidor, a conexão volta sozinha. Se o celular desconectar o sistema, os administradores
+  recebem um e-mail e as mensagens esperam na fila por até 24 horas.
 
 ## Firewall da VPS
 Libere apenas 22 (SSH), 80 e 443. Exemplo com UFW:

@@ -7,7 +7,8 @@ const { reportFor } = require('./stats');
 const { localNow, formatLocal } = require('./time');
 const zones = require('./zones');
 const { hoursStatus } = require('./responses');
-const { branchRecipientList } = require('./alerts');
+const { branchRecipientList, whatsappRecipients } = require('./alerts');
+const whatsappQr = require('./whatsapp-qr');
 const templates = require('./templates');
 const { publicUrl } = require('./config');
 const { accessFor } = require('./permissions');
@@ -83,6 +84,12 @@ function checkOfflineTablets(now = Date.now()) {
       const m = templates.emailFor('offline', { ...vars, destinatario: to.name || 'equipe' },
         { rows: [['Filial', d.branch_name], ['Tablet', d.name], ['Último contato', last]], buttonUrl: vars.link_painel });
       queueEmail({ to: to.email, subject: m.subject, text: m.text, html: m.html, kind: 'device_offline' });
+    }
+    // WhatsApp por QR Code: mesmo aviso, pelo texto do modelo "Tablet sem sinal".
+    if (s.whatsapp.mode === 'qr') {
+      for (const to of whatsappRecipients(d.branch_id, 'notify_offline')) {
+        whatsappQr.queue(to.phone, templates.whatsappFor('offline', { ...vars, destinatario: to.name || 'equipe' }), 'device_offline', to.name);
+      }
     }
     run('UPDATE devices SET offline_alerted_at = ? WHERE id = ?', now, d.id);
     alerted++;

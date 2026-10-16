@@ -25,6 +25,9 @@ const DEFAULTS = {
   // Prazos de guarda (LGPD), em meses, até 10 anos. As notas (sem dados pessoais) ficam sem prazo: são a base dos relatórios.
   retention: { commentsMonths: 24, contactsMonths: 12, geoMonths: 12, auditMonths: 24 },
   alerts: { detractorEmail: true, webhookUrl: null, whatsappTemplate: null, whatsappLanguage: 'pt_BR' },
+  // WhatsApp: 'meta' (API oficial, modelo aprovado), 'qr' (número da empresa conectado por QR Code) ou 'off'.
+  // No modo QR as mensagens saem uma por vez, com pausa sorteada entre o mínimo e o máximo (15 a 60 s).
+  whatsapp: { mode: 'meta', minDelaySec: 15, maxDelaySec: 60 },
   weeklyReport: { enabled: false, weekday: 1, hour: 8, extraEmails: [] },
   defaultNpsGoal: 50,
   offlineAlert: { enabled: true, minutes: 30 },
@@ -32,7 +35,7 @@ const DEFAULTS = {
   screen: { keepAwake: true, dim: true, dimAfterSeconds: 30, dimLevel: 70 },
 };
 
-const OBJECT_KEYS = ['menuIcons', 'retention', 'alerts', 'weeklyReport', 'offlineAlert', 'screen'];
+const OBJECT_KEYS = ['menuIcons', 'retention', 'alerts', 'whatsapp', 'weeklyReport', 'offlineAlert', 'screen'];
 
 // Aceita somente texto (recusa listas/objetos que virariam texto por conversão automática).
 function text(v, fallback, field) {
@@ -134,6 +137,18 @@ function saveSettings(input) {
       if (!/^[a-z]{2}(_[A-Z]{2})?$/.test(String(a.whatsappLanguage))) throw bad('Idioma do modelo do WhatsApp inválido.');
       next.alerts.whatsappLanguage = a.whatsappLanguage;
     }
+  }
+  next.whatsapp = { ...cur.whatsapp };
+  if (input.whatsapp !== undefined) {
+    obj(input.whatsapp, 'WhatsApp');
+    const w = input.whatsapp;
+    if (w.mode !== undefined) {
+      if (!['meta', 'qr', 'off'].includes(w.mode)) throw bad('Forma de conexão do WhatsApp inválida.');
+      next.whatsapp.mode = w.mode;
+    }
+    if (w.minDelaySec !== undefined) next.whatsapp.minDelaySec = int(w.minDelaySec, { field: 'intervalo mínimo', min: 15, max: 60 });
+    if (w.maxDelaySec !== undefined) next.whatsapp.maxDelaySec = int(w.maxDelaySec, { field: 'intervalo máximo', min: 15, max: 60 });
+    if (next.whatsapp.minDelaySec > next.whatsapp.maxDelaySec) throw bad('O intervalo mínimo não pode ser maior que o máximo.');
   }
   next.weeklyReport = { ...cur.weeklyReport };
   if (input.weeklyReport !== undefined) {

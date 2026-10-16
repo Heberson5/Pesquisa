@@ -300,7 +300,7 @@ fieldset.ro .btn { display: none; }
 .radio-row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 8px; }
 .radio-card { display: flex; gap: 10px; align-items: flex-start; border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px; cursor: pointer; flex: 1 1 220px; }
 .radio-card.active { border-color: var(--brand); background: var(--brand-soft); }
-.radio-card input { margin-top: 3px; accent-color: var(--brand); width: 18px; height: 18px; }
+.radio-card input { margin-top: 3px; accent-color: var(--brand); width: 18px; height: 18px; padding: 0; flex: none; }
 .radio-card span { display: grid; } .radio-card small { color: var(--muted); }
 .perm-matrix th.c, .perm-matrix td.c { text-align: center; width: 72px; padding-left: 4px; padding-right: 4px; }
 .perm-matrix td:first-child { min-width: 200px; }
@@ -400,3 +400,18 @@ textarea.tpl-field { line-height: 1.5; }
   .tpl-layout { grid-template-columns: minmax(0, 1fr); }
   .tpl-list { grid-auto-flow: column; grid-auto-columns: minmax(170px, 1fr); overflow-x: auto; padding-bottom: 4px; }
 }
+
+/* ---------- WhatsApp por QR Code */
+.grid.align-start { align-items: start; }
+.wa-state { display: flex; gap: 12px; align-items: center; padding: 12px 14px; border-radius: 12px; margin-bottom: 14px; }
+.wa-state .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+.wa-state.ok { background: color-mix(in srgb, var(--good) 10%, transparent); } .wa-state.ok .dot { background: var(--good); box-shadow: 0 0 0 4px color-mix(in srgb, var(--good) 25%, transparent); }
+.wa-state.warn { background: color-mix(in srgb, var(--mid) 12%, transparent); } .wa-state.warn .dot { background: var(--mid); }
+.wa-state.off { background: var(--surface-2); } .wa-state.off .dot { background: var(--neutral); }
+.wa-connect { display: flex; gap: 20px; align-items: flex-start; flex-wrap: wrap; margin-bottom: 14px; }
+.wa-connect .steps { flex: 1 1 220px; margin: 0; line-height: 1.6; }
+.wa-qr { display: grid; justify-items: center; gap: 6px; background: #fff; color: #475569; padding: 12px; border-radius: 14px; border: 1px solid var(--line); }
+.wa-qr img { width: 240px; height: 240px; max-width: 100%; image-rendering: pixelated; }
+.notice { margin-top: 14px; padding: 12px 14px; border-radius: 12px; background: color-mix(in srgb, var(--mid) 10%, transparent); font-size: 13px; line-height: 1.5; }
+.form-grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media (max-width: 640px) { .wa-qr img { width: 220px; height: 220px; } }

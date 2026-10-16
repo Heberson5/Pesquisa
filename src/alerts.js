@@ -5,6 +5,7 @@ const { get, all, run } = require('./db');
 const { getSettings } = require('./settings');
 const { queueEmail, queueWebhook, queueWhatsApp } = require('./notify');
 const templates = require('./templates');
+const whatsappQr = require('./whatsapp-qr');
 const { decrypt } = require('./vault');
 const { publicUrl } = require('./config');
 const zones = require('./zones');
@@ -23,6 +24,14 @@ function usersToNotify(branchId, prefColumn) {
     if (!a.isAdmin && !a.perms.has(PREF_COLUMNS[prefColumn] + '.ver')) return false;
     return a.scopeAll || !!get('SELECT 1 FROM user_branches WHERE user_id = ? AND branch_id = ?', u.id, branchId);
   });
+}
+
+// Destinatários de WhatsApp: números da filial + WhatsApp pessoal de quem enxerga a filial e quis o aviso. Sem repetir.
+function whatsappRecipients(branchId, prefColumn) {
+  const out = new Map();
+  for (const u of usersToNotify(branchId, prefColumn)) if (u.whatsapp) out.set(u.whatsapp, u.name);
+  for (const p of parseList(get('SELECT alert_phones FROM branches WHERE id = ?', branchId)?.alert_phones)) if (!out.has(p)) out.set(p, null);
+  return [...out].map(([phone, name]) => ({ phone, name }));
 }
 
 // Destinatários de e-mail de uma filial: lista da filial + usuários que querem o aviso. Sem repetir e-mail;
@@ -79,12 +88,13 @@ function notifyDetractor(r, score, caseId) {
     queueWebhook(s.alerts.webhookUrl, { event: 'detractor', caseId, branch: r.branch_name, score, channel: r.channel,
       contactRequested: hasContact, submittedAt: new Date(r.submitted_at).toISOString(), url }, 'detractor');
   }
-  if (s.alerts.whatsappTemplate) {
-    const phones = parseList(get('SELECT alert_phones FROM branches WHERE id = ?', r.branch_id)?.alert_phones);
-    // + WhatsApp pessoal dos usuários que enxergam a filial e quiseram o aviso
-    const mine = usersToNotify(r.branch_id, 'notify_detractors').map((x) => x.whatsapp).filter(Boolean);
-    for (const p of [...new Set([...phones, ...mine])]) queueWhatsApp(p, { template: s.alerts.whatsappTemplate, language: s.alerts.whatsappLanguage, params: [r.branch_name, String(score), url] }, 'detractor');
+  const wa = whatsappRecipients(r.branch_id, 'notify_detractors');
+  if (s.whatsapp.mode === 'qr') {
+    // Número da empresa conectado por QR Code: texto do modelo, um envio por vez com intervalo.
+    for (const to of wa) whatsappQr.queue(to.phone, templates.whatsappFor('detractor', { ...vars, destinatario: to.name || 'equipe' }), 'detractor', to.name);
+  } else if (s.whatsapp.mode === 'meta' && s.alerts.whatsappTemplate) {
+    for (const to of wa) queueWhatsApp(to.phone, { template: s.alerts.whatsappTemplate, language: s.alerts.whatsappLanguage, params: [r.branch_name, String(score), url] }, 'detractor');
   }
 }
 
-module.exports = { onResponse, branchRecipients, branchRecipientList, usersToNotify, parseList, DETRACTOR_MAX };
+module.exports = { onResponse, branchRecipients, branchRecipientList, whatsappRecipients, usersToNotify, parseList, DETRACTOR_MAX };

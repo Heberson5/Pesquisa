@@ -16,6 +16,7 @@
     "test": "node --disable-warning=ExperimentalWarning --test tests/*.test.js"
   },
   "dependencies": {
+    "baileys": "7.0.0-rc14",
     "express": "^5.2.1",
     "nodemailer": "^10.0.14",
     "pptxgenjs": "^3.12.0",

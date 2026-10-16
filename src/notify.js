@@ -165,7 +165,9 @@ async function processOutbox(limit = 20) {
   processing = true;
   let sent = 0;
   try {
-    const items = all("SELECT * FROM outbox WHERE status = 'pending' AND next_attempt_at <= ? ORDER BY id LIMIT ?", Date.now(), limit);
+    // O WhatsApp por QR Code tem fila própria, com intervalo entre envios (src/whatsapp-qr.js).
+    const items = all(`SELECT * FROM outbox WHERE status = 'pending' AND next_attempt_at <= ?
+      AND NOT (channel = 'whatsapp' AND payload LIKE '%"mode":"qr"%') ORDER BY id LIMIT ?`, Date.now(), limit);
     for (const item of items) {
       try {
         await deliver(item);
@@ -208,6 +210,7 @@ function whatsappCheck() {
 const outboxStatus = () => ({
   smtpConfigured: !!delivery.smtp(),
   whatsappConfigured: !!delivery.whatsapp(),
+  whatsappQrConnected: require('./whatsapp-qr').connected(),
   pending: get("SELECT COUNT(*) AS n FROM outbox WHERE status = 'pending'").n,
   failed: get("SELECT COUNT(*) AS n FROM outbox WHERE status = 'failed' AND created_at > ?", Date.now() - 7 * 86_400_000).n,
 });
