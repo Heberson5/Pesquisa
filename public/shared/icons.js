@@ -24,6 +24,8 @@
     monitor: { label: 'Monitor', d: '<rect width="20" height="14" x="2" y="3" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/>' },
     users: { label: 'Pessoas', d: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>' },
     user: { label: 'Pessoa', d: '<path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>' },
+    help: { label: 'Ajuda', d: '<circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/>' },
+    sparkles: { label: 'Novidades', d: '<path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 3v4"/><path d="M21 5h-4"/>' },
     shield: { label: 'Escudo', d: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/>' },
     history: { label: 'Histórico', d: '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/>' },
     lock: { label: 'Cadeado', d: '<rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>' },
@@ -51,6 +53,9 @@
     check: { label: 'Visto', rating: true, d: '<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>' },
     // utilitários da interface (não aparecem como opção de menu)
     menu: { ui: true, d: '<path d="M4 12h16"/><path d="M4 6h16"/><path d="M4 18h16"/>' },
+    branch: { ui: true, d: '<line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>' },
+    'chevron-left': { ui: true, d: '<path d="m15 18-6-6 6-6"/>' },
+    'chevron-right': { ui: true, d: '<path d="m9 18 6-6-6-6"/>' },
     'chevrons-left': { ui: true, d: '<path d="m11 17-5-5 5-5"/><path d="m18 17-5-5 5-5"/>' },
     'chevrons-right': { ui: true, d: '<path d="m6 17 5-5-5-5"/><path d="m13 17 5-5-5-5"/>' },
     logout: { ui: true, d: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><path d="M21 12H9"/>' },
@@ -73,7 +78,7 @@
   // Itens do menu e ícone padrão de cada um.
   const MENU_DEFAULTS = {
     dashboard: 'layout', casos: 'bell', respostas: 'inbox', pesquisas: 'clipboard', filiais: 'store', dispositivos: 'tablet',
-    usuarios: 'users', configuracoes: 'settings', auditoria: 'history', conta: 'user_cog',
+    usuarios: 'users', permissoes: 'key', configuracoes: 'settings', auditoria: 'history', ajuda: 'help', novidades: 'sparkles', conta: 'user_cog',
   };
 
   const MENU_ICONS = Object.keys(ICONS).filter((k) => !ICONS[k].ui && !ICONS[k].rating);

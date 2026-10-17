@@ -1,0 +1,22 @@
+[
+  { "slug": "como-funciona", "title": "Como o sistema funciona", "group": "Primeiros passos", "perm": null, "updated": "1.5" },
+  { "slug": "entrar-2fa", "title": "Entrar, senha e verificação em duas etapas", "group": "Primeiros passos", "perm": null, "updated": "1.5" },
+  { "slug": "minha-conta", "title": "Minha conta: foto, notificações e WhatsApp", "group": "Primeiros passos", "perm": null, "updated": "1.5" },
+  { "slug": "visao-geral", "title": "Visão geral e NPS", "group": "Análise", "perm": ["dashboard"], "updated": "1.5" },
+  { "slug": "casos", "title": "Tratar clientes insatisfeitos (Casos)", "group": "Análise", "perm": ["casos"], "updated": "1.5" },
+  { "slug": "respostas", "title": "Respostas e exportação", "group": "Análise", "perm": ["respostas"], "updated": "1.5" },
+  { "slug": "pesquisas", "title": "Criar e editar uma pesquisa", "group": "Coleta", "perm": ["pesquisas"], "updated": "1.5" },
+  { "slug": "campanhas", "title": "Campanhas agendadas", "group": "Coleta", "perm": ["campanhas"], "updated": "1.5" },
+  { "slug": "filiais", "title": "Filiais, alertas e horário de funcionamento", "group": "Coleta", "perm": ["filiais"], "updated": "1.5" },
+  { "slug": "qr-code", "title": "QR Code para o cliente responder no celular", "group": "Coleta", "perm": ["filiais"], "updated": "1.5" },
+  { "slug": "tablets", "title": "Instalar e gerenciar tablets", "group": "Coleta", "perm": ["tablets"], "updated": "1.5" },
+  { "slug": "usuarios", "title": "Usuários", "group": "Administração", "perm": ["usuarios"], "updated": "1.5" },
+  { "slug": "permissoes", "title": "Perfis e permissões", "group": "Administração", "perm": ["permissoes", "usuarios"], "updated": "1.5" },
+  { "slug": "email-whatsapp", "title": "E-mail e WhatsApp (QR Code ou API da Meta)", "group": "Administração", "perm": ["cfg_envios"], "updated": "1.5" },
+  { "slug": "modelos-mensagem", "title": "Textos das mensagens (modelos)", "group": "Administração", "perm": ["cfg_modelos"], "updated": "1.5" },
+  { "slug": "alertas-relatorios", "title": "Alertas, metas e relatório semanal", "group": "Administração", "perm": ["cfg_alertas"], "updated": "1.5" },
+  { "slug": "identidade", "title": "Identidade visual e ícones", "group": "Administração", "perm": ["cfg_marca"], "updated": "1.5" },
+  { "slug": "lgpd", "title": "Segurança, LGPD e prazos de guarda", "group": "Administração", "perm": ["cfg_lgpd"], "updated": "1.5" },
+  { "slug": "auditoria", "title": "Auditoria", "group": "Administração", "perm": ["auditoria"], "updated": "1.5" },
+  { "slug": "perguntas-frequentes", "title": "Perguntas frequentes", "group": "Dúvidas", "perm": null, "updated": "1.5" }
+]

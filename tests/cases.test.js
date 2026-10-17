@@ -29,7 +29,9 @@ test.after(stop);
 test('contato: exige consentimento e só é aceito conforme o modo da pesquisa', async () => {
   const contact = { name: 'Maria', phone: '(11) 98888-7777', email: 'maria@cliente.com' };
   assert.equal((await kiosk(tokA, answer(3, { body: { contact } }))).status, 400, 'sem consentimento');
-  assert.equal((await kiosk(tokA, answer(10, { body: { contact: { ...contact, consent: true } } }))).status, 400, 'modo detratores: promotor não pode');
+  const prom = answer(10, { body: { contact: { ...contact, consent: true } } });
+  assert.equal((await kiosk(tokA, prom)).status, 201, 'modo detratores: a nota do promotor é gravada…');
+  assert.equal(get('SELECT contact_name_enc FROM responses WHERE uuid = ?', prom.uuid).contact_name_enc, null, '…mas o contato não');
   assert.equal((await kiosk(tokA, answer(3, { body: { contact: { name: 'X', consent: true } } }))).status, 400, 'sem telefone/e-mail');
   assert.equal((await kiosk(tokA, answer(3, { body: { contact: { phone: '123', consent: true } } }))).status, 400, 'telefone inválido');
   assert.equal((await kiosk(tokA, answer(3, { body: { contact: { email: 'a@b.c\r\nBcc: x@y.z', consent: true } } }))).status, 400, 'injeção de cabeçalho');

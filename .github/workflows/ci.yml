@@ -30,6 +30,26 @@ jobs:
       - name: Auditoria de dependências
         run: npm audit --audit-level=moderate
 
+  telas:
+    name: Telas em celular (320 e 360 px)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: testes
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npx playwright install --with-deps chromium
+      - name: Nenhuma tela com rolagem lateral ou conteúdo cortado
+        run: npm run test:telas
+        env:
+          WIDTHS: 320,360
+
   imagem:
     name: Build da imagem Docker
     runs-on: ubuntu-latest

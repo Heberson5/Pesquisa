@@ -88,11 +88,14 @@ test('SQL injection no login não funciona', async () => {
   assert.ok(get('SELECT COUNT(*) AS n FROM users').n >= 2); // tabela intacta
 });
 
-test('conta é bloqueada após 5 senhas erradas (força bruta)', async () => {
+test('5 senhas erradas bloqueiam quem errou (mesma rede), sem trancar o dono nem revelar a conta', async () => {
   makeUser('vitima@t.local', 'admin');
-  for (let i = 0; i < 5; i++) await new Client().login('vitima@t.local', 'chute' + i);
-  const r = await new Client().login('vitima@t.local', 'SenhaForte123'); // mesmo com a senha certa
-  assert.equal(r.status, 423);
+  const atacante = '10.99.0.7';
+  for (let i = 0; i < 5; i++) await new Client(atacante).login('vitima@t.local', 'chute' + i);
+  const r = await new Client(atacante).login('vitima@t.local', 'SenhaForte123'); // mesmo com a senha certa
+  assert.equal(r.status, 401, 'bloqueado, com a mesma resposta de senha errada');
+  assert.equal(r.json.error, (await new Client().login('ninguem@t.local', 'x')).json.error, 'não revela que a conta existe');
+  assert.equal((await new Client('10.98.0.1').login('vitima@t.local', 'SenhaForte123')).status, 200, 'o dono, de outra rede, entra');
 });
 
 test('limite de tentativas de login por IP (429)', async () => {

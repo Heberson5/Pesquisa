@@ -1,4 +1,5 @@
 'use strict';
+const { formatLocal } = require('./time');
 // Relatório PowerPoint (.pptx) com gráficos nativos (editáveis no PowerPoint),
 // logo e cores da empresa definidos em Configurações.
 const fs = require('node:fs');
@@ -23,10 +24,11 @@ function isDark(c) {
   const [r, g, b] = [(n >> 16) & 255, (n >> 8) & 255, n & 255];
   return (0.299 * r + 0.587 * g + 0.114 * b) < 150;
 }
-const fmtNps = (n) => (n === null || n === undefined ? '—' : (n > 0 ? '+' : '') + n.toLocaleString('pt-BR'));
+const fmtNps = (n) => (n === null || n === undefined ? '—' : n.toLocaleString('pt-BR', { maximumFractionDigits: 1 }));
 const pct = (v, t) => (t ? Math.round((v / t) * 100) + '%' : '—');
 const fmtDay = (iso) => (iso ? iso.split('-').reverse().join('/') : null);
-const npsColor = (n) => (n === null ? MUTED : n >= 50 ? GOOD : n >= 0 ? 'C27C0E' : BAD);
+// NPS de 0 a 100: verde a partir de 75, amarelo de 50 a 74, vermelho abaixo de 50.
+const npsColor = (n) => (n === null ? MUTED : n >= 75 ? GOOD : n >= 50 ? 'C27C0E' : BAD);
 
 // Dimensões de PNG/JPEG/GIF/WEBP lendo o cabeçalho (para não distorcer a logo).
 function imageSize(buf) {
@@ -88,7 +90,8 @@ async function buildReport({ settings, stats, surveys, filters, mediaDir, genera
   pres.theme = { headFontFace: FONT, bodyFontFace: FONT };
   pres.title = `Relatório de satisfação — ${settings.companyName}`;
   pres.author = generatedBy || settings.companyName;
-  pres.company = settings.companyName.replace(/&/g, '&amp;');
+  // A biblioteca não escapa este campo (docProps/app.xml): escapado aqui por inteiro.
+  pres.company = settings.companyName.replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' })[ch]);
 
   const primary = hex(settings.primaryColor);
   const accent = hex(settings.accentColor);
@@ -137,7 +140,7 @@ async function buildReport({ settings, stats, surveys, filters, mediaDir, genera
   cover.addText([
     { text: settings.companyName, options: { bold: true, breakLine: true } },
     { text: `${period}  ·  ${scopeText}`, options: { breakLine: true } },
-    { text: `Gerado em ${new Date().toLocaleDateString('pt-BR')}`, options: { fontSize: 14 } },
+    { text: `Gerado em ${formatLocal(Date.now()).slice(0, 10)}`, options: { fontSize: 14 } },
   ], { placeholder: 'body' });
   // "selo" do NPS na capa: o motivo visual que se repete (círculos)
   cover.addShape(pres.shapes.OVAL, { x: W - M - 2.6, y: 2.4, w: 2.6, h: 2.6, fill: { color: accent }, line: { color: accent }, objectName: 'Selo NPS' });
@@ -200,7 +203,7 @@ async function buildReport({ settings, stats, surveys, filters, mediaDir, genera
     const days = stats.trend.map((t) => fmtDay(t.day).slice(0, 5));
     ev.addChart(pres.charts.LINE, [{ name: 'NPS', labels: days, values: stats.trend.map((t) => t.nps ?? 0) }],
       { ...chartBase(), x: M, y: 1.35, w: W - 2 * M, h: 3.3, chartColors: [primary], lineSize: 2.5, lineDataSymbol: 'circle', lineDataSymbolSize: 6,
-        valAxisMinVal: -100, valAxisMaxVal: 100, valAxisMajorUnit: 50, showLegend: false, showTitle: true, title: 'NPS por dia', objectName: 'NPS por dia' });
+        valAxisMinVal: 0, valAxisMaxVal: 100, valAxisMajorUnit: 25, showLegend: false, showTitle: true, title: 'NPS por dia (0 a 100)', objectName: 'NPS por dia' });
     ev.addChart(pres.charts.BAR, [{ name: 'Respostas', labels: days, values: stats.trend.map((t) => t.responses) }],
       { ...chartBase(), x: M, y: 4.75, w: W - 2 * M, h: 2.1, barDir: 'col', chartColors: [accent], showLegend: false,
         showTitle: true, title: 'Respostas por dia', showValue: stats.trend.length <= 20, dataLabelPosition: 'outEnd', objectName: 'Respostas por dia' });
@@ -213,9 +216,9 @@ async function buildReport({ settings, stats, surveys, filters, mediaDir, genera
     const sorted = [...stats.byBranch].sort((a, b) => (b.nps ?? -999) - (a.nps ?? -999));
     const chartH = Math.max(3.2, Math.min(5.4, 0.8 + sorted.length * 0.55));
     br.addChart(pres.charts.BAR, [{ name: 'NPS', labels: sorted.map((b) => b.name), values: sorted.map((b) => b.nps ?? 0) }],
-      { ...chartBase(), x: M, y: 1.4, w: 5.7, h: chartH, barDir: 'bar', catAxisOrientation: 'maxMin', valAxisMinVal: -100, valAxisMaxVal: 100,
-        valAxisMajorUnit: 50, catAxisLabelPos: 'low', chartColors: sorted.map((b) => npsColor(b.nps)), showValue: true, dataLabelPosition: 'outEnd',
-        dataLabelFormatCode: '+0.0;-0.0;0', showLegend: false, showTitle: true, title: 'NPS (−100 a +100)', objectName: 'NPS por filial' });
+      { ...chartBase(), x: M, y: 1.4, w: 5.7, h: chartH, barDir: 'bar', catAxisOrientation: 'maxMin', valAxisMinVal: 0, valAxisMaxVal: 100,
+        valAxisMajorUnit: 25, catAxisLabelPos: 'low', chartColors: sorted.map((b) => npsColor(b.nps)), showValue: true, dataLabelPosition: 'outEnd',
+        dataLabelFormatCode: '0.0', showLegend: false, showTitle: true, title: 'NPS (0 a 100)', objectName: 'NPS por filial' });
     const head = ['Filial', 'Respostas', 'Promotores', 'Detratores', 'NPS'].map((t) => ({ text: t, options: { bold: true, fontSize: 11, color: MUTED, fill: { color: SOFT } } }));
     const rows = sorted.map((b) => [b.name, String(b.responses), pct(b.promoters, b.total), pct(b.detractors, b.total),
       { text: fmtNps(b.nps), options: { bold: true, color: npsColor(b.nps) } }]);
@@ -275,9 +278,11 @@ async function buildReport({ settings, stats, surveys, filters, mediaDir, genera
       card(cm, x, y, cw, 1.15, `Comentário ${i + 1}`);
       cm.addShape(pres.shapes.OVAL, { x: x + 0.25, y: y + 0.3, w: 0.5, h: 0.5, fill: { color: accent }, line: { color: accent }, objectName: `Aspas ${i + 1}` });
       cm.addText('“', { x: x + 0.25, y: y + 0.3, w: 0.5, h: 0.5, fontSize: 24, bold: true, align: 'center', valign: 'middle', color: isDark(accent) ? 'FFFFFF' : INK, isTextBox: true, margin: 0 });
-      const text = c.comment.length > 140 ? c.comment.slice(0, 137) + '…' : c.comment;
+      // Comentários gravados antes da limpeza de caracteres inválidos em XML também não corrompem o arquivo.
+      const clean = c.comment.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]|\p{Cs}/gu, '');
+      const text = clean.length > 140 ? clean.slice(0, 137) + '…' : clean;
       cm.addText([{ text, options: { fontSize: 14, color: INK, breakLine: true } },
-        { text: `${c.branch} · ${new Date(c.submitted_at).toLocaleDateString('pt-BR')}`, options: { fontSize: 11, color: MUTED } }],
+        { text: `${c.branch} · ${c.day ? c.day.split('-').reverse().join('/') : formatLocal(c.submitted_at, c.tz).slice(0, 10)}`, options: { fontSize: 11, color: MUTED } }],
       { x: x + 0.95, y: y + 0.1, w: cw - 1.2, h: 0.95, valign: 'middle', isTextBox: true, margin: 0 });
     });
   }

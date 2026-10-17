@@ -8,7 +8,8 @@ const crypto = require('node:crypto');
 const nodemailer = require('nodemailer');
 const delivery = require('./delivery');
 const { get, all, run } = require('./db');
-const { sign } = require('./vault');
+const { sign, encrypt, decrypt } = require('./vault');
+const { isPublicIp } = require('./netguard');
 
 const BACKOFF_MIN = [1, 5, 30, 120, 360];
 const MAX_ATTEMPTS = BACKOFF_MIN.length + 1;
@@ -20,21 +21,23 @@ const escapeHtml = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&a
 const oneLine = (s, max = 200) => String(s ?? '').replace(/[\r\n\t\u0000-\u001f]+/g, ' ').slice(0, max);
 
 // ------------------------------------------------------------------ enfileiramento
-function queueEmail({ to, subject, text, html, kind = 'email', attachment = null, attachmentName = null }) {
+// responseId: resposta de cliente que originou o envio (alerta de detrator). Liga a mensagem à resposta para que o
+// pedido de exclusão do titular (LGPD) apague também o que ainda está na fila ou no histórico de envios.
+function queueEmail({ to, subject, text, html = null, kind = 'email', attachment = null, attachmentName = null, responseId = null }) {
   if (!isEmail(to)) return false;
-  run(`INSERT INTO outbox (kind, channel, recipient, subject, body_text, body_html, attachment, attachment_name, next_attempt_at, created_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?)`, kind, 'email', to, oneLine(subject), text, html, attachment, attachmentName ? oneLine(attachmentName, 100) : null, Date.now(), Date.now());
+  run(`INSERT INTO outbox (kind, channel, recipient, subject, body_text, body_html, attachment, attachment_name, next_attempt_at, created_at, response_id)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?)`, kind, 'email', to, oneLine(subject), text, html, attachment, attachmentName ? oneLine(attachmentName, 100) : null, Date.now(), Date.now(), responseId);
   return true;
 }
 
-function queueWebhook(url, payload, kind) {
-  run('INSERT INTO outbox (kind, channel, recipient, payload, next_attempt_at, created_at) VALUES (?,?,?,?,?,?)',
-    kind, 'webhook', url, JSON.stringify(payload), Date.now(), Date.now());
+function queueWebhook(url, payload, kind, responseId = null) {
+  run('INSERT INTO outbox (kind, channel, recipient, payload, next_attempt_at, created_at, response_id) VALUES (?,?,?,?,?,?,?)',
+    kind, 'webhook', url, JSON.stringify(payload), Date.now(), Date.now(), responseId);
 }
 
-function queueWhatsApp(phone, payload, kind) {
-  run('INSERT INTO outbox (kind, channel, recipient, payload, next_attempt_at, created_at) VALUES (?,?,?,?,?,?)',
-    kind, 'whatsapp', phone, JSON.stringify(payload), Date.now(), Date.now());
+function queueWhatsApp(phone, payload, kind, responseId = null) {
+  run('INSERT INTO outbox (kind, channel, recipient, payload, next_attempt_at, created_at, response_id) VALUES (?,?,?,?,?,?,?)',
+    kind, 'whatsapp', phone, JSON.stringify(payload), Date.now(), Date.now(), responseId);
 }
 
 // ------------------------------------------------------------------ modelo de e-mail
@@ -48,10 +51,10 @@ function renderEmail({ title, intro, rows = [], button = null, footer = '', bran
 <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;background:#fff;border-radius:12px;overflow:hidden">
 <tr><td style="background:${color};color:#fff;padding:18px 24px;font-weight:bold;font-size:16px">${company}</td></tr>
 <tr><td style="padding:24px"><h1 style="margin:0 0 12px;font-size:20px;color:#0f172a">${escapeHtml(title)}</h1>
-<p style="margin:0 0 16px;color:#334155;line-height:1.5">${escapeHtml(intro)}</p>
+<p style="margin:0 0 16px;color:#334155;line-height:1.5;white-space:pre-line">${escapeHtml(intro)}</p>
 ${tableRows ? `<table role="presentation" style="font-size:14px;margin-bottom:16px">${tableRows}</table>` : ''}
 ${button ? `<a href="${escapeHtml(button.url)}" style="display:inline-block;background:${color};color:#fff;text-decoration:none;padding:12px 20px;border-radius:8px;font-weight:bold">${escapeHtml(button.label)}</a>` : ''}
-${footer ? `<p style="margin:20px 0 0;color:#94a3b8;font-size:12px">${escapeHtml(footer)}</p>` : ''}
+${footer ? `<p style="margin:20px 0 0;color:#94a3b8;font-size:12px;white-space:pre-line">${escapeHtml(footer)}</p>` : ''}
 </td></tr></table></td></tr></table></body></html>`;
   const text = [title, '', intro, '', ...rows.map(([k, v]) => `${k}: ${v}`), button ? `\n${button.label}: ${button.url}` : '', footer ? `\n${footer}` : ''].join('\n');
   return { html, text };
@@ -60,21 +63,6 @@ ${footer ? `<p style="margin:20px 0 0;color:#94a3b8;font-size:12px">${escapeHtml
 // ------------------------------------------------------------------ proteção contra SSRF nos webhooks
 // Bloqueia endereços internos (localhost, rede privada, metadados de nuvem etc.) — inclusive quando o
 // domínio resolve para um IP interno (a checagem é feita no momento da conexão, contra "DNS rebinding").
-function isPublicIp(ip) {
-  if (net.isIPv4(ip)) {
-    const [a, b] = ip.split('.').map(Number);
-    return !(a === 0 || a === 10 || a === 127 || (a === 100 && b >= 64 && b <= 127) || (a === 169 && b === 254) ||
-      (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 192 && b === 0) || (a === 198 && (b === 18 || b === 19)) || a >= 224);
-  }
-  if (net.isIPv6(ip)) {
-    const x = ip.toLowerCase();
-    if (x.startsWith('::ffff:')) return isPublicIp(x.slice(7));
-    return !(x === '::' || x === '::1' || x.startsWith('fc') || x.startsWith('fd') || x.startsWith('fe8') || x.startsWith('fe9') ||
-      x.startsWith('fea') || x.startsWith('feb') || x.startsWith('ff') || x.startsWith('64:ff9b') || x.startsWith('2001:db8'));
-  }
-  return false;
-}
-
 function validateWebhookUrl(raw) {
   let u;
   try { u = new URL(raw); } catch { return 'URL inválida.'; }
@@ -104,13 +92,27 @@ function postJson(url, body, headers, { lookup } = {}) {
       res.on('end', () => (res.statusCode >= 200 && res.statusCode < 300 ? resolve() : reject(new Error(`HTTP ${res.statusCode}`))));
     });
     req.on('timeout', () => req.destroy(new Error('Tempo esgotado')));
+    // Prazo total (não só de inatividade): um destino que responde um byte por vez não trava a fila de envios.
+    const deadline = setTimeout(() => req.destroy(new Error('Tempo esgotado')), 15_000);
+    req.on('close', () => clearTimeout(deadline));
     req.on('error', reject);
     req.end(body);
   });
 }
 
-// Segredo para o destino validar a assinatura do webhook (exibido ao admin em Configurações).
-const webhookSecret = () => sign('webhook-secret-v1');
+// Segredo para o destino validar a assinatura do webhook (exibido em Configurações a quem edita os alertas).
+// Fica guardado criptografado e pode ser trocado (ex.: alguém que o viu saiu da empresa); instalações antigas
+// continuam com o segredo derivado até a primeira troca.
+function webhookSecret() {
+  const row = get("SELECT value FROM settings WHERE key = 'webhookSecretEnc'");
+  const v = row ? decrypt(JSON.parse(row.value)) : null;
+  return v || sign('webhook-secret-v1');
+}
+function rotateWebhookSecret() {
+  const secret = crypto.randomBytes(32).toString('base64url');
+  run("INSERT INTO settings (key, value) VALUES ('webhookSecretEnc', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", JSON.stringify(encrypt(secret)));
+  return secret;
+}
 
 // ------------------------------------------------------------------ envio
 let transport = null; let transportKey = ''; let transportAt = 0;
@@ -165,7 +167,9 @@ async function processOutbox(limit = 20) {
   processing = true;
   let sent = 0;
   try {
-    const items = all("SELECT * FROM outbox WHERE status = 'pending' AND next_attempt_at <= ? ORDER BY id LIMIT ?", Date.now(), limit);
+    // O WhatsApp por QR Code tem fila própria, com intervalo entre envios (src/whatsapp-qr.js).
+    const items = all(`SELECT * FROM outbox WHERE status = 'pending' AND next_attempt_at <= ?
+      AND NOT (channel = 'whatsapp' AND payload LIKE '%"mode":"qr"%') ORDER BY id LIMIT ?`, Date.now(), limit);
     for (const item of items) {
       try {
         await deliver(item);
@@ -176,10 +180,11 @@ async function processOutbox(limit = 20) {
         const done = attempts >= MAX_ATTEMPTS;
         run('UPDATE outbox SET attempts = ?, status = ?, next_attempt_at = ?, last_error = ? WHERE id = ?',
           attempts, done ? 'failed' : 'pending', Date.now() + (BACKOFF_MIN[attempts - 1] || 360) * 60_000, oneLine(e.message, 300), item.id);
+        if (done) run('UPDATE outbox SET attachment = NULL WHERE id = ?', item.id); // anexo (relatório) não fica guardado
       }
     }
-    // Limpeza: registros enviados há mais de 90 dias.
-    run("DELETE FROM outbox WHERE status = 'sent' AND sent_at < ?", Date.now() - 90 * 86_400_000);
+    // Limpeza: o histórico de envios (que pode conter dados de clientes) fica no máximo 30 dias.
+    run("DELETE FROM outbox WHERE status IN ('sent', 'failed') AND created_at < ?", Date.now() - 30 * 86_400_000);
   } finally { processing = false; }
   return sent;
 }
@@ -208,11 +213,12 @@ function whatsappCheck() {
 const outboxStatus = () => ({
   smtpConfigured: !!delivery.smtp(),
   whatsappConfigured: !!delivery.whatsapp(),
+  whatsappQrConnected: require('./whatsapp-qr').connected(),
   pending: get("SELECT COUNT(*) AS n FROM outbox WHERE status = 'pending'").n,
   failed: get("SELECT COUNT(*) AS n FROM outbox WHERE status = 'failed' AND created_at > ?", Date.now() - 7 * 86_400_000).n,
 });
 
 module.exports = {
   isEmail, escapeHtml, oneLine, renderEmail, queueEmail, queueWebhook, queueWhatsApp, processOutbox, outboxStatus, whatsappCheck,
-  validateWebhookUrl, isPublicIp, safeLookup, webhookSecret,
+  validateWebhookUrl, isPublicIp, safeLookup, webhookSecret, rotateWebhookSecret,
 };

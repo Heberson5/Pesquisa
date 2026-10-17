@@ -41,6 +41,8 @@ function codeAt(secret, step) {
 // Retorna o passo usado, ou null. Passos já usados (<= lastStep) são recusados: impede reutilizar um código interceptado.
 function verify(secret, code, lastStep = null, now = Date.now()) {
   if (typeof code !== 'string' || !/^\d{6}$/.test(code)) return null;
+  // Segredo vazio ou curto (ex.: não pôde ser decifrado) nunca valida: o código seria calculável por qualquer um.
+  if (!secret || base32Decode(secret).length < 16) return null;
   const current = Math.floor(now / 1000 / STEP);
   for (const step of [current - 1, current, current + 1]) {
     if (lastStep !== null && step <= lastStep) continue;

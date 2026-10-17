@@ -34,7 +34,7 @@ function loadSurvey(surveyId) {
   if (!s.languages.includes('pt')) s.languages.unshift('pt');
   s.i18n = parseJson(s.i18n, {});
   s.questions = all('SELECT * FROM questions WHERE survey_id = ? ORDER BY position, id', surveyId)
-    .map((q) => ({ ...q, options: parseOptions(q), required: !!q.required, is_nps: !!q.is_nps, show_if: parseJson(q.show_if, null), i18n: parseJson(q.i18n, {}) }));
+    .map((q) => ({ ...q, options: parseOptions(q), required: !!q.required, is_nps: !!q.is_nps, show_if: parseJson(q.show_if, null), jumps: parseJson(q.jumps, []), i18n: parseJson(q.i18n, {}) }));
   return s;
 }
 
@@ -59,26 +59,61 @@ function isVisible(q, rawAnswers) {
   return !q.show_if || evalCondition(q.show_if, rawAnswers.get(q.show_if.q));
 }
 
+// Valor e operador de uma regra (condição ou ramificação) conferidos contra a pergunta de origem.
+function ruleValue(input, target, where) {
+  const ops = OPS_BY_TYPE[target.type];
+  if (!ops || !ops.includes(input.op)) throw bad(`${where}: regra incompatível com o tipo da pergunta.`);
+  let value = input.value;
+  if (target.type === 'nps' || target.type === 'scale5') {
+    const [min, max] = target.type === 'nps' ? [0, 10] : [1, 5];
+    if (!Number.isInteger(value) || value < min || value > max) throw bad(`${where}: valor fora da escala.`);
+  } else if (target.type === 'yesno') {
+    if (value !== 'sim' && value !== 'nao') throw bad(`${where}: valor inválido.`);
+  } else if (input.op === 'in') {
+    if (!Array.isArray(value) || !value.length || !value.every((v) => target.options.includes(v))) throw bad(`${where}: opções inválidas.`);
+    value = [...new Set(value)];
+  } else if (!target.options.includes(value)) throw bad(`${where}: opção inválida.`);
+  return value;
+}
+
 // Condição vinda do editor: referencia a pergunta anterior pela posição (ref).
 function normalizeCondition(input, index, previous) {
   if (input === null || input === undefined || input === '') return null;
   if (typeof input !== 'object' || Array.isArray(input)) throw bad(`Condição da pergunta ${index + 1} inválida.`);
   const ref = input.ref;
   if (!Number.isInteger(ref) || ref < 0 || ref >= index) throw bad(`A condição da pergunta ${index + 1} deve depender de uma pergunta anterior.`);
-  const target = previous[ref];
-  const ops = OPS_BY_TYPE[target.type];
-  if (!ops || !ops.includes(input.op)) throw bad(`Condição da pergunta ${index + 1} incompatível com a pergunta ${ref + 1}.`);
-  let value = input.value;
-  if (target.type === 'nps' || target.type === 'scale5') {
-    const [min, max] = target.type === 'nps' ? [0, 10] : [1, 5];
-    if (!Number.isInteger(value) || value < min || value > max) throw bad(`Valor da condição da pergunta ${index + 1} fora da escala.`);
-  } else if (target.type === 'yesno') {
-    if (value !== 'sim' && value !== 'nao') throw bad(`Valor da condição da pergunta ${index + 1} inválido.`);
-  } else if (input.op === 'in') {
-    if (!Array.isArray(value) || !value.length || !value.every((v) => target.options.includes(v))) throw bad(`Opções da condição da pergunta ${index + 1} inválidas.`);
-    value = [...new Set(value)];
-  } else if (!target.options.includes(value)) throw bad(`Opção da condição da pergunta ${index + 1} inválida.`);
+  const value = ruleValue(input, previous[ref], `Condição da pergunta ${index + 1}`);
   return { ref, op: input.op, value };
+}
+
+// ---------------------------------------------------------------- ramificação
+// jumps = [{ op, value, goto }] na própria pergunta: conforme a resposta, pula para uma pergunta adiante
+// (goto = posição no editor, id no banco) ou encerra a pesquisa (goto = 'end'). Vale a primeira regra
+// atendida; sem regra atendida (ou sem resposta), segue para a próxima. Só para frente: não há laços.
+const MAX_JUMPS = 20;
+function normalizeJumps(input, index, q, total) {
+  if (input === null || input === undefined) return [];
+  if (!Array.isArray(input) || input.length > MAX_JUMPS) throw bad(`Ramificação da pergunta ${index + 1} inválida.`);
+  if (input.length && !OPS_BY_TYPE[q.type]) throw bad(`A pergunta ${index + 1} não aceita ramificação (só notas, sim/não e opções).`);
+  return input.map((r, k) => {
+    const where = `Ramificação ${k + 1} da pergunta ${index + 1}`;
+    if (!r || typeof r !== 'object' || Array.isArray(r)) throw bad(`${where} inválida.`);
+    const value = ruleValue(r, q, where);
+    const goto = r.goto;
+    if (goto !== 'end' && (!Number.isInteger(goto) || goto <= index || goto >= total)) throw bad(`${where}: escolha uma pergunta seguinte ou "Encerrar a pesquisa".`);
+    return { op: r.op, value, goto };
+  });
+}
+
+// Próxima posição depois da pergunta i, dada a resposta bruta (questions.length = fim da pesquisa).
+function nextIndex(questions, i, value) {
+  for (const r of questions[i].jumps || []) {
+    if (!evalCondition(r, value)) continue;
+    if (r.goto === 'end') return questions.length;
+    const j = questions.findIndex((x) => x.id === r.goto);
+    return j > i ? j : i + 1; // igual ao tablet: a primeira regra atendida decide
+  }
+  return i + 1;
 }
 
 // ---------------------------------------------------------------- traduções
@@ -111,6 +146,7 @@ function normalizeQuestions(list, languages = ['pt']) {
   list.forEach((input, i) => {
     const q = normalizeQuestion(input, i);
     q.show_if = normalizeCondition(input.show_if, i, out);
+    q.jumps = normalizeJumps(input.jumps, i, q, list.length);
     q.i18n = normalizeI18n(input.i18n, languages, [['text', 300], ['help_text', 300]], { optionsCount: q.options.length, where: `da pergunta ${i + 1}` });
     out.push(q);
   });
@@ -191,11 +227,13 @@ function npsFromCounts(promoters, passives, detractors) {
   const total = promoters + passives + detractors;
   return {
     total, promoters, passives, detractors,
-    nps: total ? Math.round(((promoters - detractors) / total) * 1000) / 10 : null,
+    // Escala de 0 a 100: 0 = só detratores, 50 = promotores e detratores empatados, 100 = só promotores.
+    // (Equivale ao NPS clássico de −100 a +100 convertido: (clássico + 100) ÷ 2.)
+    nps: total ? Math.round((50 + ((promoters - detractors) / total) * 50) * 10) / 10 : null,
   };
 }
 
 module.exports = {
   QUESTION_TYPES, DISPLAYS, LANGS, LANG_LABELS, CONTACT_MODES, OPS_BY_TYPE, loadSurvey, normalizeQuestion, normalizeQuestions,
-  normalizeI18n, normalizeAnswer, npsFromCounts, parseOptions, isVisible, evalCondition,
+  normalizeI18n, normalizeAnswer, npsFromCounts, parseOptions, isVisible, evalCondition, nextIndex,
 };

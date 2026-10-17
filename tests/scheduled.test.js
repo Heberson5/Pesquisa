@@ -34,6 +34,10 @@ test.before(async () => {
     }
   }
   makeUser('gestor.sa@s.local', 'gestor', 'SenhaForte123', [bA]);
+  // Perfil que vê a visão geral mas não pode exportar o PowerPoint.
+  const role = (await admin.req('POST', '/api/admin/roles', { body: { name: 'Só leitura', scope: 'all', perms: ['dashboard.ver'] } })).json.id;
+  const uid = makeUser('leitura@s.local', 'gestor');
+  run('UPDATE users SET role_id = ? WHERE id = ?', role, uid);
 });
 test.after(stop);
 
@@ -64,6 +68,13 @@ test('relatório semanal: gestor recebe PowerPoint apenas com as filiais dele', 
   assert.doesNotMatch(mail.body_html, /Semanal Beta Sigilosa/);
   const adm = get("SELECT * FROM outbox WHERE kind = 'weekly_report' AND recipient = 'adm@s.local' ORDER BY id DESC LIMIT 1");
   assert.match(pptxText(Buffer.from(adm.attachment)), /Semanal Beta Sigilosa/);
+});
+
+test('relatório semanal: sem permissão de PowerPoint, recebe o resumo sem anexo', async () => {
+  const mail = get("SELECT * FROM outbox WHERE kind = 'weekly_report' AND recipient = 'leitura@s.local' ORDER BY id DESC LIMIT 1");
+  assert.ok(mail, 'recebe o e-mail');
+  assert.equal(mail.attachment, null);
+  assert.doesNotMatch(mail.body_text, /anexad/i);
 });
 
 test('relatório semanal: e-mails extras inválidos são recusados; só admin dispara envio manual', async () => {

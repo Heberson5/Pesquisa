@@ -261,7 +261,51 @@ for (const [table, column, ddl] of [
   ['surveys', 'contact_mode', "contact_mode TEXT NOT NULL DEFAULT 'never'"],
   ['questions', 'show_if', 'show_if TEXT'],
   ['questions', 'i18n', 'i18n TEXT'],
+  ['questions', 'jumps', 'jumps TEXT'], // ramificação conforme a resposta (1.5)
+  ['outbox', 'response_id', 'response_id INTEGER'], // envio ligado à resposta do cliente (exclusão LGPD)
 ]) addColumnIfMissing(table, column, ddl);
+// ---- versão 1.5: perfis de acesso com permissões por menu (os perfis padrão são criados em permissions.js).
+db.exec(`CREATE TABLE IF NOT EXISTS roles (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  description TEXT,
+  scope TEXT NOT NULL DEFAULT 'own' CHECK (scope IN ('all','own')),
+  perms TEXT NOT NULL DEFAULT '[]',
+  builtin TEXT UNIQUE CHECK (builtin IN ('admin','gestor')),
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);`);
+addColumnIfMissing('users', 'role_id', 'role_id INTEGER REFERENCES roles(id)');
+// Dia da resposta no calendário do tablet/filial (AAAA-MM-DD). Filtros e gráficos usam este dia, nunca o fuso do servidor.
+addColumnIfMissing('responses', 'local_day', 'local_day TEXT');
+db.exec('CREATE INDEX IF NOT EXISTS idx_responses_local_day ON responses(local_day)');
+// NPS passou para a escala de 0 a 100: metas gravadas na escala antiga (−100 a +100) são convertidas uma vez.
+if (!db.prepare("SELECT 1 FROM settings WHERE key = 'state.npsScale'").get()) {
+  db.exec(`UPDATE branches SET nps_goal = CAST(ROUND((nps_goal + 100) / 2.0) AS INTEGER) WHERE nps_goal IS NOT NULL;
+    UPDATE settings SET value = CAST(CAST(ROUND((CAST(value AS REAL) + 100) / 2.0) AS INTEGER) AS TEXT) WHERE key = 'defaultNpsGoal' AND value <> 'null';
+    INSERT INTO settings (key, value) VALUES ('state.npsScale', '"0-100"');`);
+}
+// Última versão cuja janela "O que há de novo" a pessoa já viu.
+addColumnIfMissing('users', 'last_seen_version', 'last_seen_version TEXT');
+// Sessão do WhatsApp conectado por QR Code (chaves da conexão), sempre criptografada.
+db.exec('CREATE TABLE IF NOT EXISTS wa_auth (k TEXT PRIMARY KEY, v TEXT NOT NULL);');
+// Textos editáveis de cada tipo de envio (e-mail e WhatsApp). Sem linha = texto padrão do sistema.
+db.exec(`CREATE TABLE IF NOT EXISTS message_templates (
+  kind TEXT NOT NULL,
+  channel TEXT NOT NULL CHECK (channel IN ('email','whatsapp')),
+  data TEXT NOT NULL,
+  updated_at INTEGER NOT NULL,
+  updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  PRIMARY KEY (kind, channel)
+);`);
+// Foto de perfil (já recortada e reduzida no navegador). Fica no banco e só é servida para quem está logado.
+db.exec(`CREATE TABLE IF NOT EXISTS user_photos (
+  user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  mime TEXT NOT NULL,
+  data BLOB NOT NULL,
+  updated_at INTEGER NOT NULL
+);`);
+
 // Respostas antigas de tablet: copia o nome atual do tablet (depois disso, renomear não muda o histórico).
 db.exec("UPDATE responses SET device_label = (SELECT name FROM devices WHERE devices.id = responses.device_id) WHERE device_label IS NULL AND device_id IS NOT NULL");
 db.exec(`CREATE INDEX IF NOT EXISTS idx_resp_phone ON responses(contact_phone_lookup);
@@ -275,12 +319,17 @@ const qSql = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND 
 if (!qSql.includes("'default'")) {
   const createNew = SCHEMA.match(/CREATE TABLE IF NOT EXISTS questions \([\s\S]*?\n\);/)[0]
     .replace('CREATE TABLE IF NOT EXISTS questions', 'CREATE TABLE questions_new');
+  // Colunas acrescentadas depois do esquema base (show_if, i18n, jumps…) já foram criadas acima: são levadas
+  // para a nova tabela junto com os dados, senão sumiriam até o próximo início do servidor.
+  const baseCols = ['id', 'survey_id', 'position', 'text', 'help_text', 'type', 'required', 'is_nps', 'options_json', 'display', 'icon'];
+  const extraCols = db.prepare('PRAGMA table_info(questions)').all().filter((c) => !baseCols.includes(c.name));
+  const cols = [...baseCols, ...extraCols.map((c) => c.name)].join(', ');
   db.exec('PRAGMA foreign_keys = OFF');
   db.exec('BEGIN');
   try {
     db.exec(`${createNew}
-      INSERT INTO questions_new (id, survey_id, position, text, help_text, type, required, is_nps, options_json, display, icon)
-        SELECT id, survey_id, position, text, help_text, type, required, is_nps, options_json, display, icon FROM questions;
+      ${extraCols.map((c) => `ALTER TABLE questions_new ADD COLUMN ${c.name} ${c.type};`).join('\n')}
+      INSERT INTO questions_new (${cols}) SELECT ${cols} FROM questions;
       DROP TABLE questions;
       ALTER TABLE questions_new RENAME TO questions;`);
     if (db.prepare('PRAGMA foreign_key_check').all().length) throw new Error('Migração de perguntas deixaria referências inválidas.');

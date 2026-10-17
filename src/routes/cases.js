@@ -4,12 +4,14 @@
 const express = require('express');
 const { get, all, run, tx, audit } = require('../db');
 const { requireUser } = require('../auth');
-const { HttpError, bad, str, int, id, dateParam } = require('../validate');
+const { HttpError, bad, str, int, id, dayParam } = require('../validate');
+const zones = require('../zones');
 const { scope, assertBranch, placeholders } = require('../scope');
 const { decrypt } = require('../vault');
+const { need, can, accessFor } = require('../permissions');
 
 const router = express.Router();
-router.use(requireUser);
+router.use(requireUser, need('casos', 'ver'), require('../live').afterWrite('casos'));
 
 const STATUS = { aberto: 'Aberto', em_contato: 'Em contato', resolvido: 'Resolvido', sem_retorno: 'Sem retorno' };
 const CLOSED = new Set(['resolvido', 'sem_retorno']);
@@ -21,9 +23,10 @@ function caseFilter(user, q) {
     if (q.status === 'pendentes') where.push("c.status IN ('aberto','em_contato')"); else { where.push('c.status = ?'); params.push(q.status); }
   }
   if (q.branchId) { const b = id(q.branchId, 'filial'); assertBranch(user, b); where.push('c.branch_id = ?'); params.push(b); }
-  const from = dateParam(q.from, 'de'); const to = dateParam(q.to, 'até');
-  if (from !== null) { where.push('c.created_at >= ?'); params.push(from); }
-  if (to !== null) { where.push('c.created_at < ?'); params.push(to + 86_400_000); }
+  // Período pelo dia local da resposta que abriu o caso (fuso do tablet/filial).
+  const from = dayParam(q.from, 'de'); const to = dayParam(q.to, 'até');
+  if (from !== null) { where.push('(SELECT local_day FROM responses WHERE id = c.response_id) >= ?'); params.push(from); }
+  if (to !== null) { where.push('(SELECT local_day FROM responses WHERE id = c.response_id) <= ?'); params.push(to); }
   if (q.mine === '1') { where.push('c.assignee_id = ?'); params.push(user.id); }
   const s = scope(user);
   if (s) { where.push(s.length ? `c.branch_id IN (${placeholders(s)})` : '0'); params.push(...s); }
@@ -46,12 +49,13 @@ router.get('/', (req, res) => {
   const page = int(req.query.page || '1', { field: 'página', min: 1, max: 100000 });
   const f = caseFilter(req.user, req.query);
   const total = get(`SELECT COUNT(*) AS n FROM cases c ${f.sql}`, ...f.params).n;
-  const rows = all(`SELECT c.id, c.status, c.min_score, c.created_at, c.updated_at, c.resolved_at, b.name AS branch, u.name AS assignee,
+  const rows = all(`SELECT c.id, c.status, c.min_score, c.created_at, c.updated_at, c.resolved_at, b.name AS branch, b.id AS bid, b.timezone AS btz, u.name AS assignee, c.assignee_id,
+      (SELECT p.updated_at FROM user_photos p WHERE p.user_id = c.assignee_id) AS assignee_photo_at,
       (r.contact_consent_at IS NOT NULL AND r.anonymized_at IS NULL) AS has_contact, r.channel,
       (SELECT a.value_text FROM answers a JOIN questions q ON q.id = a.question_id AND q.type = 'text' WHERE a.response_id = r.id AND a.value_text IS NOT NULL LIMIT 1) AS comment
     FROM cases c JOIN branches b ON b.id = c.branch_id JOIN responses r ON r.id = c.response_id LEFT JOIN users u ON u.id = c.assignee_id
     ${f.sql} ORDER BY CASE c.status WHEN 'aberto' THEN 0 WHEN 'em_contato' THEN 1 ELSE 2 END, c.created_at DESC LIMIT 25 OFFSET ?`, ...f.params, (page - 1) * 25);
-  res.json({ page, pageSize: 25, total, rows: rows.map((r) => ({ ...r, has_contact: !!r.has_contact })), statuses: STATUS });
+  res.json({ page, pageSize: 25, total, rows: rows.map(({ bid, btz, ...r }) => ({ ...r, has_contact: !!r.has_contact, tz: zones.forBranch({ id: bid, timezone: btz }) })), statuses: STATUS });
 });
 
 function loadCase(user, caseId) {
@@ -62,9 +66,15 @@ function loadCase(user, caseId) {
   return c;
 }
 
-// Pessoas que podem ser responsáveis por um caso da filial: admins e gestores da filial.
-const assignable = (branchId) => all(`SELECT DISTINCT u.id, u.name FROM users u LEFT JOIN user_branches ub ON ub.user_id = u.id
-  WHERE u.active = 1 AND (u.role = 'admin' OR ub.branch_id = ?) ORDER BY u.name`, branchId);
+// Pessoas que podem ser responsáveis por um caso da filial: quem enxerga a filial e pode tratar casos.
+function assignable(branchId) {
+  const linked = new Set(all('SELECT user_id FROM user_branches WHERE branch_id = ?', branchId).map((x) => x.user_id));
+  return all('SELECT id, name, role, role_id FROM users WHERE active = 1 ORDER BY name').filter((u) => {
+    const a = accessFor(u);
+    if (!a.isAdmin && !a.perms.has('casos.editar')) return false;
+    return a.scopeAll || linked.has(u.id);
+  }).map(({ id: uid, name }) => ({ id: uid, name }));
+}
 
 router.get('/:id', (req, res) => {
   const c = loadCase(req.user, id(req.params.id));
@@ -76,17 +86,21 @@ router.get('/:id', (req, res) => {
     value: a.type === 'yesno' ? (a.value_num ? 'Sim' : 'Não') : a.type === 'multi' ? JSON.parse(a.value_text).join(', ') : (a.value_text ?? String(a.value_num)),
   }));
   let contact = null;
-  if (r.contact_consent_at && !r.anonymized_at) {
+  const hasContact = !!(r.contact_consent_at && !r.anonymized_at);
+  // Dado pessoal: só para perfis com "Casos · Ver contato do cliente".
+  if (hasContact && can(req.user, 'casos', 'contato')) {
     contact = { name: decrypt(r.contact_name_enc), phone: decrypt(r.contact_phone_enc), email: decrypt(r.contact_email_enc), consentAt: r.contact_consent_at };
     audit(req.user.id, 'contact.view', { caseId: c.id }, req.ip); // acesso a dado pessoal fica registrado
   }
-  const notes = all(`SELECT n.at, n.text, n.status_from, n.status_to, u.name AS user FROM case_notes n LEFT JOIN users u ON u.id = n.user_id
+  const notes = all(`SELECT n.at, n.text, n.status_from, n.status_to, u.name AS user, n.user_id, (SELECT p.updated_at FROM user_photos p WHERE p.user_id = n.user_id) AS photo_at
+    FROM case_notes n LEFT JOIN users u ON u.id = n.user_id
     WHERE n.case_id = ? ORDER BY n.at`, c.id);
   res.json({ ...c, branch: r.branch, survey: r.survey, device: r.device, channel: r.channel, submitted_at: r.submitted_at,
-    answers, contact, notes, statuses: STATUS, assignable: assignable(c.branch_id) });
+    tz: zones.forBranch({ id: r.branch_id, timezone: get('SELECT timezone FROM branches WHERE id = ?', r.branch_id)?.timezone }, r.device_id ? get('SELECT timezone FROM devices WHERE id = ?', r.device_id) : null),
+    answers, contact, contactHidden: hasContact && !contact, notes, statuses: STATUS, assignable: assignable(c.branch_id) });
 });
 
-router.put('/:id', (req, res) => {
+router.put('/:id', need('casos', 'editar'), (req, res) => {
   const c = loadCase(req.user, id(req.params.id));
   const b = req.body || {};
   const status = b.status === undefined ? c.status : b.status;

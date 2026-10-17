@@ -24,8 +24,9 @@
   }
   const fmtDate = (t) => (t ? new Date(t).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : '—');
   const fmtDateTz = (t, tz) => { try { return t ? new Date(t).toLocaleString('pt-BR', { timeZone: tz || undefined, dateStyle: 'short', timeStyle: 'short' }) : '—'; } catch { return fmtDate(t); } };
-  const fmtNps = (n) => (n === null || n === undefined ? '—' : (n > 0 ? '+' : '') + n.toLocaleString('pt-BR'));
-  const npsClass = (n) => (n === null ? '' : n >= 50 ? 'good' : n >= 0 ? 'midc' : 'bad');
+  // NPS na escala de 0 a 100: verde a partir de 75, amarelo de 50 a 74, vermelho abaixo de 50.
+  const fmtNps = (n) => (n === null || n === undefined ? '—' : n.toLocaleString('pt-BR', { maximumFractionDigits: 1 }));
+  const npsClass = (n) => (n === null ? '' : n >= 75 ? 'good' : n >= 50 ? 'midc' : 'bad');
   const qLabel = (q) => (/[?:!.]$/.test(q) ? q + ' ' : q + ': ');
   const isoDay = (d) => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
 
@@ -36,8 +37,11 @@
     clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.add('hidden'), 4000);
   }
 
+  // Identifica esta aba nas gravações: o aviso de tempo real que volta da minha própria gravação não conta como
+  // "alteração em outro lugar" — mas a mesma pessoa em outra aba ou aparelho conta.
+  const TAB_ID = [...crypto.getRandomValues(new Uint8Array(12))].map((b) => b.toString(16).padStart(2, '0')).join('');
   async function api(path, opts = {}) {
-    const headers = { ...(opts.headers || {}) };
+    const headers = { ...(opts.headers || {}), 'X-Tab-Id': TAB_ID };
     let body = opts.body;
     if (body !== undefined && !(body instanceof Blob)) { headers['Content-Type'] = 'application/json'; body = JSON.stringify(body); }
     if (opts.method && opts.method !== 'GET') headers['X-CSRF-Token'] = csrf || '';
@@ -54,11 +58,21 @@
   }
 
   const icon = (name, size = 20, opts = {}) => window.Icons.svg(name, { size, ...opts });
+  // Permissões do perfil de quem está logado (o servidor confere de novo em cada ação).
+  const can = (mod, act = 'ver') => !!me?.access && (me.access.isAdmin || me.access.perms.includes(`${mod}.${act}`));
+  const CFG_GROUPS = ['cfg_marca', 'cfg_alertas', 'cfg_envios', 'cfg_modelos', 'cfg_lgpd'];
   const initials = (name) => String(name || '?').split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join('');
+  // Foto da pessoa (ou as iniciais, para quem não tem foto). u = { id, name, photo_at }.
+  const avatar = (u, cls = '') => (u?.id && u.photo_at
+    ? h('img', { class: ('avatar ' + cls).trim(), src: `/api/admin/users/${u.id}/photo?v=${u.photo_at}`, alt: '', loading: 'lazy' })
+    : h('span', { class: ('avatar ' + cls).trim(), 'aria-hidden': 'true' }, initials(u?.name)));
 
   function modal(title, content, actions = []) {
     const bg = h('div', { class: 'modal-bg', onclick: (e) => { if (e.target === bg) close(); } });
-    const close = () => bg.remove();
+    // Esc fecha a janela (só a de cima, se houver mais de uma).
+    const onKey = (e) => { if (e.key === 'Escape' && document.querySelector('.modal-bg:last-of-type') === bg) close(); };
+    const close = () => { bg.remove(); document.removeEventListener('keydown', onKey); if (livePending) setTimeout(flushLive, 50); };
+    document.addEventListener('keydown', onKey);
     bg.append(h('div', { class: 'modal', role: 'dialog', 'aria-modal': 'true' },
       h('h2', {}, title), content,
       h('div', { class: 'actions' }, h('button', { class: 'btn secondary', onclick: close }, actions.length ? 'Cancelar' : 'Fechar'),
@@ -118,6 +132,7 @@
   }
 
   async function showLogin(msg) {
+    stopLive();
     const email = h('input', { type: 'email', required: true, autocomplete: 'username', placeholder: 'seu@email.com' });
     const pw = h('input', { type: 'password', required: true, autocomplete: 'current-password', placeholder: '••••••••••' });
     const { form, err } = formOf([h('label', { class: 'f' }, 'E-mail', email), h('label', { class: 'f' }, 'Senha', pw)], 'Entrar', async () => {
@@ -189,7 +204,7 @@
     const content = [area];
     if (forced) {
       content.push(h('a', { href: '#', class: 'small', onclick: async (e) => { e.preventDefault(); await api('/logout', { method: 'POST' }).catch(() => {}); me = null; showLogin(); } }, 'Sair'));
-      await loginShell('Ative a verificação em duas etapas', 'Por segurança, administradores precisam usar um código do celular além da senha.', ...content);
+      await loginShell('Ative a verificação em duas etapas', 'Por segurança, o seu perfil precisa usar um código do celular além da senha.', ...content);
     } else {
       modal('Ativar verificação em duas etapas', h('div', {}, ...content));
     }
@@ -215,83 +230,178 @@
 
   let displays = {};
   let contactModes = {};
+  let permCatalog = null;
+  let appVersion = '';
+  const hasNews = () => !!me && me.lastSeenVersion !== appVersion;
   async function loadMe() {
     const r = await api('/me');
     if (r.mfaSetupRequired) { csrf = r.csrf; showMfaSetup(true); throw new Error('401'); }
-    me = r.user; csrf = r.csrf; questionTypes = r.questionTypes; displays = r.displays; settings = r.settings; contactModes = r.contactModes;
+    startLive();
+    me = r.user; csrf = r.csrf; questionTypes = r.questionTypes; displays = r.displays; settings = r.settings; contactModes = r.contactModes; permCatalog = r.permCatalog; appVersion = r.appVersion;
     applyBranding({ companyName: settings.companyName, primaryColor: settings.primaryColor, accentColor: settings.accentColor,
       logoUrl: settings.logoMediaId ? '/media/' + settings.logoMediaId : null });
   }
 
   // ------------------------------------------------------------ layout + rotas
-  // [rota, rótulo, página, perfil exigido, grupo]
+  // [rota, rótulo, página, quem vê (sem função = todos), grupo]
   const PAGES = [
-    ['dashboard', 'Visão geral', pageDashboard, null, 'Análise'],
-    ['casos', 'Casos', pageCases, null, 'Análise'],
-    ['respostas', 'Respostas', pageResponses, null, 'Análise'],
-    ['pesquisas', 'Pesquisas', pageSurveys, null, 'Coleta'],
-    ['filiais', 'Filiais', pageBranches, null, 'Coleta'],
-    ['dispositivos', 'Tablets', pageDevices, null, 'Coleta'],
-    ['usuarios', 'Usuários', pageUsers, 'admin', 'Administração'],
-    ['configuracoes', 'Configurações', pageSettings, 'admin', 'Administração'],
-    ['auditoria', 'Auditoria', pageAudit, 'admin', 'Administração'],
-    ['conta', 'Minha conta', pageAccount, null, 'Administração'],
+    ['dashboard', 'Visão geral', pageDashboard, () => can('dashboard'), 'Análise'],
+    ['casos', 'Casos', pageCases, () => can('casos'), 'Análise'],
+    ['respostas', 'Respostas', pageResponses, () => can('respostas'), 'Análise'],
+    ['pesquisas', 'Pesquisas', pageSurveys, () => can('pesquisas') || can('campanhas'), 'Coleta'],
+    ['filiais', 'Filiais', pageBranches, () => can('filiais'), 'Coleta'],
+    ['dispositivos', 'Tablets', pageDevices, () => can('tablets'), 'Coleta'],
+    ['usuarios', 'Usuários', pageUsers, () => can('usuarios'), 'Administração'],
+    ['permissoes', 'Permissões', pagePermissions, () => can('permissoes'), 'Administração'],
+    ['configuracoes', 'Configurações', pageSettings, () => CFG_GROUPS.some((g) => can(g)), 'Administração'],
+    ['auditoria', 'Auditoria', pageAudit, () => can('auditoria') && me.access.scopeAll, 'Administração'],
+    ['ajuda', 'Ajuda', pageHelp, null, 'Suporte'],
+    ['novidades', 'Novidades', pageNews, null, 'Suporte'],
+    ['conta', 'Minha conta', pageAccount, null, 'Suporte'],
   ];
+  // Artigo do manual de cada tela (botão "?").
+  const HELP_FOR = { dashboard: 'visao-geral', casos: 'casos', respostas: 'respostas', pesquisas: 'pesquisas', filiais: 'filiais', dispositivos: 'tablets',
+    usuarios: 'usuarios', permissoes: 'permissoes', auditoria: 'auditoria', conta: 'minha-conta', novidades: 'como-funciona',
+    configuracoes: () => ({ identidade: 'identidade', menu: 'identidade', respostas: 'identidade', envios: 'email-whatsapp', modelos: 'modelos-mensagem', alertas: 'alertas-relatorios', seguranca: 'lgpd' })[settingsTab] || 'identidade' };
+  const visiblePages = () => PAGES.filter((p) => !p[3] || p[3]());
   const menuIcon = (id) => settings?.menuIcons?.[id] || window.Icons.MENU_DEFAULTS[id];
 
   function layout(active, content) {
     const collapsed = prefs.get('sidebar', 'open') === 'collapsed';
     const shell = h('div', { class: 'layout' + (collapsed ? ' collapsed' : '') });
-    const visible = PAGES.filter((p) => !p[3] || me.role === p[3]);
+    const visible = visiblePages();
     const groups = [...new Set(visible.map((p) => p[4]))];
     const dark = document.documentElement.dataset.theme === 'dark';
     const toggleCollapse = () => {
       const now = !shell.classList.contains('collapsed');
       shell.classList.toggle('collapsed', now);
       prefs.set('sidebar', now ? 'collapsed' : 'open');
-      collapseBtn.replaceChildren(icon(now ? 'chevrons-right' : 'chevrons-left'), h('span', {}, 'Recolher menu'));
+      collapseBtn.replaceChildren(icon(now ? 'chevron-right' : 'chevron-left', 16));
       collapseBtn.title = now ? 'Expandir menu' : 'Recolher menu';
+      collapseBtn.setAttribute('aria-label', collapseBtn.title);
+      collapseBtn.setAttribute('aria-expanded', String(!now));
     };
-    const collapseBtn = h('button', { class: 'side-btn collapse-btn', onclick: toggleCollapse, title: collapsed ? 'Expandir menu' : 'Recolher menu' },
-      icon(collapsed ? 'chevrons-right' : 'chevrons-left'), h('span', {}, 'Recolher menu'));
+    // Recolher/expandir: só uma seta pequena no topo da barra, discreta (fica nítida ao passar o mouse).
+    const collapseBtn = h('button', { class: 'collapse-btn', onclick: toggleCollapse, title: collapsed ? 'Expandir menu' : 'Recolher menu',
+      'aria-label': collapsed ? 'Expandir menu' : 'Recolher menu', 'aria-expanded': String(!collapsed) }, icon(collapsed ? 'chevron-right' : 'chevron-left', 16));
     shell.append(
       h('nav', { class: 'side', 'aria-label': 'Menu principal' },
         h('div', { class: 'brand' },
           branding.logoUrl ? h('img', { class: 'brand-logo', src: branding.logoUrl, alt: branding.companyName }) : null,
           h('span', { class: 'brand-mark' + (branding.logoUrl ? ' hidden' : '') }, initials(branding.companyName)),
-          branding.logoUrl ? null : h('span', { class: 'brand-name' }, branding.companyName)),
+          branding.logoUrl ? null : h('span', { class: 'brand-name' }, branding.companyName),
+          collapseBtn),
         groups.map((g) => h('div', { class: 'nav' }, h('div', { class: 'nav-label' }, g),
           visible.filter((p) => p[4] === g).map(([id, label]) => h('a', { href: '#/' + id, class: id === active ? 'active' : null, title: label,
-            onclick: () => shell.classList.remove('mobile-open') }, icon(menuIcon(id)), h('span', {}, label))))),
+            onclick: () => shell.classList.remove('mobile-open') }, icon(menuIcon(id)), h('span', {}, label),
+            id === 'novidades' && hasNews() ? h('span', { class: 'nav-badge', title: 'Versão nova' }, 'novo') : null)))),
         h('div', { class: 'spacer' }),
         h('div', { class: 'side-foot' },
           h('button', { class: 'side-btn', title: dark ? 'Tema claro' : 'Tema escuro', onclick: () => { prefs.set('theme', dark ? 'light' : 'dark'); applyTheme(); route(); } },
             icon(dark ? 'sun' : 'moon'), h('span', {}, dark ? 'Tema claro' : 'Tema escuro')),
-          collapseBtn,
-          h('div', { class: 'who', title: me.name }, h('span', { class: 'avatar' }, initials(me.name)),
-            h('div', { class: 'who-text' }, h('b', {}, me.name), h('span', {}, me.role === 'admin' ? 'Administrador' : 'Gestor de filial'))),
+          h('div', { class: 'who', title: me.name }, avatar(me),
+            h('div', { class: 'who-text' }, h('b', {}, me.name), h('span', {}, me.access.roleName))),
           h('button', { class: 'side-btn', title: 'Sair', onclick: async () => { await api('/logout', { method: 'POST' }).catch(() => {}); me = null; showLogin(); } },
-            icon('logout'), h('span', {}, 'Sair')))),
+            icon('logout'), h('span', {}, 'Sair')),
+          h('a', { class: 'version', href: '#/novidades', title: 'Notas de versão' }, 'v' + appVersion))),
       h('div', {},
         h('div', { class: 'mobile-bar' },
           h('button', { class: 'btn secondary icon-only', 'aria-label': 'Abrir menu', onclick: () => shell.classList.add('mobile-open') }, icon('menu')),
-          h('b', {}, branding.companyName)),
-        h('main', { class: 'main' }, content)));
+          h('b', {}, branding.companyName),
+          helpLink(active, 'mobile-help')),
+        h('main', { class: 'main' }, content, helpLink(active, 'help-fab'))));
     shell.addEventListener('click', (e) => { if (e.target === shell) shell.classList.remove('mobile-open'); });
     root.replaceChildren(shell);
   }
 
-  async function route() {
-    document.querySelectorAll('.modal-bg').forEach((m) => m.remove()); // janela aberta não sobrevive à troca de página
+  // Botão "?": abre o artigo do manual sobre a tela atual.
+  function helpLink(active, cls) {
+    const target = HELP_FOR[active];
+    if (!target) return null;
+    return h('a', { class: cls, title: 'Ajuda desta tela', 'aria-label': 'Ajuda desta tela',
+      onclick: (e) => { e.preventDefault(); location.hash = '#/ajuda/' + (typeof target === 'function' ? target() : target); } , href: '#/ajuda' }, icon('help', 20));
+  }
+
+  // soft = atualização em tempo real: monta a página nova por trás e troca de uma vez (sem "Carregando…" nem pulo de rolagem).
+  async function route({ soft = false } = {}) {
+    if (!soft) document.querySelectorAll('.modal-bg').forEach((m) => m.remove()); // janela aberta não sobrevive à troca de página
     const reset = /^#\/redefinir\/([A-Za-z0-9_-]{20,100})$/.exec(location.hash);
     if (reset) return showReset(reset[1]);
     if (!me) { try { await loadMe(); } catch { return; } }
     const [, name = 'dashboard', param] = location.hash.split('/');
-    const page = PAGES.find((p) => p[0] === name && (!p[3] || me.role === p[3])) || PAGES[0];
+    const pages = visiblePages();
+    const page = pages.find((p) => p[0] === name) || pages[0];
+    pageDirty = false; hideLiveBanner();
+    if (soft) {
+      const y = window.scrollY;
+      try { const content = await page[2](param); layout(page[0], h('div', {}, content)); window.scrollTo(0, y); } catch { /* fica a tela atual */ }
+      return;
+    }
     const container = h('div', {}, h('p', { class: 'muted' }, 'Carregando…'));
     layout(page[0], container);
     try { container.replaceChildren(await page[2](param)); } catch (e) { if (e.message !== '401') container.replaceChildren(h('div', { class: 'card bad' }, e.message)); }
+    maybeShowNews();
   }
+
+  // ------------------------------------------------------------ tempo real
+  // O servidor avisa (Server-Sent Events) quando algo muda: cadastro ou alteração feita por qualquer pessoa,
+  // resposta nova do tablet ou do QR Code, caso aberto. A tela atual busca os dados de novo, se depender da área.
+  const LIVE_AREAS = { dashboard: ['respostas', 'filiais', 'pesquisas'], casos: ['casos', 'respostas', 'usuarios'], respostas: ['respostas', 'filiais', 'pesquisas'],
+    pesquisas: ['pesquisas', 'filiais'], filiais: ['filiais', 'pesquisas', 'tablets'], dispositivos: ['tablets', 'filiais'], usuarios: ['usuarios', 'permissoes', 'filiais'],
+    permissoes: ['permissoes', 'usuarios'], configuracoes: ['configuracoes'], auditoria: '*', conta: ['conta'] };
+  // Telas com formulário: se a pessoa já começou a mexer, não recarrega por cima — mostra um aviso com "Atualizar".
+  const EDITING_PAGES = new Set(['configuracoes', 'permissoes', 'conta', 'pesquisas']);
+  let live = null; let livePending = false; let liveTimer = null; let refreshMe = false; let pageDirty = false; let liveFromOthers = false;
+  function startLive() {
+    if (live || typeof EventSource === 'undefined') return;
+    live = new EventSource('/api/admin/events');
+    live.addEventListener('change', (e) => { try { onLive(JSON.parse(e.data)); } catch { /* aviso inválido */ } });
+    // Canal fechado de vez (sessão expirou ou saiu em outra aba): confere a sessão, que leva ao login se preciso.
+    live.addEventListener('error', () => { if (live && live.readyState === 2) { live = null; api('/me').catch(() => {}); } });
+  }
+  function stopLive() { if (live) { live.close(); live = null; } }
+  function onLive(d) {
+    if (d.area === 'filiais') cache.branches = null;
+    if (d.area === 'pesquisas') cache.surveys = null;
+    if (['permissoes', 'usuarios', 'conta', 'configuracoes'].includes(d.area)) refreshMe = true; // o meu perfil ou a marca podem ter mudado
+    const [, name = 'dashboard'] = location.hash.split('/');
+    const areas = LIVE_AREAS[name];
+    if (areas && (areas === '*' || areas.includes(d.area))) livePending = true;
+    if (d.by !== TAB_ID) liveFromOthers = true; // a gravação feita nesta aba não é "alteração em outro lugar"
+    clearTimeout(liveTimer);
+    liveTimer = setTimeout(flushLive, 350);
+  }
+  async function flushLive() {
+    if (!me) return;
+    if (refreshMe) {
+      refreshMe = false;
+      const before = JSON.stringify([me.access, settings?.companyName, settings?.primaryColor, settings?.logoMediaId]);
+      try { await loadMe(); } catch { return; }
+      if (JSON.stringify([me.access, settings?.companyName, settings?.primaryColor, settings?.logoMediaId]) !== before) livePending = true;
+    }
+    if (!livePending) return;
+    if (document.querySelector('.modal-bg')) return; // espera a janela fechar
+    const [, name = 'dashboard'] = location.hash.split('/');
+    if (pageDirty && EDITING_PAGES.has(name)) {
+      // Formulário em edição: só avisa se outra pessoa mudou algo; a minha própria gravação já está na tela.
+      if (liveFromOthers) showLiveBanner(); else livePending = false;
+      liveFromOthers = false;
+      return;
+    }
+    livePending = false; liveFromOthers = false;
+    await route({ soft: true });
+  }
+  // Mexer num formulário marca a tela como "em edição" (filtros não contam: eles já recarregam a tela).
+  document.addEventListener('input', (e) => { if (e.target.closest?.('main') && !e.target.closest('.filters, .help-search')) pageDirty = true; });
+  function showLiveBanner() {
+    if (document.querySelector('.live-banner')) return;
+    document.body.append(h('div', { class: 'live-banner', role: 'status' }, icon('refresh', 16), 'Há alterações feitas em outro lugar.',
+      h('button', { class: 'btn sm', onclick: () => { livePending = false; route({ soft: true }); } }, 'Atualizar'),
+      h('button', { class: 'btn secondary sm', onclick: hideLiveBanner }, 'Depois')));
+  }
+  function hideLiveBanner() { document.querySelector('.live-banner')?.remove(); }
+  // Tablets: online/offline muda com o tempo, sem gravação; a tela confere a cada minuto.
+  setInterval(() => { if (me && location.hash.startsWith('#/dispositivos')) { livePending = true; flushLive(); } }, 60_000);
   window.addEventListener('hashchange', route);
 
   // No celular as linhas das tabelas viram cartões; cada célula ganha o nome da coluna (CSS usa data-label).
@@ -311,6 +421,18 @@
     .observe(document.body, { childList: true, subtree: true });
 
   // Cabeçalho padrão das páginas: título, subtítulo e botões.
+  // Guias (abas): botões em telas largas; no celular viram uma lista de seleção com o nome da guia aberta.
+  // items = [[chave, rótulo, ícone?]]
+  const tabBar = (items, active, onPick, label = 'Guia') => [
+    h('div', { class: 'tabs has-select', role: 'tablist' }, items.map(([k, text, ic]) => h('button', { class: active === k ? 'active' : '', role: 'tab', 'aria-selected': String(active === k),
+      onclick: () => onPick(k) }, ic ? icon(ic, 16) : null, text))),
+    (() => {
+      const sel = h('select', { class: 'tabs-select', 'aria-label': label, onchange: (e) => onPick(e.target.value) }, items.map(([k, text]) => h('option', { value: k }, text)));
+      sel.value = active;
+      return h('label', { class: 'tabs-select-wrap' }, h('span', {}, label), sel);
+    })(),
+  ];
+
   const pageHead = (title, sub, ...actions) => h('div', { class: 'topbar' },
     h('div', {}, h('h1', {}, title), sub ? h('div', { class: 'sub' }, sub) : null), h('div', { class: 'row' }, ...actions));
 
@@ -318,7 +440,8 @@
   async function surveys(force) { if (force || !cache.surveys) cache.surveys = await api('/surveys'); return cache.surveys; }
 
   // ------------------------------------------------------------ filtros reutilizáveis
-  function filterBar(state, onChange, { withSurvey = true } = {}) {
+  const NPS_GROUPS = { promotores: 'Promotores (notas 9 e 10)', neutros: 'Neutros (notas 7 e 8)', detratores: 'Detratores (notas 0 a 6)' };
+  function filterBar(state, onChange, { withSurvey = true, withNps = false } = {}) {
     const from = h('input', { type: 'date', value: state.from });
     const to = h('input', { type: 'date', value: state.to });
     const br = h('select', {}, h('option', { value: '' }, 'Todas as filiais'), cache.branches.map((b) => h('option', { value: String(b.id) }, b.name)));
@@ -330,15 +453,20 @@
     const uf = h('select', {}, h('option', { value: '' }, 'Todos os estados'), UFS.map((u) => h('option', { value: u }, u)),
       h('option', { value: '_fora' }, 'Fora do Brasil'), h('option', { value: '_sem' }, 'QR Code sem localização'));
     uf.value = state.uf || '';
-    const apply = () => { Object.assign(state, { from: from.value, to: to.value, branchId: br.value, surveyId: sv.value, channel: ch.value, uf: uf.value }); onChange(); };
-    [from, to, br, sv, ch, uf].forEach((el) => el.addEventListener('change', apply));
+    const nps = h('select', {}, h('option', { value: '' }, 'Todas as notas'), Object.entries(NPS_GROUPS).map(([k, l]) => h('option', { value: k }, l)));
+    nps.value = state.nps || '';
+    const apply = () => { Object.assign(state, { from: from.value, to: to.value, branchId: br.value, surveyId: sv.value, channel: ch.value, uf: uf.value, ...(withNps ? { nps: nps.value } : {}) }); onChange(); };
+    [from, to, br, sv, ch, uf, nps].forEach((el) => el.addEventListener('change', apply));
     return h('div', { class: 'filters card' },
       h('label', { class: 'f' }, 'De', from), h('label', { class: 'f' }, 'Até', to),
-      h('label', { class: 'f' }, 'Filial', br), withSurvey ? h('label', { class: 'f' }, 'Pesquisa', sv) : null, h('label', { class: 'f' }, 'Canal', ch), h('label', { class: 'f' }, 'Estado do cliente', uf));
+      h('label', { class: 'f' }, 'Filial', br), withSurvey ? h('label', { class: 'f' }, 'Pesquisa', sv) : null, h('label', { class: 'f' }, 'Canal', ch), h('label', { class: 'f' }, 'Estado do cliente', uf),
+      withNps ? h('label', { class: 'f' }, 'Classificação NPS', nps) : null);
   }
   const qs = (state) => new URLSearchParams(Object.entries(state).filter(([, v]) => v)).toString();
   const UFS = ['AC', 'AL', 'AM', 'AP', 'BA', 'CE', 'DF', 'ES', 'GO', 'MA', 'MG', 'MS', 'MT', 'PA', 'PB', 'PE', 'PI', 'PR', 'RJ', 'RN', 'RO', 'RR', 'RS', 'SC', 'SE', 'SP', 'TO'];
-  const filterState = { from: isoDay(new Date(Date.now() - 29 * 86400000)), to: isoDay(new Date()), branchId: '', surveyId: '', channel: '', uf: '' };
+  const filterState = { from: isoDay(new Date(Date.now() - 29 * 86400000)), to: isoDay(new Date()), branchId: '', surveyId: '', channel: '', uf: '', nps: '' };
+  // A classificação NPS só filtra a tela Respostas; a Visão geral mostra sempre o conjunto todo.
+  const statsQs = () => qs({ ...filterState, nps: '' });
 
   // ------------------------------------------------------------ dashboard
   async function pageDashboard() {
@@ -346,17 +474,19 @@
     const body = h('div');
     const load = async () => {
       body.replaceChildren(h('p', { class: 'muted' }, 'Carregando…'));
-      const s = await api('/stats?' + qs(filterState));
+      const s = await api('/stats?' + statsQs());
       body.replaceChildren(renderStats(s));
     };
     await load();
-    return h('div', {}, pageHead('Visão geral', 'Indicador NPS e satisfação das filiais', exportButtons()), filterBar(filterState, load), body);
+    return h('div', {}, pageHead('Visão geral', 'Indicador NPS e satisfação das filiais', exportButtons(false)), filterBar(filterState, load), body);
   }
 
-  function exportButtons() {
+  // withNps: a exportação segue a classificação NPS escolhida (só na tela Respostas).
+  function exportButtons(withNps = true) {
+    const q = () => (withNps ? qs(filterState) : statsQs());
     return [
-      h('button', { class: 'btn secondary', onclick: () => { location.href = '/api/admin/responses.csv?' + qs(filterState); } }, icon('download', 18), 'CSV'),
-      h('button', { class: 'btn', onclick: () => { toast('Gerando PowerPoint…'); location.href = '/api/admin/report.pptx?' + qs(filterState); } }, icon('slides', 18), 'Exportar PowerPoint'),
+      can('respostas', 'csv') ? h('button', { class: 'btn secondary', onclick: () => { location.href = '/api/admin/responses.csv?' + q(); } }, icon('download', 18), 'CSV') : null,
+      can('dashboard', 'pptx') ? h('button', { class: 'btn', onclick: () => { toast('Gerando PowerPoint…'); location.href = '/api/admin/report.pptx?' + statsQs(); } }, icon('slides', 18), 'Exportar PowerPoint') : null,
     ];
   }
 
@@ -371,14 +501,19 @@
   function renderStats(s) {
     const o = s.overall;
     const pct = (v) => (o.total ? Math.round((v / o.total) * 100) + '%' : '—');
-    const kpi = (ic, cls, label, value, valueCls, hint) => h('div', { class: 'card kpi' },
-      h('div', { class: 'kpi-icon ' + cls }, icon(ic, 22)),
-      h('div', {}, h('div', { class: 'label' }, label), h('div', { class: 'value ' + valueCls }, value), hint ? h('div', { class: 'small muted' }, hint) : null));
+    // go: atalho para as respostas por trás do número (mesmo período e filtros, mais a classificação NPS).
+    const kpi = (ic, cls, label, value, valueCls, hint, go) => h(go !== undefined && can('respostas') ? 'a' : 'div', {
+      class: 'card kpi' + (go !== undefined && can('respostas') ? ' kpi-link' : ''), href: go !== undefined && can('respostas') ? '#/respostas' : null,
+      title: go !== undefined && can('respostas') ? `Ver as respostas: ${label.toLowerCase()}` : null,
+      onclick: go !== undefined ? () => { filterState.nps = go; } : null },
+    h('div', { class: 'kpi-icon ' + cls }, icon(ic, 22)),
+    h('div', {}, h('div', { class: 'label' }, label), h('div', { class: 'value ' + valueCls }, value), hint ? h('div', { class: 'small muted' }, hint) : null),
+    go !== undefined && can('respostas') ? h('span', { class: 'kpi-go', 'aria-hidden': 'true' }, '›') : null);
     const kpis = h('div', { class: 'grid k4' },
-      kpi('gauge', '', 'NPS', fmtNps(o.nps), npsClass(o.nps), o.total ? `${o.total.toLocaleString('pt-BR')} notas de NPS` : 'Sem notas de NPS'),
-      kpi('inbox', '', 'Respostas', s.totalResponses.toLocaleString('pt-BR'), '', 'pesquisas concluídas'),
-      kpi('thumbs', 'good', 'Promotores', pct(o.promoters), 'good', 'notas 9 e 10'),
-      kpi('activity', 'bad', 'Detratores', pct(o.detractors), 'bad', 'notas de 0 a 6'));
+      kpi('gauge', '', 'NPS', fmtNps(o.nps), npsClass(o.nps), o.total ? `${o.total.toLocaleString('pt-BR')} notas de NPS · escala de 0 a 100` : 'Sem notas de NPS'),
+      kpi('inbox', '', 'Respostas', s.totalResponses.toLocaleString('pt-BR'), '', 'pesquisas concluídas', ''),
+      kpi('thumbs', 'good', 'Promotores', pct(o.promoters), 'good', `${o.promoters.toLocaleString('pt-BR')} notas 9 e 10`, 'promotores'),
+      kpi('activity', 'bad', 'Detratores', pct(o.detractors), 'bad', `${o.detractors.toLocaleString('pt-BR')} notas de 0 a 6`, 'detratores'));
 
     const maxN = Math.max(1, ...s.scoreDist.map((d) => d.n));
     const dist = h('div', { class: 'bars' }, Array.from({ length: 11 }, (_, n) => {
@@ -409,7 +544,7 @@
         h('div', { class: 'card' }, h('h2', {}, 'NPS por pergunta marcada'), byQuestion),
         h('div', { class: 'card comments-card' }, h('h2', {}, 'Comentários recentes'), s.comments.length ? s.comments.map((c) => h('div', { class: 'comment' },
           h('span', { class: 'comment-icon' }, icon('message', 16)),
-          h('div', {}, h('div', {}, c.comment), h('div', { class: 'small muted' }, `${c.branch} · ${fmtDate(c.submitted_at)}`)))) : h('p', { class: 'muted' }, 'Sem comentários.'))));
+          h('div', {}, h('div', {}, c.comment), h('div', { class: 'small muted' }, `${c.branch} · ${fmtDateTz(c.submitted_at, c.tz)}`)))) : h('p', { class: 'muted' }, 'Sem comentários.'))));
   }
 
   // De onde vieram as respostas do QR Code (somente quem autorizou a localização).
@@ -449,9 +584,9 @@
     const maxR = Math.max(1, ...trend.map((t) => t.responses));
     const x = (i) => P + (trend.length === 1 ? (W - 2 * P) / 2 : (i * (W - 2 * P)) / (trend.length - 1));
     const bw = Math.max(2, Math.min(24, (W - 2 * P) / trend.length - 4));
-    const yN = (v) => H - P - ((v + 100) / 200) * (H - 2 * P);
+    const yN = (v) => H - P - (v / 100) * (H - 2 * P);
     const svg = h('svg', { svg: true, viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: 'none', role: 'img', 'aria-label': 'Evolução de respostas e NPS' });
-    svg.append(h('line', { svg: true, x1: P, x2: W - P, y1: yN(0), y2: yN(0), class: 'zero', 'stroke-dasharray': '4 4' }));
+    svg.append(h('line', { svg: true, x1: P, x2: W - P, y1: yN(50), y2: yN(50), class: 'zero', 'stroke-dasharray': '4 4' }));
     trend.forEach((t, i) => {
       const bh = (t.responses / maxR) * (H - 2 * P) * 0.6;
       svg.append(h('rect', { svg: true, x: x(i) - bw / 2, y: H - P - bh, width: bw, height: bh, class: 'tbar', rx: 3 },
@@ -460,8 +595,8 @@
     const pts = trend.map((t, i) => (t.nps === null ? null : `${x(i)},${yN(t.nps)}`)).filter(Boolean);
     if (pts.length) svg.append(h('polyline', { svg: true, points: pts.join(' '), class: 'tline' }));
     trend.forEach((t, i) => { if (t.nps !== null) svg.append(h('circle', { svg: true, cx: x(i), cy: yN(t.nps), r: 3.5, class: 'tpt' })); });
-    svg.append(h('text', { svg: true, x: 2, y: yN(100) + 4, 'font-size': 11, class: 'tlabel' }, '+100'));
-    svg.append(h('text', { svg: true, x: 2, y: yN(-100) + 4, 'font-size': 11, class: 'tlabel' }, '-100'));
+    svg.append(h('text', { svg: true, x: 2, y: yN(100) + 4, 'font-size': 11, class: 'tlabel' }, '100'));
+    svg.append(h('text', { svg: true, x: 2, y: yN(0) + 4, 'font-size': 11, class: 'tlabel' }, '0'));
     return h('div', { class: 'chart' }, svg, h('div', { class: 'legend' }, h('span', {}, '▮ Respostas por dia'), h('span', {}, '— NPS do dia')));
   }
 
@@ -487,12 +622,12 @@
       body.replaceChildren(h('div', { class: 'card table-wrap' }, h('table', {},
         h('thead', {}, h('tr', {}, h('th', {}, 'Quando'), h('th', {}, 'Filial'), h('th', {}, 'Nota'), h('th', {}, 'Comentário'), h('th', {}, 'Status'), h('th', {}, 'Responsável'), h('th', {}))),
         h('tbody', {}, r.rows.length ? r.rows.map((c) => h('tr', {},
-          h('td', {}, fmtDate(c.created_at), c.channel === 'link' ? h('div', { class: 'small muted' }, 'via QR Code') : null),
+          h('td', {}, fmtDateTz(c.created_at, c.tz), c.channel === 'link' ? h('div', { class: 'small muted' }, 'via QR Code') : null),
           h('td', {}, c.branch), h('td', {}, h('b', { class: 'bad' }, c.min_score)),
           h('td', { class: 'small' }, c.comment ? (c.comment.length > 90 ? c.comment.slice(0, 90) + '…' : c.comment) : h('span', { class: 'muted' }, '—'),
             c.has_contact ? h('div', {}, h('span', { class: 'badge ok' }, 'Pediu contato')) : null),
           h('td', {}, h('span', { class: 'badge ' + CASE_BADGE[c.status] }, r.statuses[c.status])),
-          h('td', { class: 'small' }, c.assignee || h('span', { class: 'muted' }, 'ninguém')),
+          h('td', { class: 'small' }, c.assignee ? h('div', { class: 'person' }, avatar({ id: c.assignee_id, name: c.assignee, photo_at: c.assignee_photo_at }, 'sm'), c.assignee) : h('span', { class: 'muted' }, 'ninguém')),
           h('td', {}, h('a', { class: 'btn secondary sm', href: '#/casos/' + c.id }, 'Abrir'))))
           : h('tr', {}, h('td', { colspan: '7', class: 'empty' }, 'Nenhum caso com esses filtros. 🎉')))),
       h('div', { class: 'row' },
@@ -526,18 +661,21 @@
       c.contact.phone ? h('div', {}, h('a', { href: 'tel:+' + (c.contact.phone.length <= 11 ? '55' : '') + c.contact.phone }, c.contact.phone),
         ' · ', h('a', { href: 'https://wa.me/' + (c.contact.phone.length <= 11 ? '55' : '') + c.contact.phone, target: '_blank', rel: 'noopener noreferrer' }, 'WhatsApp')) : null,
       c.contact.email ? h('div', {}, h('a', { href: 'mailto:' + c.contact.email }, c.contact.email)) : null,
-      h('div', { class: 'small muted' }, 'Consentimento em ' + fmtDate(c.contact.consentAt))) : h('p', { class: 'small muted' }, 'O cliente não deixou contato.');
+      h('div', { class: 'small muted' }, 'Consentimento em ' + fmtDate(c.contact.consentAt)))
+      : h('p', { class: 'small muted' }, c.contactHidden ? 'O cliente deixou contato, mas o seu perfil não permite ver os dados de contato.' : 'O cliente não deixou contato.');
+    const editable = can('casos', 'editar');
+    status.disabled = !editable; who.disabled = !editable;
     modal(`Caso #${c.id} · ${c.branch}`, h('div', {},
-      h('p', { class: 'small muted' }, `${fmtDate(c.submitted_at)} · ${c.survey}${c.channel === 'link' ? ' · via QR Code' : c.device ? ' · ' + c.device : ''}`),
+      h('p', { class: 'small muted' }, `${fmtDateTz(c.submitted_at, c.tz)} · ${c.survey}${c.channel === 'link' ? ' · via QR Code' : c.device ? ' · ' + c.device : ''}`),
       h('ul', { class: 'answers' }, c.answers.map((a) => h('li', {}, h('b', {}, qLabel(a.question)), a.value))),
       contact,
       h('h2', {}, 'Histórico'),
       c.notes.length ? h('ul', { class: 'timeline' }, c.notes.map((n) => h('li', {},
-        h('div', { class: 'small muted' }, `${fmtDate(n.at)} · ${n.user || 'sistema'}${n.status_to ? ` · ${c.statuses[n.status_from] || n.status_from} → ${c.statuses[n.status_to]}` : ''}`),
+        h('div', { class: 'small muted person' }, n.user ? avatar({ id: n.user_id, name: n.user, photo_at: n.photo_at }, 'xs') : null, `${fmtDate(n.at)} · ${n.user || 'sistema'}${n.status_to ? ` · ${c.statuses[n.status_from] || n.status_from} → ${c.statuses[n.status_to]}` : ''}`),
         n.text ? h('div', {}, n.text) : null))) : h('p', { class: 'small muted' }, 'Nenhuma ação registrada ainda.'),
       h('div', { class: 'form-grid' }, h('label', { class: 'f' }, 'Status', status), h('label', { class: 'f' }, 'Responsável', who)),
-      h('label', { class: 'f' }, 'Anotação', note)),
-    [{ label: 'Salvar', onClick: async (close) => {
+      editable ? h('label', { class: 'f' }, 'Anotação', note) : null),
+    !editable ? [] : [{ label: 'Salvar', onClick: async (close) => {
       try {
         await api('/cases/' + c.id, { method: 'PUT', body: { status: status.value, assigneeId: who.value ? Number(who.value) : null, note: note.value } });
         close(); toast('Caso atualizado.'); if (location.hash !== '#/casos') history.replaceState(null, '', '#/casos'); reload();
@@ -566,7 +704,7 @@
 
   async function pageResponses() {
     await Promise.all([branches(), surveys()]);
-    const isAdmin = me.role === 'admin'; // só administrador exclui respostas (o servidor também confere)
+    const isAdmin = can('respostas', 'excluir'); // só perfis com "Respostas · Excluir" (o servidor também confere)
     let page = 1;
     const body = h('div');
     // Apaga tudo o que o filtro atual mostra (limpeza dos testes). Exige digitar EXCLUIR.
@@ -592,7 +730,7 @@
         h('div', { class: 'table-wrap' }, h('table', {},
           h('thead', {}, h('tr', {}, h('th', {}, 'Data'), h('th', {}, 'Filial'), h('th', {}, 'Localização'), h('th', {}, 'Dispositivo'), h('th', {}, 'Pesquisa'), h('th', {}, 'Respostas'), isAdmin ? h('th', {}) : null)),
           h('tbody', {}, r.rows.length ? r.rows.map((x) => h('tr', {},
-            h('td', {}, fmtDate(x.submitted_at), x.lang && x.lang !== 'pt' ? h('div', {}, h('span', { class: 'badge' }, x.lang.toUpperCase())) : null),
+            h('td', {}, fmtDateTz(x.submitted_at, x.tz), x.lang && x.lang !== 'pt' ? h('div', {}, h('span', { class: 'badge' }, x.lang.toUpperCase())) : null),
             h('td', {}, x.branch),
             h('td', {}, locationBadge(x)),
             h('td', {}, deviceBadge(x)), h('td', {}, x.survey),
@@ -611,7 +749,9 @@
     await load();
     return h('div', {},
       pageHead('Respostas', 'Todas as pesquisas recebidas, dos tablets e dos QR Codes', exportButtons()),
-      filterBar(filterState, () => { page = 1; load(); }), body);
+      filterState.nps ? h('div', { class: 'filter-chip' }, `Mostrando só: ${NPS_GROUPS[filterState.nps]}`,
+        h('button', { class: 'btn secondary sm', onclick: () => { filterState.nps = ''; route(); } }, 'Mostrar todas')) : null,
+      filterBar(filterState, () => { page = 1; route(); }, { withNps: true }), body);
   }
 
   // ------------------------------------------------------------ pesquisas
@@ -620,20 +760,20 @@
     const list = await surveys(true);
     return h('div', {},
       pageHead('Pesquisas', 'Perguntas exibidas nos tablets e marcação do NPS',
-        me.role === 'admin' ? h('a', { class: 'btn', href: '#/pesquisas/nova' }, icon('plus', 18), 'Nova pesquisa') : null),
-      h('div', { class: 'card table-wrap' }, h('table', {},
+        can('pesquisas', 'incluir') ? h('a', { class: 'btn', href: '#/pesquisas/nova' }, icon('plus', 18), 'Nova pesquisa') : null),
+      !can('pesquisas') ? null : h('div', { class: 'card table-wrap' }, h('table', {},
         h('thead', {}, h('tr', {}, h('th', {}, 'Título'), h('th', {}, 'Perguntas'), h('th', {}, 'NPS'), h('th', {}, 'Respostas'), h('th', {}, 'Status'), h('th', {}))),
         h('tbody', {}, list.length ? list.map((s) => h('tr', {},
           h('td', {}, h('b', {}, s.title), h('div', { class: 'small muted' }, 'Atualizada ' + fmtDate(s.updated_at))),
           h('td', {}, s.questions), h('td', {}, s.nps_questions ? h('span', { class: 'badge nps' }, `${s.nps_questions} marcada(s)`) : h('span', { class: 'badge warn' }, 'nenhuma')),
           h('td', {}, s.responses), h('td', {}, h('span', { class: 'badge ' + (s.active ? 'ok' : 'off') }, s.active ? 'Ativa' : 'Inativa')),
           h('td', {}, h('div', { class: 'row' },
-            h('a', { class: 'btn secondary sm', href: '#/pesquisas/' + s.id }, me.role === 'admin' ? 'Editar' : 'Ver'),
-            me.role === 'admin' ? h('button', { class: 'btn secondary sm', onclick: async () => {
+            h('a', { class: 'btn secondary sm', href: '#/pesquisas/' + s.id }, can('pesquisas', 'editar') ? 'Editar' : 'Ver'),
+            can('pesquisas', 'incluir') ? h('button', { class: 'btn secondary sm', onclick: async () => {
               const r = await api(`/surveys/${s.id}/duplicate`, { method: 'POST' }); toast('Pesquisa duplicada.'); location.hash = '#/pesquisas/' + r.id;
             } }, 'Duplicar') : null))))
           : h('tr', {}, h('td', { colspan: '6', class: 'empty' }, 'Nenhuma pesquisa criada.'))))),
-      await campaignsCard(list));
+      can('campanhas') ? await campaignsCard(list) : null);
   }
 
   // Campanhas: trocam a pesquisa de uma filial (ou de todas) por um período, e voltam sozinhas à padrão.
@@ -654,10 +794,10 @@
     };
     return h('div', { class: 'card' },
       h('div', { class: 'topbar' }, h('div', {}, h('h2', {}, 'Campanhas agendadas'), h('div', { class: 'small muted' }, 'Durante o período, a pesquisa da campanha substitui a padrão; depois, tudo volta sozinho.')),
-        me.role === 'admin' ? h('button', { class: 'btn secondary', onclick: add }, icon('calendar', 16), 'Agendar campanha') : null),
+        can('campanhas', 'incluir') ? h('button', { class: 'btn secondary', onclick: add }, icon('calendar', 16), 'Agendar campanha') : null),
       rows.length ? h('div', { class: 'table-wrap' }, h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, 'Pesquisa'), h('th', {}, 'Filial'), h('th', {}, 'Período'), h('th', {}, 'Situação'), h('th', {}))),
         h('tbody', {}, rows.map((c) => h('tr', {}, h('td', {}, c.survey), h('td', {}, c.branch || 'Todas'), h('td', { class: 'small' }, `${fmtDateTz(c.starts_at, c.tz)} → ${fmtDateTz(c.ends_at, c.tz)}`),
-          h('td', {}, status(c)), h('td', {}, me.role === 'admin' ? h('button', { class: 'btn secondary sm', onclick: async () => {
+          h('td', {}, status(c)), h('td', {}, can('campanhas', 'excluir') ? h('button', { class: 'btn secondary sm', onclick: async () => {
             if (!confirm('Excluir esta campanha?')) return;
             try { await api('/schedules/' + c.id, { method: 'DELETE' }); route(); } catch (ex) { toast(ex.message, true); }
           } }, 'Excluir') : null))))))
@@ -678,7 +818,7 @@
 
   async function surveyEditor(sid) {
     const s = sid ? await api('/surveys/' + sid) : structuredClone(NEW_SURVEY);
-    const ro = me.role !== 'admin';
+    const ro = !can('pesquisas', sid ? 'editar' : 'incluir');
     const locked = s.has_responses;
     const f = {};
     const field = (key, label, type = 'text', extra = {}) => {
@@ -691,6 +831,8 @@
     let keySeq = 0;
     const questions = s.questions.map((q) => ({ ...q, options: [...(q.options || [])], i18n: structuredClone(q.i18n || {}), _k: ++keySeq }));
     questions.forEach((q) => { if (q.show_if && questions[q.show_if.ref]) q.cond = { k: questions[q.show_if.ref]._k, op: q.show_if.op, value: q.show_if.value }; });
+    // Ramificação: destino guardado pela chave interna (ou 'end'), para sobreviver a reordenações.
+    questions.forEach((q) => { q.jumpRules = (q.jumps || []).map((r) => ({ op: r.op, value: r.value, to: r.goto === 'end' ? 'end' : questions[r.goto]?._k ?? null })); });
     const langs = new Set(s.languages || ['pt']);
     const sI18n = structuredClone(s.i18n || {});
     const extraLangs = () => ['en', 'es'].filter((l) => langs.has(l));
@@ -710,20 +852,56 @@
       } }, h('option', { value: '' }, 'Mostrar sempre'), prev.map(({ x, j }) => h('option', { value: String(x._k) }, `Mostrar só se a pergunta ${j + 1}…`)));
       sel.value = valid ? String(target._k) : '';
       if (!valid) { if (q.cond) q.cond = null; return h('div', { class: 'row cond' }, icon('sliders', 16), sel); }
+      const [op, val] = ruleControls(target, q.cond);
+      return h('div', { class: 'row cond' }, icon('sliders', 16), sel, op, val);
+    }
+    // Operador e valor de uma regra sobre a resposta da pergunta "target" (condição ou ramificação).
+    function ruleControls(target, rule) {
       let op; let val;
       if (target.type === 'nps' || target.type === 'scale5') {
-        op = h('select', { disabled: ro, onchange: (e) => { q.cond.op = e.target.value; } }, [['lte', 'for menor ou igual a'], ['gte', 'for maior ou igual a'], ['eq', 'for igual a']].map(([v, l]) => h('option', { value: v }, l)));
-        val = h('input', { type: 'number', min: target.type === 'nps' ? '0' : '1', max: target.type === 'nps' ? '10' : '5', value: q.cond.value, disabled: ro, oninput: (e) => { q.cond.value = Number(e.target.value); } });
+        op = h('select', { disabled: ro, onchange: (e) => { rule.op = e.target.value; } }, [['lte', 'for menor ou igual a'], ['gte', 'for maior ou igual a'], ['eq', 'for igual a']].map(([v, l]) => h('option', { value: v }, l)));
+        val = h('input', { type: 'number', min: target.type === 'nps' ? '0' : '1', max: target.type === 'nps' ? '10' : '5', value: rule.value, disabled: ro, oninput: (e) => { rule.value = Number(e.target.value); } });
       } else if (target.type === 'yesno') {
         op = h('span', { class: 'small muted' }, 'for');
-        val = h('select', { disabled: ro, onchange: (e) => { q.cond.value = e.target.value; } }, h('option', { value: 'sim' }, 'Sim'), h('option', { value: 'nao' }, 'Não'));
+        val = h('select', { disabled: ro, onchange: (e) => { rule.value = e.target.value; } }, h('option', { value: 'sim' }, 'Sim'), h('option', { value: 'nao' }, 'Não'));
       } else {
         op = h('span', { class: 'small muted' }, target.type === 'multi' ? 'incluir' : 'for');
-        val = h('select', { disabled: ro, onchange: (e) => { q.cond.value = e.target.value; } }, target.options.map((o) => h('option', { value: o }, o)));
+        // Valor que não está mais entre as opções (opção renomeada, regra "in" feita pela API): não troca a regra
+        // em silêncio; mostra "Escolha a opção…" e o servidor recusa ao salvar até a pessoa escolher.
+        const known = target.options.includes(rule.value);
+        val = h('select', { disabled: ro, onchange: (e) => { rule.op = target.type === 'multi' ? 'has' : 'eq'; rule.value = e.target.value; } },
+          known ? null : h('option', { value: '', disabled: true }, 'Escolha a opção…'), target.options.map((o) => h('option', { value: o }, o)));
+        val.value = known ? rule.value : '';
+        return [op, val];
       }
-      if (op.tagName === 'SELECT') op.value = q.cond.op;
-      val.value = q.cond.value;
-      return h('div', { class: 'row cond' }, icon('sliders', 16), sel, op, val);
+      if (op.tagName === 'SELECT') op.value = rule.op;
+      val.value = rule.value;
+      return [op, val];
+    }
+
+    // Ramificação: "se a resposta for X, ir para a pergunta N (ou encerrar)". Vale a primeira regra atendida.
+    function jumpEditor(q, i) {
+      if (!COND_TYPES.includes(q.type)) return null;
+      const later = questions.slice(i + 1).map((x, d) => ({ x, n: i + 2 + d }));
+      const rules = q.jumpRules || (q.jumpRules = []);
+      const short = (t) => (t && t.length > 40 ? t.slice(0, 39) + '…' : t || 'sem texto');
+      const rows = rules.map((r, k) => {
+        // Destino que ficou antes desta pergunta (ou foi removido): aparece vazio, mas a regra é mantida para o caso
+        // de a pessoa desfazer a reordenação; ao salvar sem corrigir, o servidor recusa com a mensagem da ramificação.
+        const to = r.to === 'end' || later.some(({ x }) => x._k === r.to) ? r.to : null;
+        const [op, val] = ruleControls(q, r);
+        const dest = h('select', { disabled: ro, 'aria-label': 'Destino', onchange: (e) => { r.to = e.target.value === 'end' ? 'end' : e.target.value ? Number(e.target.value) : null; } },
+          h('option', { value: '' }, 'Escolha o destino…'),
+          later.map(({ x, n }) => h('option', { value: String(x._k) }, `Ir para a pergunta ${n}: ${short(x.text)}`)),
+          h('option', { value: 'end' }, 'Encerrar a pesquisa'));
+        dest.value = to === null ? '' : String(to);
+        return h('div', { class: 'row cond jump' }, h('span', { class: 'small muted' }, k ? 'Senão, se a resposta' : 'Se a resposta'), op, val, dest,
+          ro ? null : h('button', { class: 'btn secondary sm', title: 'Remover regra', 'aria-label': 'Remover regra', onclick: () => { rules.splice(k, 1); renderQuestions(); } }, '×'));
+      });
+      const add = ro || rules.length >= 20 ? null : h('button', { class: 'btn secondary sm', onclick: () => { rules.push({ ...defaultCond(q), to: later[0] ? later[0].x._k : 'end' }); renderQuestions(); } }, '+ Ramificação');
+      if (!rules.length) return add ? h('div', { class: 'row jump-add' }, add, h('span', { class: 'small muted' }, 'Leve o cliente para outra pergunta (ou encerre) conforme a resposta.')) : null;
+      return h('div', { class: 'jumps' }, h('div', { class: 'small' }, icon('branch', 16), h('b', {}, ' Ramificação')), rows,
+        h('div', { class: 'row jump-add' }, add, h('span', { class: 'small muted' }, later.length ? `Demais respostas: segue para a pergunta ${i + 2}.` : 'Demais respostas: encerra a pesquisa.')));
     }
     function defaultCond(t) {
       if (t.type === 'nps') return { op: 'lte', value: 6 };
@@ -752,7 +930,7 @@
       qList.replaceChildren(...questions.map((q, i) => {
         const text = h('input', { value: q.text, placeholder: 'Texto da pergunta', disabled: ro, oninput: (e) => { q.text = e.target.value; } });
         const help = h('input', { value: q.help_text || '', placeholder: 'Texto de apoio (opcional)', disabled: ro, oninput: (e) => { q.help_text = e.target.value; } });
-        const type = h('select', { disabled: ro || locked, onchange: (e) => { q.type = e.target.value; if (q.type !== 'nps') q.is_nps = false; if (['single', 'multi'].includes(q.type) && q.options.length < 2) q.options = ['Opção 1', 'Opção 2']; renderQuestions(); } },
+        const type = h('select', { disabled: ro || locked, onchange: (e) => { q.type = e.target.value; q.jumpRules = []; if (q.type !== 'nps') q.is_nps = false; if (['single', 'multi'].includes(q.type) && q.options.length < 2) q.options = ['Opção 1', 'Opção 2']; renderQuestions(); } },
           Object.entries(questionTypes).map(([k, v]) => h('option', { value: k }, v)));
         type.value = q.type;
         const req = h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: q.required, disabled: ro, onchange: (e) => { q.required = e.target.checked; } }), 'Obrigatória');
@@ -779,7 +957,7 @@
             ro ? null : h('button', { class: 'btn danger sm', disabled: locked || questions.length === 1, onclick: () => { questions.splice(i, 1); renderQuestions(); } }, 'Remover')),
           h('div', { class: 'row', style: null }, help),
           h('div', { class: 'row' }, type, isScale ? disp : null, req, nps), iconPick ? h('div', { class: 'row' }, iconPick) : null, opts,
-          condEditor(q, i), translations(q));
+          condEditor(q, i), jumpEditor(q, i), translations(q));
       }));
     }
     renderQuestions();
@@ -836,6 +1014,7 @@
           return { text: q.text, help_text: q.help_text || '', type: q.type, required: !!q.required, is_nps: !!q.is_nps, options: q.options,
             display: ['nps', 'scale5'].includes(q.type) ? (q.display || 'default') : undefined, icon: q.display === 'icons' ? q.icon || null : null,
             show_if: target >= 0 && target < i ? { ref: target, op: q.cond.op, value: q.cond.value } : null,
+            jumps: COND_TYPES.includes(q.type) ? (q.jumpRules || []).map((r) => ({ op: r.op, value: r.value, goto: r.to === 'end' ? 'end' : questions.findIndex((x) => x._k === r.to) })) : [],
             i18n: cleanI18n(q.i18n) };
         }),
       };
@@ -879,7 +1058,6 @@
 
   async function pageBranches() {
     const [list, svs, tzInfo] = await Promise.all([branches(true), surveys(true), api('/timezones')]);
-    const isAdmin = me.role === 'admin';
     const tzName = (tz) => (tzInfo.choices.find((c) => c.value === tz)?.label) || tz;
     const edit = (b = {}) => {
       const tzSel = h('select', {}, h('option', { value: 'auto' }, 'Automático — usar o fuso do tablet'), tzInfo.choices.map((c) => h('option', { value: c.value }, c.label)));
@@ -888,7 +1066,7 @@
       const name = h('input', { value: b.name || '', maxlength: '100' });
       const city = h('input', { value: b.city || '', maxlength: '100' });
       const active = h('input', { type: 'checkbox', checked: b.id ? !!b.active : true });
-      const goal = h('input', { type: 'number', min: '-100', max: '100', value: b.nps_goal ?? '', placeholder: `Padrão: ${settings?.defaultNpsGoal ?? '—'}` });
+      const goal = h('input', { type: 'number', min: '0', max: '100', value: b.nps_goal ?? '', placeholder: `Padrão: ${settings?.defaultNpsGoal ?? '—'}` });
       const emails = h('textarea', { rows: '2', placeholder: 'gerente@empresa.com (um por linha)', value: parseList(b.alert_emails).join('\n') });
       const phones = h('textarea', { rows: '2', placeholder: '5511999990000 (DDI + DDD + número)', value: parseList(b.alert_phones).join('\n') });
       // Horário: sem horário = sempre aberto.
@@ -925,11 +1103,11 @@
       } }]);
     };
     return h('div', {},
-      pageHead('Filiais', 'Cada filial coleta separadamente e exibe sua própria pesquisa', isAdmin ? h('button', { class: 'btn', onclick: () => edit() }, icon('plus', 18), 'Nova filial') : null),
+      pageHead('Filiais', 'Cada filial coleta separadamente e exibe sua própria pesquisa', can('filiais', 'incluir') ? h('button', { class: 'btn', onclick: () => edit() }, icon('plus', 18), 'Nova filial') : null),
       h('div', { class: 'card table-wrap' }, h('table', {},
         h('thead', {}, h('tr', {}, h('th', {}, 'Código'), h('th', {}, 'Filial'), h('th', {}, 'Pesquisa padrão dos tablets'), h('th', {}, 'Meta'), h('th', {}, 'Tablets'), h('th', {}, 'Status'), h('th', {}))),
         h('tbody', {}, list.length ? list.map((b) => {
-          const sel = h('select', { onchange: async (e) => {
+          const sel = h('select', { disabled: !can('filiais', 'pesquisa'), title: can('filiais', 'pesquisa') ? null : 'Seu perfil não pode trocar a pesquisa dos tablets', onchange: async (e) => {
             try { await api(`/branches/${b.id}/survey`, { method: 'PUT', body: { surveyId: e.target.value ? Number(e.target.value) : null } }); toast('Pesquisa da filial atualizada. Os tablets recebem em até 1 minuto.'); cache.branches = null; } catch (ex) { toast(ex.message, true); }
           } }, h('option', { value: '' }, '— nenhuma —'), svs.filter((s) => s.active).map((s) => h('option', { value: String(s.id) }, s.title)));
           sel.value = b.survey_id ? String(b.survey_id) : '';
@@ -938,14 +1116,14 @@
             h('td', {}, h('span', { class: 'badge ' + (b.active ? 'ok' : 'off') }, b.active ? 'Ativa' : 'Inativa'), b.public_enabled ? h('span', { class: 'badge ok' }, 'QR ativo') : null),
             h('td', {}, h('div', { class: 'row' },
               h('button', { class: 'btn secondary sm', onclick: () => openLink(b) }, 'QR Code'),
-              isAdmin ? h('button', { class: 'btn secondary sm', onclick: () => edit(b) }, 'Editar') : null)));
+              can('filiais', 'editar') ? h('button', { class: 'btn secondary sm', onclick: () => edit(b) }, 'Editar') : null)));
         }) : h('tr', {}, h('td', { colspan: '7', class: 'empty' }, 'Nenhuma filial cadastrada.'))))));
   }
 
   // Link/QR Code público da filial + cartaz para imprimir.
   async function openLink(b) {
     let info = await api(`/branches/${b.id}/public-link`);
-    const isAdmin = me.role === 'admin';
+    const isAdmin = can('filiais', 'qrcode');
     const box = h('div');
     const draw = () => {
       box.replaceChildren(
@@ -955,7 +1133,7 @@
           h('img', { class: 'poster-qr', src: info.qr, alt: 'QR Code da pesquisa' }),
           h('div', { class: 'poster-sub' }, 'Aponte a câmera do celular · leva menos de 1 minuto'),
           h('div', { class: 'poster-branch' }, b.name)) : h('p', { class: 'muted' }, 'O link desta filial ainda não foi criado.'),
-        info.url ? h('p', { class: 'small' }, h('code', { class: 'secret' }, info.url)) : null,
+        info.url ? h('p', { class: 'small' }, h('code', { class: 'secret' }, info.url)) : '',
         h('p', { class: 'small muted' }, info.enabled ? 'Ativo: qualquer pessoa com o QR pode responder (limite de 10 respostas por hora por aparelho).' : 'Desativado: o link não aceita respostas.'),
         h('div', { class: 'row' },
           info.url ? h('button', { class: 'btn secondary sm', onclick: () => { document.body.classList.add('printing-poster'); window.print(); document.body.classList.remove('printing-poster'); } }, 'Imprimir cartaz') : null,
@@ -995,18 +1173,18 @@
     };
     return h('div', {},
       pageHead('Tablets', 'Dispositivos de coleta vinculados às filiais', h('button', { class: 'btn secondary', onclick: showGuide }, icon('file', 18), 'Guia de instalação'),
-        brs.length ? h('button', { class: 'btn', onclick: add }, icon('plus', 18), 'Novo tablet') : null),
+        brs.length && can('tablets', 'incluir') ? h('button', { class: 'btn', onclick: add }, icon('plus', 18), 'Novo tablet') : null),
       h('p', { class: 'muted' }, 'Cada tablet é vinculado a uma única filial. As respostas coletadas nele são sempre gravadas nessa filial — o tablet não consegue escolher ou trocar de filial.'),
       h('div', { class: 'card table-wrap' }, h('table', {},
         h('thead', {}, h('tr', {}, h('th', {}, 'Tablet'), h('th', {}, 'Filial'), h('th', {}, 'Status'), h('th', {}, 'Último contato'), h('th', {}))),
         h('tbody', {}, devs.length ? devs.map((d) => h('tr', {},
           h('td', {}, h('b', {}, d.name), h('div', { class: 'small muted' }, d.timezone ? `Fuso do tablet: ${d.timezone}` : 'Fuso ainda não informado')), h('td', {}, d.branch_name), h('td', {}, status(d)), h('td', {}, fmtDate(d.last_seen_at)),
           h('td', {}, h('div', { class: 'row' },
-            h('button', { class: 'btn secondary sm', onclick: async () => {
+            !can('tablets', 'codigo') ? null : h('button', { class: 'btn secondary sm', onclick: async () => {
               if (d.paired && !confirm('Gerar novo código desconecta o tablet atual até ele ser pareado de novo. Continuar?')) return;
               try { const r = await api(`/devices/${d.id}/pairing-code`, { method: 'POST' }); await route(); showCode(r, d.name); } catch (ex) { toast(ex.message, true); }
             } }, 'Novo código'),
-            d.active ? h('button', { class: 'btn danger sm', onclick: async () => {
+            d.active && can('tablets', 'excluir') ? h('button', { class: 'btn danger sm', onclick: async () => {
               if (!confirm(`Revogar o acesso do tablet "${d.name}"? Ele deixará de coletar respostas imediatamente.`)) return;
               try { await api(`/devices/${d.id}/revoke`, { method: 'POST' }); toast('Tablet revogado.'); route(); } catch (ex) { toast(ex.message, true); }
             } }, 'Revogar') : null))))
@@ -1034,45 +1212,182 @@
 
   // ------------------------------------------------------------ usuários
   async function pageUsers() {
-    const [users, brs] = await Promise.all([api('/users'), branches(true)]);
+    const [users, brs, rl] = await Promise.all([api('/users'), branches(true), api('/roles')]);
+    const roles = rl.roles;
+    const roleById = (rid) => roles.find((r) => r.id === rid);
+    // Só aparecem os perfis que cabem no seu (o servidor recusa os outros de qualquer forma).
+    const mine = new Set(me.access.perms);
+    const fits = (r) => me.access.isAdmin || (r.builtin !== 'admin' && (r.scope === 'own' || me.access.scopeAll) && r.perms.every((x) => mine.has(x)));
     const edit = (u = {}) => {
       const name = h('input', { value: u.name || '', maxlength: '100' });
       const email = h('input', { type: 'email', value: u.email || '', maxlength: '254' });
-      const role = h('select', {}, h('option', { value: 'gestor' }, 'Gestor de filial'), h('option', { value: 'admin' }, 'Administrador'));
-      role.value = u.role || 'gestor';
+      const curRole = u.role_id || roles.find((r) => r.builtin === 'gestor')?.id;
+      const role = h('select', {}, roles.filter((r) => fits(r) || r.id === curRole).map((r) => h('option', { value: String(r.id), disabled: !fits(r) }, r.name)));
+      role.value = String(curRole);
       const pw = h('input', { type: 'password', autocomplete: 'new-password', placeholder: u.id ? 'Deixe em branco para manter' : 'Mín. 10 caracteres, letras e números' });
       const active = h('input', { type: 'checkbox', checked: u.id ? !!u.active : true });
       const resetMfa = h('input', { type: 'checkbox' });
       const chosen = new Set(u.branches || []);
-      const brBox = h('div', {}, brs.map((b) => h('label', { class: 'chk' },
+      const brBox = h('div', { class: 'chk-list' }, brs.map((b) => h('label', { class: 'chk' },
         h('input', { type: 'checkbox', checked: chosen.has(b.id), onchange: (e) => { e.target.checked ? chosen.add(b.id) : chosen.delete(b.id); } }), b.name)));
+      const scopeHint = h('div', { class: 'small muted' });
+      const roleHint = h('p', { class: 'small muted' });
+      const syncRole = () => {
+        const r = roleById(Number(role.value));
+        roleHint.textContent = r ? (r.description || '') : '';
+        scopeHint.textContent = r?.scope === 'all' ? 'Este perfil enxerga todas as filiais. As marcadas abaixo valem só se o perfil mudar.' : 'Filiais que a pessoa pode ver';
+      };
+      role.addEventListener('change', syncRole); syncRole();
       modal(u.id ? 'Editar usuário' : 'Novo usuário', h('div', { class: 'form-grid' },
-        h('label', { class: 'f' }, 'Nome', name), h('label', { class: 'f' }, 'E-mail', email), h('label', { class: 'f' }, 'Perfil', role),
+        h('label', { class: 'f' }, 'Nome', name), h('label', { class: 'f' }, 'E-mail', email),
+        h('label', { class: 'f' }, 'Perfil de acesso', role, roleHint),
         h('label', { class: 'f' }, 'Senha', pw), h('label', { class: 'chk' }, active, 'Ativo'),
-        u.id && u.totp_enabled && u.id !== me.id ? h('label', { class: 'chk', title: 'Use quando a pessoa perdeu o celular' }, resetMfa, 'Resetar 2FA (perdeu o celular)') : null,
-        h('div', {}, h('div', { class: 'small muted' }, 'Filiais que o gestor pode ver'), brBox)),
+        u.id && u.photo_at && u.id !== me.id ? h('div', { class: 'row' }, avatar(u), h('button', { class: 'btn secondary sm', type: 'button', onclick: async (e) => {
+          if (!confirm(`Remover a foto de ${u.name}? A pessoa poderá enviar outra em Minha conta.`)) return;
+          try { await api(`/users/${u.id}/photo`, { method: 'DELETE' }); e.target.closest('.row').remove(); toast('Foto removida.'); } catch (ex) { toast(ex.message, true); }
+        } }, 'Remover foto')) : null,
+        u.id && u.totp_enabled && u.id !== me.id && can('usuarios', 'mfa') ? h('label', { class: 'chk', title: 'Use quando a pessoa perdeu o celular' }, resetMfa, 'Resetar 2FA (perdeu o celular)') : null,
+        h('div', {}, scopeHint, brBox)),
       [{ label: 'Salvar', onClick: async (close) => {
         try {
           await api(u.id ? '/users/' + u.id : '/users', { method: u.id ? 'PUT' : 'POST', body: {
-            name: name.value, email: email.value, role: role.value, password: pw.value || null, active: active.checked, branches: [...chosen], unlock: true, resetMfa: resetMfa.checked } });
+            name: name.value, email: email.value, roleId: Number(role.value), password: pw.value || null, active: active.checked, branches: [...chosen], unlock: true, resetMfa: resetMfa.checked } });
           close(); toast('Usuário salvo.'); route();
         } catch (ex) { toast(ex.message, true); }
       } }]);
     };
-    const bName = (id) => brs.find((b) => b.id === id)?.name || id;
+    const bName = (bid) => brs.find((b) => b.id === bid)?.name || bid;
     return h('div', {},
-      pageHead('Usuários', 'Administradores e gestores de filial', h('button', { class: 'btn', onclick: () => edit() }, icon('plus', 18), 'Novo usuário')),
+      pageHead('Usuários', 'Quem acessa o painel, com qual perfil e em quais filiais',
+        can('permissoes') ? h('a', { class: 'btn secondary', href: '#/permissoes' }, icon('key', 18), 'Perfis e permissões') : null,
+        can('usuarios', 'incluir') ? h('button', { class: 'btn', onclick: () => edit() }, icon('plus', 18), 'Novo usuário') : null),
       h('div', { class: 'card table-wrap' }, h('table', {},
         h('thead', {}, h('tr', {}, h('th', {}, 'Nome'), h('th', {}, 'Perfil'), h('th', {}, 'Filiais'), h('th', {}, 'Status'), h('th', {}))),
         h('tbody', {}, users.map((u) => h('tr', {},
-          h('td', {}, h('b', {}, u.name), h('div', { class: 'small muted' }, u.email)),
-          h('td', {}, u.role === 'admin' ? 'Administrador' : 'Gestor'),
-          h('td', { class: 'small' }, u.role === 'admin' ? 'Todas' : (u.branches.map(bName).join(', ') || '—')),
+          h('td', {}, h('div', { class: 'person' }, avatar(u), h('div', {}, h('b', {}, u.name), h('div', { class: 'small muted' }, u.email)))),
+          h('td', {}, u.role_name),
+          h('td', { class: 'small' }, u.scope_all ? 'Todas' : (u.branches.map(bName).join(', ') || '—')),
           h('td', {}, h('span', { class: 'badge ' + (u.active ? 'ok' : 'off') }, u.active ? 'Ativo' : 'Inativo'),
             u.locked_until && u.locked_until > Date.now() ? h('span', { class: 'badge warn' }, 'Bloqueado') : null,
             u.totp_enabled ? h('span', { class: 'badge ok', title: 'Verificação em duas etapas ativa' }, icon('shield', 12), '2FA') : null),
-          h('td', {}, h('button', { class: 'btn secondary sm', onclick: () => edit(u) }, 'Editar'))))))));
+          h('td', {}, can('usuarios', 'editar') ? h('button', { class: 'btn secondary sm', onclick: () => edit(u) }, 'Editar') : null)))))));
   }
+
+  // ------------------------------------------------------------ perfis e permissões
+  // Cada perfil: quais filiais enxerga e, menu por menu, o que pode ver, incluir, editar e excluir.
+  let permSelected = null;
+  async function pagePermissions() {
+    const { roles, catalog } = await api('/roles');
+    if (!roles.some((r) => r.id === permSelected)) permSelected = (roles.find((r) => r.builtin === 'gestor') || roles[0]).id;
+    const mine = new Set(me.access.perms);
+    const mayGrant = (p) => me.access.isAdmin || mine.has(p);
+    const fits = (r) => me.access.isAdmin || (r.builtin !== 'admin' && (r.scope === 'own' || me.access.scopeAll) && r.perms.every((x) => mine.has(x)));
+    const list = h('div', { class: 'role-list' });
+    const editor = h('div', { class: 'role-editor' });
+    let draft = null; // perfil em edição (cópia)
+
+    const openRole = (r) => {
+      permSelected = r ? r.id : null;
+      draft = r ? { ...r, perms: new Set(r.perms) } : { id: null, name: '', description: '', scope: 'own', builtin: null, perms: new Set(['dashboard.ver']), users: 0 };
+      drawList(); drawEditor();
+    };
+    const drawList = () => list.replaceChildren(...[...roles.map((r) => h('button', { class: 'role-item' + (draft && r.id === draft.id ? ' active' : ''), onclick: () => openRole(r) },
+      h('b', {}, r.builtin === 'admin' ? icon('lock', 14) : null, r.name),
+      h('span', {}, `${r.builtin === 'admin' ? 'Fixo · acesso total' : r.builtin === 'gestor' ? 'Padrão do sistema' : 'Criado pela empresa'} · ${r.users} ${r.users === 1 ? 'usuário' : 'usuários'}`))),
+    draft && !draft.id ? h('button', { class: 'role-item active' }, h('b', {}, draft.name || 'Novo perfil'), h('span', {}, 'Ainda não salvo')) : null].filter(Boolean));
+
+    const drawEditor = () => {
+      const locked = draft.builtin === 'admin';
+      const editable = !locked && (draft.id ? can('permissoes', 'editar') && fits(roles.find((r) => r.id === draft.id)) && (me.access.scopeAll || !draft.builtin) : can('permissoes', 'incluir'));
+      const name = h('input', { value: draft.name, maxlength: '60', disabled: !editable, oninput: (e) => { draft.name = e.target.value; } });
+      const desc = h('input', { value: draft.description || '', maxlength: '200', disabled: !editable, placeholder: 'Ex.: Diretoria que só acompanha os números', oninput: (e) => { draft.description = e.target.value; } });
+      const scopeOpt = (v, label, hint) => h('label', { class: 'radio-card' + (draft.scope === v ? ' active' : '') },
+        h('input', { type: 'radio', name: 'role-scope', value: v, checked: draft.scope === v, disabled: !editable || (v === 'all' && !me.access.scopeAll),
+          onchange: () => { draft.scope = v; drawEditor(); } }), h('span', {}, h('b', {}, label), h('small', {}, hint)));
+      const toggle = (perm, on) => {
+        const [mod, act] = perm.split('.');
+        if (on) { draft.perms.add(perm); draft.perms.add(mod + '.ver'); } // qualquer ação inclui "ver"
+        else if (act === 'ver') { for (const p of [...draft.perms]) if (p.startsWith(mod + '.')) draft.perms.delete(p); } // sem "ver", sai tudo do menu
+        else draft.perms.delete(perm);
+        drawEditor();
+      };
+      const box = (perm, label) => {
+        const has = locked || draft.perms.has(perm);
+        return h('input', { type: 'checkbox', class: 'perm-box', checked: has, 'aria-label': label, disabled: !editable || (!has && !mayGrant(perm)),
+          title: !has && !mayGrant(perm) ? 'Você não tem esta permissão, então não pode dá-la' : null, onchange: (e) => toggle(perm, e.target.checked) });
+      };
+      const groups = [...new Set(catalog.modules.map((m) => m.group))];
+      const rows = [];
+      for (const g of groups) {
+        rows.push(h('tr', { class: 'group-row' }, h('td', { colspan: '6' }, g)));
+        for (const m of catalog.modules.filter((x) => x.group === g)) {
+          rows.push(h('tr', {},
+            h('td', {}, h('b', {}, m.label), m.hint ? h('div', { class: 'small muted' }, m.hint) : null),
+            Object.keys(catalog.ops).map((op) => h('td', { class: 'c' }, m.ops.includes(op) ? box(`${m.key}.${op}`, `${m.label}: ${catalog.ops[op]}`) : h('span', { class: 'na', title: 'Não se aplica' }, '—'))),
+            h('td', {}, Object.keys(m.extra).length ? h('div', { class: 'perm-extra' }, Object.entries(m.extra).map(([k, label]) =>
+              h('label', { class: 'chk small' }, box(`${m.key}.${k}`, `${m.label}: ${label}`), label))) : h('span', { class: 'na' }, '—'))));
+        }
+      }
+      rows.push(h('tr', { class: 'group-row' }, h('td', { colspan: '6' }, 'Sempre disponível')));
+      rows.push(h('tr', {}, h('td', {}, h('b', {}, 'Minha conta'), h('div', { class: 'small muted' }, 'Senha, 2FA, foto e notificações da própria pessoa')),
+        h('td', { class: 'c' }, h('input', { type: 'checkbox', class: 'perm-box', checked: true, disabled: true, 'aria-label': 'Minha conta: ver' })),
+        h('td', { class: 'c' }, h('span', { class: 'na' }, '—')), h('td', { class: 'c' }, h('span', { class: 'na' }, '—')), h('td', { class: 'c' }, h('span', { class: 'na' }, '—')), h('td', {}, h('span', { class: 'na' }, '—'))));
+
+      const save = async () => {
+        const body = { name: draft.name, description: draft.description, scope: draft.scope, perms: [...draft.perms] };
+        try {
+          if (draft.id) await api('/roles/' + draft.id, { method: 'PUT', body });
+          else permSelected = (await api('/roles', { method: 'POST', body })).id;
+          toast('Perfil salvo. As permissões valem na hora para quem usa este perfil.');
+          if (draft.id === me.access.roleId) { me = null; await loadMe(); }
+          route();
+        } catch (ex) { toast(ex.message, true); }
+      };
+      const remove = async () => {
+        if (!confirm(`Excluir o perfil "${draft.name}"? Isso não pode ser desfeito.`)) return;
+        try { await api('/roles/' + draft.id, { method: 'DELETE' }); toast('Perfil excluído.'); permSelected = null; route(); } catch (ex) { toast(ex.message, true); }
+      };
+      editor.replaceChildren(
+        h('div', { class: 'card' },
+          locked ? h('p', { class: 'small' }, h('span', { class: 'badge' }, icon('lock', 12), 'Perfil fixo'), ' O Administrador tem acesso total e não pode ser alterado nem excluído.') : null,
+          h('div', { class: 'form-grid' }, h('label', { class: 'f' }, 'Nome do perfil', name), h('label', { class: 'f' }, 'Descrição (opcional)', desc)),
+          h('div', { class: 'f mt' }, 'Quais filiais o perfil enxerga'),
+          h('div', { class: 'radio-row' },
+            scopeOpt('all', 'Todas as filiais', 'Vê os dados de todas as filiais'),
+            scopeOpt('own', 'Só as filiais da pessoa', 'Escolhidas no cadastro de cada usuário'))),
+        h('div', { class: 'card table-wrap perm-matrix' }, h('table', {},
+          h('thead', {}, h('tr', {}, h('th', {}, 'Menu'), Object.values(catalog.ops).map((l) => h('th', { class: 'c' }, l)), h('th', {}, 'Ações específicas'))),
+          h('tbody', {}, rows))),
+        h('div', { class: 'row between' },
+          h('p', { class: 'small muted' }, 'Sem "Ver", o menu some da barra lateral e o servidor recusa o acesso. Marcar Incluir, Editar ou Excluir marca Ver junto.'),
+          h('div', { class: 'row' },
+            draft.id && !draft.builtin && can('permissoes', 'excluir') ? h('button', { class: 'btn danger', onclick: remove }, icon('trash', 16), 'Excluir perfil') : null,
+            editable ? h('button', { class: 'btn', onclick: save }, 'Salvar perfil') : null)));
+    };
+
+    openRole(roles.find((r) => r.id === permSelected));
+    const duplicate = () => {
+      if (!draft) return;
+      const src = draft;
+      openRole(null);
+      draft.name = `${src.name} (cópia)`.slice(0, 60); draft.description = src.description;
+      draft.scope = src.scope === 'all' && !me.access.scopeAll ? 'own' : src.scope;
+      draft.perms = new Set([...(src.builtin === 'admin' ? catalog.modules.flatMap((m) => [...m.ops, ...Object.keys(m.extra)].map((a) => `${m.key}.${a}`)) : src.perms)].filter(mayGrant));
+      drawList(); drawEditor();
+    };
+    return h('div', {},
+      pageHead('Perfis e permissões', 'Defina o que cada perfil pode fazer em cada menu',
+        can('permissoes', 'incluir') ? h('button', { class: 'btn secondary', onclick: duplicate }, icon('copy', 18), 'Duplicar perfil') : null,
+        can('permissoes', 'incluir') ? h('button', { class: 'btn', onclick: () => openRole(null) }, icon('plus', 18), 'Novo perfil') : null),
+      h('div', { class: 'perm-layout' }, list, editor));
+  }
+
+  const permLabel = (p) => {
+    const [mod, act] = String(p).split('.');
+    const m = permCatalog?.modules.find((x) => x.key === mod);
+    if (!m) return p;
+    return `${m.label}: ${(permCatalog.ops[act] || m.extra[act] || act).toLowerCase()}`;
+  };
 
   // ------------------------------------------------------------ configurações
   async function uploadMedia(file, { imagesOnly = false } = {}) {
@@ -1082,12 +1397,19 @@
   }
 
   let settingsTab = 'identidade';
+  // Chaves de cada aba (o servidor confere a mesma divisão ao salvar).
+  const SETTINGS_KEYS = {
+    cfg_marca: ['companyName', 'primaryColor', 'accentColor', 'logoMediaId', 'faviconMediaId', 'appIconMediaId', 'menuIcons', 'defaultDisplay', 'ratingIcon', 'colorScheme', 'faceStyle'],
+    cfg_alertas: ['alerts', 'weeklyReport', 'defaultNpsGoal', 'offlineAlert', 'screen'],
+    cfg_lgpd: ['requireAdminMfa', 'privacyText', 'retention'],
+  };
   async function pageSettings() {
     const st = structuredClone(await api('/settings'));
     const body = h('div');
+    const editableKeys = Object.entries(SETTINGS_KEYS).filter(([g]) => can(g, 'editar')).flatMap(([, keys]) => keys);
     const save = async () => {
       try {
-        const saved = await api('/settings', { method: 'PUT', body: st });
+        const saved = await api('/settings', { method: 'PUT', body: Object.fromEntries(editableKeys.filter((k) => k in st).map((k) => [k, st[k]])) });
         settings = saved;
         applyBranding({ companyName: saved.companyName, primaryColor: saved.primaryColor, accentColor: saved.accentColor,
           logoUrl: saved.logoMediaId ? '/media/' + saved.logoMediaId : null });
@@ -1095,16 +1417,28 @@
         route();
       } catch (ex) { toast(ex.message, true); }
     };
-    const tabs = [['identidade', 'Identidade visual', 'palette'], ['menu', 'Ícones do menu', 'layout'], ['respostas', 'Ícones das respostas', 'star'],
-      ['envios', 'E-mail e WhatsApp', 'mail'], ['alertas', 'Alertas e relatórios', 'bell'], ['seguranca', 'Segurança e LGPD', 'shield']];
-    const TAB = { identidade: identityTab, menu: menuTab, respostas: ratingTab, envios: deliveryTab, alertas: alertsTab, seguranca: securityTab };
+    // [aba, rótulo, ícone, permissão]
+    const tabs = [['identidade', 'Identidade visual', 'palette', 'cfg_marca'], ['menu', 'Ícones do menu', 'layout', 'cfg_marca'], ['respostas', 'Ícones das respostas', 'star', 'cfg_marca'],
+      ['envios', 'E-mail e WhatsApp', 'mail', 'cfg_envios'], ['modelos', 'Modelos de mensagem', 'message', 'cfg_modelos'], ['alertas', 'Alertas e relatórios', 'bell', 'cfg_alertas'],
+      ['seguranca', 'Segurança e LGPD', 'shield', 'cfg_lgpd']]
+      .filter((t) => can(t[3]));
+    if (!tabs.some((t) => t[0] === settingsTab)) settingsTab = tabs[0][0];
+    const TAB = { identidade: identityTab, menu: menuTab, respostas: ratingTab, envios: deliveryTab, modelos: templatesTab, alertas: alertsTab, seguranca: securityTab };
+    // Abas com botões de salvar próprios não usam o "Salvar configurações" do topo.
+    const OWN_SAVE = new Set(['envios', 'modelos']);
     const renderTab = async () => {
-      const content = await (TAB[settingsTab] || identityTab)(st, renderTab);
-      body.replaceChildren(h('div', { class: 'tabs' }, tabs.map(([k, label, ic]) => h('button', { class: settingsTab === k ? 'active' : '',
-        onclick: () => { settingsTab = k; renderTab(); } }, icon(ic, 16), label))), content);
+      const group = tabs.find((t) => t[0] === settingsTab)[3];
+      const content = await TAB[settingsTab](st, renderTab);
+      saveBtn?.classList.toggle('hidden', OWN_SAVE.has(settingsTab));
+      // Sem permissão de editar, a aba aparece só para consulta.
+      const ro = !can(group, 'editar');
+      body.replaceChildren(...[...tabBar(tabs, settingsTab, (k) => { settingsTab = k; renderTab(); }, 'Parte das configurações'),
+      ro ? h('p', { class: 'small muted' }, icon('lock', 14), ' Somente consulta: o seu perfil não pode alterar esta aba.') : null,
+      ro ? h('fieldset', { class: 'ro', disabled: true }, content) : content].filter(Boolean));
     };
+    const saveBtn = editableKeys.length ? h('button', { class: 'btn', onclick: save }, 'Salvar configurações') : null;
     await renderTab();
-    return h('div', {}, pageHead('Configurações', 'Marca, ícones, alertas, relatórios, segurança e LGPD', h('button', { class: 'btn', onclick: save }, 'Salvar configurações')), body);
+    return h('div', {}, pageHead('Configurações', 'Marca, ícones, mensagens, alertas, relatórios, segurança e LGPD', saveBtn), body);
   }
 
   function identityTab(st, rerender) {
@@ -1198,14 +1532,16 @@
   async function alertsTab(st) {
     const n = await api('/settings/notifications');
     const status = (ok, yes, no) => h('span', { class: 'badge ' + (ok ? 'ok' : 'warn') }, ok ? yes : no);
-    const webhook = h('input', { value: st.alerts.webhookUrl || '', placeholder: 'https://hooks.exemplo.com/...', oninput: (e) => { st.alerts.webhookUrl = e.target.value.trim() || null; } });
+    // Webhook e destinatários extras recebem dados de todas as filiais: só o administrador altera (o servidor confere).
+    const onlyAdmin = !me.access.isAdmin;
+    const webhook = h('input', { value: st.alerts.webhookUrl || '', placeholder: 'https://hooks.exemplo.com/...', disabled: onlyAdmin, title: onlyAdmin ? 'Só o administrador altera' : null, oninput: (e) => { st.alerts.webhookUrl = e.target.value.trim() || null; } });
     const waTpl = h('input', { value: st.alerts.whatsappTemplate || '', placeholder: 'ex.: alerta_detrator', oninput: (e) => { st.alerts.whatsappTemplate = e.target.value.trim() || null; } });
     const waLang = h('input', { value: st.alerts.whatsappLanguage, oninput: (e) => { st.alerts.whatsappLanguage = e.target.value.trim(); } });
     const day = h('select', { onchange: (e) => { st.weeklyReport.weekday = Number(e.target.value); } }, DOW.map((d, i) => h('option', { value: String(i) }, d)));
     day.value = String(st.weeklyReport.weekday);
     const hour = h('input', { type: 'number', min: '0', max: '23', value: st.weeklyReport.hour, oninput: (e) => { st.weeklyReport.hour = Number(e.target.value); } });
-    const extra = h('textarea', { rows: '2', placeholder: 'diretoria@empresa.com (um por linha)', value: st.weeklyReport.extraEmails.join('\n'), oninput: (e) => { st.weeklyReport.extraEmails = lines(e.target); } });
-    const goal = h('input', { type: 'number', min: '-100', max: '100', value: st.defaultNpsGoal ?? '', oninput: (e) => { st.defaultNpsGoal = e.target.value === '' ? null : Number(e.target.value); } });
+    const extra = h('textarea', { rows: '2', placeholder: 'diretoria@empresa.com (um por linha)', disabled: onlyAdmin, title: onlyAdmin ? 'Só o administrador altera' : null, value: st.weeklyReport.extraEmails.join('\n'), oninput: (e) => { st.weeklyReport.extraEmails = lines(e.target); } });
+    const goal = h('input', { type: 'number', min: '0', max: '100', value: st.defaultNpsGoal ?? '', oninput: (e) => { st.defaultNpsGoal = e.target.value === '' ? null : Number(e.target.value); } });
     const offMin = h('input', { type: 'number', min: '10', max: '1440', value: st.offlineAlert.minutes, oninput: (e) => { st.offlineAlert.minutes = Number(e.target.value); } });
     const dimAfter = h('input', { type: 'number', min: '5', max: '3600', value: st.screen.dimAfterSeconds, oninput: (e) => { st.screen.dimAfterSeconds = Number(e.target.value); } });
     const dimLevel = h('input', { type: 'range', min: '20', max: '90', step: '5', value: st.screen.dimLevel });
@@ -1217,7 +1553,12 @@
           h('p', { class: 'small muted' }, 'Cada nota baixa abre um caso em "Casos" e avisa a filial. Os destinatários de cada filial ficam no cadastro da filial; usuários escolhem em Minha conta.'),
           chk(st.alerts.detractorEmail, (v) => { st.alerts.detractorEmail = v; }, 'Enviar e-mail na hora'),
           h('label', { class: 'f mt' }, 'Webhook (opcional — integra com n8n, Zapier, Make, Slack…)', webhook),
-          h('p', { class: 'small muted' }, 'Envia filial, nota e link do caso (sem dados pessoais), assinado com HMAC-SHA256 no cabeçalho X-Pesquisa-Signature. Segredo: ', h('code', { class: 'secret' }, n.webhookSecret)),
+          h('p', { class: 'small muted' }, 'Envia filial, nota e link do caso (sem dados pessoais), assinado com HMAC-SHA256 no cabeçalho X-Pesquisa-Signature.',
+            n.webhookSecret ? [' Segredo: ', h('code', { class: 'secret' }, n.webhookSecret)] : null,
+            me.access.isAdmin ? [' ', h('button', { class: 'btn secondary sm', onclick: async (e) => {
+              if (!confirm('Gerar um novo segredo? O sistema que recebe o webhook precisará do novo valor.')) return;
+              try { const r = await api('/settings/webhook-secret/rotate', { method: 'POST' }); e.target.previousElementSibling?.replaceChildren(r.webhookSecret); toast('Novo segredo gerado.'); } catch (ex) { toast(ex.message, true); }
+            } }, 'Trocar segredo')] : null),
           h('div', { class: 'form-grid mt' }, h('label', { class: 'f' }, 'Modelo aprovado do WhatsApp (Meta)', waTpl), h('label', { class: 'f' }, 'Idioma do modelo', waLang)),
           h('p', { class: 'small muted' }, 'WhatsApp: ', status(n.whatsappConfigured, 'configurado', 'não configurado — veja a aba "E-mail e WhatsApp"'), ' · parâmetros do modelo: {{1}} filial, {{2}} nota, {{3}} link.')),
         h('div', { class: 'card' }, h('h2', {}, 'Relatório semanal por e-mail'),
@@ -1225,7 +1566,7 @@
           h('div', { class: 'form-grid mt' }, h('label', { class: 'f' }, 'Dia', day), h('label', { class: 'f' }, 'Hora (Brasília)', hour)),
           h('label', { class: 'f mt' }, 'Destinatários extras (recebem todas as filiais)', extra),
           h('p', { class: 'small muted' }, 'Administradores e gestores recebem conforme a preferência em Minha conta; cada gestor recebe apenas as filiais dele.'),
-          h('button', { class: 'btn secondary sm', onclick: async () => {
+          !can('cfg_alertas', 'relatorio') ? null : h('button', { class: 'btn secondary sm', onclick: async () => {
             try { const r = await api('/settings/weekly-report/send-now', { method: 'POST' }); toast(`Relatório enviado para ${r.sent} destinatário(s).`); renderAgain(); } catch (ex) { toast(ex.message, true); }
           } }, 'Enviar agora (teste)'))),
       h('div', { class: 'grid c2' },
@@ -1292,7 +1633,7 @@
     const phoneId = h('input', { value: d.whatsapp.phoneId, placeholder: 'Ex.: 109876543210987', inputmode: 'numeric', autocomplete: 'off' });
     const token = h('input', { type: 'password', autocomplete: 'new-password', placeholder: d.whatsapp.tokenSet ? '•••••••• (cadastrado — deixe em branco para manter)' : 'Token de acesso permanente' });
     const testPhone = h('input', { placeholder: '5511999990000 (opcional, para enviar um teste)', inputmode: 'numeric' });
-    const waCard = h('div', { class: 'card' }, h('h2', {}, 'WhatsApp (API oficial da Meta)'),
+    const metaCard = h('div', { class: 'card' }, h('h2', {}, 'WhatsApp (API oficial da Meta)'),
       h('p', {}, origin(d.whatsapp)),
       h('p', { class: 'small muted' }, 'Avisa por WhatsApp quando chega uma nota baixa. Os números que recebem são cadastrados em Filiais (campo WhatsApp) e, para cada pessoa, em Minha conta. O modelo da mensagem fica na aba "Alertas e relatórios".'),
       h('div', { class: 'form-grid' }, field('Identificador do número (Phone number ID)', phoneId, 'Painel da Meta → WhatsApp → Configuração da API.'),
@@ -1319,22 +1660,258 @@
           } catch (ex) { toast(ex.message, true); }
         } }, 'Testar conexão' + '')) : null);
 
+    // ----- WhatsApp: forma de conexão (QR Code do número da empresa, API oficial da Meta ou desligado)
+    const qr = await api('/whatsapp-qr');
+    const canEdit = can('cfg_envios', 'editar');
+    const mode = qr.config.mode;
+    const setMode = async (m) => {
+      try { await api('/settings', { method: 'PUT', body: { whatsapp: { mode: m } } }); toast(m === 'off' ? 'WhatsApp desligado: os alertas saem só por e-mail.' : 'Forma de conexão salva.'); rerender(); } catch (ex) { toast(ex.message, true); }
+    };
+    const modeOpt = (v, label, hint) => h('label', { class: 'radio-card' + (mode === v ? ' active' : '') },
+      h('input', { type: 'radio', name: 'wa-mode', value: v, checked: mode === v, disabled: !canEdit, onchange: () => setMode(v) }), h('span', {}, h('b', {}, label), h('small', {}, hint)));
+    const modeCard = h('div', { class: 'card' }, h('h2', {}, 'WhatsApp'),
+      h('p', { class: 'small muted' }, 'Avisos de cliente insatisfeito e de tablet sem sinal. Quem recebe: os números de cada filial (em Filiais) e o WhatsApp de cada pessoa (em Minha conta).'),
+      h('div', { class: 'radio-row' },
+        modeOpt('qr', 'QR Code (número da empresa)', 'Lê o QR no celular, como no WhatsApp Web. Texto livre, editável em Modelos de mensagem.'),
+        modeOpt('meta', 'API oficial da Meta', 'Exige conta comercial na Meta e um modelo aprovado por ela.'),
+        modeOpt('off', 'Desligado', 'Os alertas saem só por e-mail.')));
+    const waBlocks = [modeCard];
+    if (mode === 'qr') waBlocks.push(await whatsappQrCard(qr, rerender));
+    if (mode === 'meta') waBlocks.push(metaCard);
+    const waCard = h('div', {}, waBlocks);
+
     // ----- fila
     const queue = h('div', { class: 'card' }, h('h2', {}, 'Fila de envios'),
       h('p', { class: 'small muted' }, `Na fila: ${n.pending} · com falha nos últimos 7 dias: ${n.failed}. Se o servidor de e-mail cair, as mensagens ficam guardadas e são reenviadas sozinhas.`),
       n.recent.length ? h('div', { class: 'table-wrap' }, h('table', { class: 'small' },
         h('thead', {}, h('tr', {}, ['Quando', 'Tipo', 'Canal', 'Situação', 'Erro'].map((t) => h('th', {}, t)))),
-        h('tbody', {}, n.recent.map((o) => h('tr', {}, h('td', {}, fmtDate(o.created_at)), h('td', {}, ({ detractor: 'Cliente insatisfeito', report: 'Relatório', offline: 'Tablet sem sinal', test: 'Teste', reset: 'Senha' })[o.kind] || o.kind),
+        h('tbody', {}, n.recent.map((o) => h('tr', {}, h('td', {}, fmtDate(o.created_at)), h('td', {}, ({ detractor: 'Cliente insatisfeito', report: 'Relatório', weekly_report: 'Relatório', offline: 'Tablet sem sinal', device_offline: 'Tablet sem sinal', test: 'Teste', reset: 'Senha', password_reset: 'Senha', whatsapp_down: 'WhatsApp desconectado' })[o.kind] || o.kind),
           h('td', {}, ({ email: 'E-mail', whatsapp: 'WhatsApp', webhook: 'Webhook' })[o.channel] || o.channel),
           h('td', {}, h('span', { class: 'badge ' + (o.status === 'sent' ? 'ok' : o.status === 'failed' ? 'off' : 'warn') }, ({ sent: 'Enviado', failed: 'Falhou', pending: 'Na fila' })[o.status] || o.status)),
           h('td', { class: 'muted' }, o.last_error || '')))))) : h('p', { class: 'muted' }, 'Nenhum envio ainda.'));
-    return h('div', {}, h('div', { class: 'grid c2' }, mailCard, waCard), queue);
+    return h('div', {}, h('div', { class: 'grid c2 align-start' }, mailCard, waCard), queue);
   }
   const renderAgain = () => { if (location.hash.startsWith('#/configuracoes')) route(); };
 
+  // Conexão por QR Code: mostra o QR (atualiza sozinho enquanto espera a leitura), o número conectado,
+  // o intervalo entre envios e a fila com o horário sorteado de cada mensagem.
+  let qrPoll = null;
+  async function whatsappQrCard(info, rerender) {
+    clearTimeout(qrPoll);
+    const canConnect = can('cfg_envios', 'whatsapp');
+    const canEdit = can('cfg_envios', 'editar');
+    const box = h('div');
+    const KIND = { detractor: 'Cliente insatisfeito', device_offline: 'Tablet sem sinal', test: 'Teste' };
+    const draw = (st) => {
+      const act = (path, msg) => async () => {
+        try { const r = await api(path, { method: 'POST' }); if (msg) toast(msg); draw(r); } catch (ex) { toast(ex.message, true); }
+      };
+      const stateBox = st.state === 'connected'
+        ? h('div', { class: 'wa-state ok' }, h('span', { class: 'dot' }), h('div', {}, h('b', {}, 'Conectado'), st.me ? ` · +${st.me.number}${st.me.name ? ' (' + st.me.name + ')' : ''}` : '',
+          h('div', { class: 'small muted' }, st.since ? 'Desde ' + fmtDate(st.since) : '')))
+        : st.state === 'qr' ? h('div', { class: 'wa-state warn' }, h('span', { class: 'dot' }), h('b', {}, 'Aguardando a leitura do QR Code'))
+          : st.state === 'connecting' ? h('div', { class: 'wa-state warn' }, h('span', { class: 'dot' }), h('div', {}, h('b', {}, 'Conectando…'), st.lastError ? h('div', { class: 'small muted' }, st.lastError) : null))
+            : h('div', { class: 'wa-state off' }, h('span', { class: 'dot' }), h('div', {}, h('b', {}, 'Desconectado'), st.lastError ? h('div', { class: 'small muted' }, st.lastError) : null));
+      const qrImg = st.state === 'qr' && st.qr ? h('div', { class: 'wa-qr' }, h('img', { src: st.qr, alt: 'QR Code para conectar o WhatsApp' }), h('span', { class: 'small' }, 'O código muda a cada 20 segundos'))
+        : st.state === 'qr' && !canConnect ? h('p', { class: 'small muted' }, 'Só quem tem permissão para conectar o WhatsApp vê o QR Code.') : null;
+      const min = h('input', { type: 'number', min: '15', max: '60', value: st.config.minDelaySec, disabled: !canEdit });
+      const max = h('input', { type: 'number', min: '15', max: '60', value: st.config.maxDelaySec, disabled: !canEdit });
+      const fmtTime = (t) => (t ? new Date(t).toLocaleTimeString('pt-BR') : '—');
+      const queueRows = (st.queue || []).slice(0, 15);
+      box.replaceChildren(
+        h('div', { class: 'card' }, h('h2', {}, 'Conexão pelo QR Code'),
+          stateBox,
+          h('div', { class: 'wa-connect' },
+            qrImg,
+            st.state !== 'connected' ? h('ol', { class: 'steps small' },
+              h('li', {}, 'No celular da empresa, abra o WhatsApp e toque em ⋮ (ou Configurações) → Aparelhos conectados.'),
+              h('li', {}, 'Toque em "Conectar um aparelho" e aponte a câmera para o QR Code.'),
+              h('li', {}, 'Pronto: o estado muda para "Conectado". Os alertas passam a sair deste número.')) : null),
+          canConnect ? h('div', { class: 'row' },
+            st.state !== 'connected' ? h('button', { class: 'btn', onclick: act('/whatsapp-qr/connect') }, icon('refresh', 16), st.state === 'qr' ? 'Gerar novo QR Code' : 'Gerar QR Code') : null,
+            st.state !== 'off' || st.hasSession ? h('button', { class: 'btn danger', onclick: async () => {
+              if (!confirm('Desconectar o WhatsApp? Os alertas por WhatsApp param até alguém ler o QR Code de novo.')) return;
+              await act('/whatsapp-qr/disconnect', 'WhatsApp desconectado.')();
+            } }, 'Desconectar') : null) : null,
+          h('div', { class: 'notice' }, h('b', {}, 'Use um chip só para os alertas. '),
+            'Enviar só para a equipe, com pausa entre as mensagens, deixa o risco de bloqueio bem baixo, mas não zero: o WhatsApp não autoriza oficialmente a conexão por programas de terceiros. Peça para cada pessoa salvar o número. Se a conexão cair, os administradores recebem um e-mail e as mensagens esperam na fila por até 24 horas.')),
+        h('div', { class: 'card' }, h('h2', {}, 'Intervalo entre os envios'),
+          h('div', { class: 'form-grid two' }, h('label', { class: 'f' }, 'Mínimo (segundos)', min), h('label', { class: 'f' }, 'Máximo (segundos)', max)),
+          h('p', { class: 'small muted' }, 'Antes de cada mensagem o sistema sorteia uma pausa nessa faixa (de 15 a 60 segundos). O primeiro aviso sai na hora; com 4 pessoas, o último chega em cerca de 1 a 3 minutos.'),
+          canEdit ? h('button', { class: 'btn secondary', onclick: async () => {
+            try { await api('/settings', { method: 'PUT', body: { whatsapp: { minDelaySec: Number(min.value), maxDelaySec: Number(max.value) } } }); toast('Intervalo salvo.'); rerender(); } catch (ex) { toast(ex.message, true); }
+          } }, 'Salvar intervalo') : null),
+        h('div', { class: 'card' }, h('h2', {}, 'Fila do WhatsApp'),
+          queueRows.length ? h('div', { class: 'table-wrap' }, h('table', { class: 'small' },
+            h('thead', {}, h('tr', {}, ['Para', 'Mensagem', 'Horário', 'Pausa sorteada', 'Situação'].map((t) => h('th', {}, t)))),
+            h('tbody', {}, queueRows.map((q) => h('tr', {},
+              h('td', {}, h('b', {}, q.to)), h('td', {}, KIND[q.kind] || q.kind), h('td', {}, fmtTime(q.at)),
+              h('td', {}, q.gapSec ? `+${q.gapSec} s` : 'na hora'),
+              h('td', {}, h('span', { class: 'badge ' + (q.status === 'sent' ? 'ok' : q.status === 'failed' ? 'off' : 'warn'), title: q.error || null },
+                q.status === 'sent' ? 'Enviado' : q.status === 'failed' ? 'Falhou' : q.at > Date.now() ? `Em ${Math.max(1, Math.round((q.at - Date.now()) / 1000))} s` : 'Na fila'),
+              q.error && q.status !== 'sent' ? h('div', { class: 'small muted' }, q.error) : null))))))
+            : h('p', { class: 'muted small' }, 'Nenhuma mensagem nas últimas 24 horas.')));
+      // Enquanto espera a leitura, conecta ou há mensagens na fila, atualiza sozinho.
+      if (['qr', 'connecting'].includes(st.state) || (st.queue || []).some((q) => q.status === 'pending')) {
+        qrPoll = setTimeout(async () => {
+          if (!box.isConnected) return;
+          try { draw(await api('/whatsapp-qr')); } catch { /* sessão expirada etc. */ }
+        }, st.state === 'qr' ? 2000 : 4000);
+      }
+    };
+    draw(info);
+    return box;
+  }
+
+  // ------------------------------------------------------------ aba: modelos de mensagem
+  // Formatação do WhatsApp na prévia (*negrito*, _itálico_, ~riscado~ e links), montada com nós de texto — nunca HTML.
+  function waText(text) {
+    const box = h('div', { class: 'wa-text' });
+    const re = /(\*[^*\n]+\*|_[^_\n]+_|~[^~\n]+~|https?:\/\/[^\s]+)/g;
+    String(text).split('\n').forEach((line, i) => {
+      if (i) box.append(h('br'));
+      let last = 0;
+      for (const m of line.matchAll(re)) {
+        if (m.index > last) box.append(line.slice(last, m.index));
+        const t = m[0];
+        box.append(t.startsWith('http') ? h('span', { class: 'wa-link' }, t) : h(t[0] === '*' ? 'b' : t[0] === '_' ? 'i' : 's', {}, t.slice(1, -1)));
+        last = m.index + t.length;
+      }
+      if (last < line.length) box.append(line.slice(last));
+    });
+    return box;
+  }
+
+  // O e-mail tem 600 px de largura: a prévia mostra em tamanho real e reduz proporcionalmente para caber na coluna.
+  function mailFrame(url) {
+    const W = 640; const H = 620;
+    const frame = h('iframe', { src: url, title: 'Prévia do e-mail', sandbox: '' });
+    const box = h('div', { class: 'mail-frame' }, frame);
+    const fit = () => {
+      const k = Math.min(1, (box.clientWidth || W) / W);
+      frame.style.width = W + 'px'; frame.style.height = H + 'px'; frame.style.transform = `scale(${k})`;
+      box.style.height = Math.round(H * k) + 'px';
+    };
+    new ResizeObserver(fit).observe(box);
+    requestAnimationFrame(fit);
+    return box;
+  }
+
+  let tplKind = 'detractor'; let tplChannel = 'whatsapp';
+  async function templatesTab() {
+    const kinds = await api('/templates');
+    if (!kinds.some((k) => k.key === tplKind)) tplKind = kinds[0].key;
+    const editable = can('cfg_modelos', 'editar');
+    const wrap = h('div', { class: 'tpl-layout' });
+    const draw = () => {
+      const k = kinds.find((x) => x.key === tplKind);
+      if (!k.channels.includes(tplChannel)) tplChannel = k.channels[0];
+      const tpl = { ...k.templates[tplChannel] };
+      const fields = tplChannel === 'email'
+        ? [['subject', 'Assunto', 'input', 200], ['title', 'Título', 'input', 200], ['intro', 'Texto', 'textarea', 1500], ['button', 'Texto do botão', 'input', 60], ['footer', 'Rodapé', 'textarea', 500]]
+        : [['text', 'Texto da mensagem', 'textarea', 2000]];
+      const inputs = {}; let lastFocus = null;
+      const err = h('p', { class: 'bad small', role: 'alert' });
+      const preview = h('div', { class: 'tpl-preview' });
+      let timer = null; let seq = 0;
+      const refresh = () => {
+        clearTimeout(timer);
+        timer = setTimeout(async () => {
+          const my = ++seq;
+          try {
+            const r = await api(`/templates/${k.key}/${tplChannel}/preview`, { method: 'POST', body: body() });
+            if (my !== seq) return;
+            err.textContent = '';
+            preview.replaceChildren(tplChannel === 'whatsapp'
+              ? h('div', { class: 'phone' }, h('div', { class: 'phone-head' }, h('span', { class: 'phone-av' }, initials(settings.companyName)), h('div', {}, h('b', {}, settings.companyName), h('small', {}, 'online'))),
+                h('div', { class: 'phone-body' }, h('span', { class: 'phone-day' }, 'HOJE'), h('div', { class: 'bubble' }, waText(r.text), h('span', { class: 'bubble-time' }, '14:32'))))
+              : h('div', { class: 'mail-preview' }, h('div', { class: 'mail-meta' }, h('div', {}, 'Assunto: ', h('b', {}, r.subject)), h('div', {}, 'Para: ', me.email)),
+                mailFrame(r.url)));
+          } catch (ex) { if (my === seq) err.textContent = ex.message; }
+        }, 350);
+      };
+      const body = () => Object.fromEntries(Object.entries(inputs).map(([f, el]) => [f, el.value]));
+      for (const [f, label, type, max] of fields) {
+        const el = h(type, { class: 'tpl-field', maxlength: String(max), rows: type === 'textarea' ? (f === 'text' ? '10' : '3') : null, disabled: !editable,
+          oninput: refresh, onfocus: (e) => { lastFocus = e.target; } });
+        el.value = tpl[f] || '';
+        inputs[f] = el;
+      }
+      const insert = (txt) => {
+        const el = lastFocus || inputs.text || inputs.intro;
+        const a = el.selectionStart ?? el.value.length; const b = el.selectionEnd ?? a;
+        el.value = el.value.slice(0, a) + txt + el.value.slice(b); el.focus(); el.selectionStart = el.selectionEnd = a + txt.length; refresh();
+      };
+      const wrapSel = (mark) => {
+        const el = inputs.text; const a = el.selectionStart; const b = el.selectionEnd;
+        el.value = el.value.slice(0, a) + mark + el.value.slice(a, b) + mark + el.value.slice(b); el.focus(); el.selectionStart = a + 1; el.selectionEnd = b + 1; refresh();
+      };
+      const act = async (fn) => { try { await fn(); } catch (ex) { toast(ex.message, true); } };
+      const reload = async () => { const fresh = await api('/templates'); kinds.splice(0, kinds.length, ...fresh); draw(); };
+      wrap.replaceChildren(
+        (() => { const sel = h('select', { class: 'tpl-select', 'aria-label': 'Tipo de mensagem', onchange: (e) => { tplKind = e.target.value; draw(); } }, kinds.map((x) => h('option', { value: x.key }, x.label))); sel.value = tplKind;
+          return h('label', { class: 'tabs-select-wrap tpl-select-wrap' }, h('span', {}, 'Tipo de mensagem'), sel); })(),
+        h('div', { class: 'tpl-list' }, kinds.map((x) => h('button', { class: 'tpl-item' + (x.key === tplKind ? ' active' : ''), onclick: () => { tplKind = x.key; draw(); } },
+          h('b', {}, x.label), h('span', {}, x.channels.map((c) => (c === 'email' ? 'E-mail' : 'WhatsApp')).join(' · '),
+            Object.values(x.templates).some((t) => t.custom) ? ' · personalizado' : '')))),
+        h('div', { class: 'card tpl-editor' },
+          h('p', { class: 'small muted' }, k.description),
+          h('div', { class: 'tabs sub' }, k.channels.map((c) => h('button', { class: c === tplChannel ? 'active' : '', onclick: () => { tplChannel = c; draw(); } },
+            icon(c === 'email' ? 'mail' : 'message', 16), c === 'email' ? 'E-mail' : 'WhatsApp'))),
+          tplChannel === 'whatsapp' ? h('div', { class: 'row between' }, h('span', { class: 'small muted' }, 'Usado no WhatsApp conectado pelo QR Code. Na API oficial da Meta vale o modelo aprovado lá.'),
+            editable ? h('div', { class: 'row fmt' }, [['*', 'B', 'Negrito'], ['_', 'I', 'Itálico'], ['~', 'S', 'Riscado']].map(([m, l, t]) => h('button', { class: 'btn secondary sm', title: t, type: 'button', onclick: () => wrapSel(m) }, l))) : null) : null,
+          fields.map(([f, label]) => h('label', { class: 'f' }, label, inputs[f])),
+          tplChannel === 'email' ? h('p', { class: 'small muted' }, 'A tabela com os dados do envio (filial, nota, comentários, contato…) entra automaticamente abaixo do texto.') : null,
+          h('div', {}, h('div', { class: 'small muted' }, editable ? 'Clique para inserir no campo:' : 'Variáveis disponíveis:'),
+            h('div', { class: 'var-chips' }, k.vars.map((v) => h('button', { class: 'var-chip', type: 'button', title: `${v.label} — ex.: ${v.sample}`, disabled: !editable, onclick: () => insert(`{${v.key}}`) }, `{${v.key}}`)))),
+          err,
+          h('div', { class: 'row between' },
+            editable && tpl.custom ? h('button', { class: 'btn secondary', onclick: () => act(async () => {
+              if (!confirm('Voltar ao texto padrão do sistema? O texto atual será descartado.')) return;
+              await api(`/templates/${k.key}/${tplChannel}`, { method: 'DELETE' }); toast('Texto padrão restaurado.'); await reload();
+            }) }, icon('refresh', 16), 'Restaurar texto padrão') : h('span', { class: 'small muted' }, tpl.custom ? `Personalizado em ${fmtDate(tpl.updated_at)}` : 'Texto padrão do sistema'),
+            h('div', { class: 'row' },
+              tplChannel === 'email' ? h('button', { class: 'btn secondary', onclick: () => act(async () => {
+                const r = await api(`/templates/${k.key}/email/test`, { method: 'POST' });
+                r.sent ? toast(`Teste enviado para ${r.to}.`) : toast('Falhou: ' + (r.error || 'confira o e-mail em "E-mail e WhatsApp"'), true);
+              }) }, icon('mail', 16), 'Enviar teste para mim') : null,
+              editable ? h('button', { class: 'btn', onclick: () => act(async () => {
+                await api(`/templates/${k.key}/${tplChannel}`, { method: 'PUT', body: body() }); toast('Modelo salvo. Os próximos envios já usam este texto.'); await reload();
+              }) }, 'Salvar modelo') : null))),
+        h('div', { class: 'tpl-side' }, h('div', { class: 'small muted tpl-side-title' }, 'Prévia · dados de exemplo'), preview));
+      refresh();
+    };
+    draw();
+    return wrap;
+  }
+
+  // Prazos de guarda em anos (até 10). Um valor antigo em meses que não feche em anos continua na lista.
+  function retentionCard(st) {
+    const r = st.retention;
+    const sel = (key, { six = false } = {}) => {
+      const opts = [...(six ? [[6, '6 meses']] : []), ...Array.from({ length: 10 }, (_, i) => [(i + 1) * 12, i === 0 ? '1 ano' : `${i + 1} anos`])];
+      if (!opts.some(([v]) => v === r[key])) opts.push([r[key], `${r[key]} meses`]);
+      opts.sort((a, b) => a[0] - b[0]);
+      const el = h('select', { onchange: (e) => { r[key] = Number(e.target.value); warn(); } }, opts.map(([v, l]) => h('option', { value: String(v) }, l)));
+      el.value = String(r[key]);
+      return el;
+    };
+    const lgpdWarn = h('span', { class: 'badge warn' }, 'Prazo longo: registre o motivo no controle de tratamento de dados da empresa');
+    const warn = () => lgpdWarn.classList.toggle('hidden', r.contactsMonths <= 24);
+    const row = (title, hint, control) => h('div', { class: 'ret-row' }, h('div', {}, h('b', {}, title), h('div', { class: 'small muted' }, hint)), control);
+    const card = h('div', { class: 'card' }, h('h2', {}, 'Por quanto tempo guardar os dados'),
+      h('p', { class: 'small muted' }, 'O sistema apaga sozinho, uma vez por dia, o que passar do prazo. O máximo é 10 anos.'),
+      row('Notas e respostas de múltipla escolha', 'Não têm dados pessoais. São a base do NPS, do ranking e dos relatórios.', h('span', { class: 'badge ok' }, 'Sem prazo · sempre guardadas')),
+      row('Comentários escritos pelo cliente', 'Podem conter nomes ou telefones digitados pelo cliente.', sel('commentsMonths')),
+      row('Contato do cliente (nome, telefone e e-mail)', h('span', {}, 'Só existe quando o cliente autorizou. É dado pessoal protegido pela LGPD. ', lgpdWarn), sel('contactsMonths')),
+      row('Localização aproximada (QR Code)', 'Depois do prazo apaga o ponto no mapa e mantém só cidade, UF e região.', sel('geoMonths')),
+      row('Registro de auditoria', 'Quem fez o quê no painel. Mínimo de 6 meses.', sel('auditMonths', { six: true })));
+    warn();
+    return card;
+  }
+
   async function securityTab(st) {
     const privacy = h('textarea', { rows: '5', maxlength: '1500', value: st.privacyText, oninput: (e) => { st.privacyText = e.target.value; } });
-    const num = (obj, k, min, max) => h('input', { type: 'number', min: String(min), max: String(max), value: obj[k], oninput: (e) => { obj[k] = Number(e.target.value); } });
     const phone = h('input', { placeholder: 'Telefone do titular' });
     const mail = h('input', { type: 'email', placeholder: 'ou e-mail' });
     const results = h('div');
@@ -1359,16 +1936,11 @@
     return h('div', {},
       h('div', { class: 'grid c2' },
         h('div', { class: 'card' }, h('h2', {}, 'Acesso ao painel'),
-          chk(st.requireAdminMfa, (v) => { st.requireAdminMfa = v; }, 'Exigir verificação em duas etapas (2FA) de administradores'),
-          h('p', { class: 'small muted' }, 'Recomendado. Com isso ligado, o administrador sem 2FA é obrigado a configurá-lo no próximo login.')),
-        h('div', { class: 'card' }, h('h2', {}, 'Prazo de guarda dos dados (LGPD)'),
-          h('div', { class: 'form-grid' },
-            h('label', { class: 'f' }, 'Contatos (meses)', num(st.retention, 'contactsMonths', 1, 60)),
-            h('label', { class: 'f' }, 'Comentários (meses)', num(st.retention, 'commentsMonths', 1, 120)),
-            h('label', { class: 'f' }, 'Auditoria (meses)', num(st.retention, 'auditMonths', 6, 120))),
-          h('p', { class: 'small muted' }, 'Depois do prazo, os dados são apagados automaticamente. As notas numéricas (sem dados pessoais) são mantidas para o histórico do NPS.'))),
+          chk(st.requireAdminMfa, (v) => { st.requireAdminMfa = v; }, 'Exigir verificação em duas etapas (2FA) de administradores e de perfis que alteram usuários, permissões ou configurações'),
+          h('p', { class: 'small muted' }, 'Recomendado. Com isso ligado, quem tem esses perfis e ainda não usa 2FA é obrigado a configurá-lo no próximo login.')),
+        retentionCard(st)),
       h('div', { class: 'card' }, h('h2', {}, 'Aviso de privacidade exibido no tablet e no QR Code'), privacy),
-      h('div', { class: 'card' }, h('h2', {}, 'Pedido do titular (LGPD)'),
+      !can('cfg_lgpd', 'titular') || !me.access.scopeAll ? null : h('div', { class: 'card' }, h('h2', {}, 'Pedido do titular (LGPD)'),
         h('p', { class: 'small muted' }, 'Quando um cliente pedir acesso ou exclusão dos dados dele, localize pelo telefone ou e-mail informado.'),
         h('div', { class: 'row' }, phone, mail, h('button', { class: 'btn secondary', onclick: search }, 'Localizar')), results));
   }
@@ -1378,6 +1950,7 @@
   const CASE_STATUS = { aberto: 'Aberto', em_contato: 'Em contato', resolvido: 'Resolvido', sem_retorno: 'Sem retorno' };
   const ROLE = { admin: 'Administrador', gestor: 'Gestor' };
   const CHANNEL = { tablet: 'tablet', link: 'QR Code' };
+  const TPL_KIND = { detractor: 'Cliente insatisfeito', offline: 'Tablet sem sinal', weekly: 'Relatório semanal', reset: 'Redefinição de senha', test: 'Mensagem de teste' };
   const AUDIT_CATS = { acesso: 'Acesso ao sistema', conta: 'Senhas e segurança da conta', usuarios: 'Usuários', cadastros: 'Filiais, pesquisas e configurações',
     tablets: 'Tablets', dados: 'Respostas, casos e relatórios', lgpd: 'Privacidade (LGPD)', sistema: 'Rotinas automáticas' };
   const dayBR = (iso) => (/^\d{4}-\d{2}-\d{2}$/.test(iso || '') ? iso.split('-').reverse().join('/') : iso);
@@ -1414,13 +1987,30 @@
       case 'password.reset_unknown': return E('conta', 'warn', 'Pedido de nova senha para e-mail não cadastrado', d.email ? `E-mail digitado: ${d.email}.` : '');
       case 'password.reset_done': return E('conta', 'ok', 'Definiu uma nova senha pelo link do e-mail');
       case 'user.password_changed': return E('conta', 'ok', 'Trocou a própria senha');
-      case 'user.create': return E('usuarios', '', `Criou o usuário ${d.email || ''}`, `Perfil: ${ROLE[d.role] || d.role}${d.role === 'gestor' ? ` · ${plural((d.branches || []).length, 'filial', 'filiais')}: ${(d.branches || []).map(brName).join(', ') || 'nenhuma'}` : ''}.`);
+      case 'user.create': return E('usuarios', '', `Criou o usuário ${d.email || ''}`, `Perfil: ${d.roleName || ROLE[d.role] || d.role}${d.role === 'gestor' ? ` · ${plural((d.branches || []).length, 'filial', 'filiais')}: ${(d.branches || []).map(brName).join(', ') || 'nenhuma'}` : ''}.`);
       case 'user.update': {
-        const bits = [`Perfil: ${ROLE[d.role] || d.role}`, d.active === 0 || d.active === false ? 'usuário DESATIVADO' : 'usuário ativo'];
+        const bits = [`Perfil: ${d.roleName || ROLE[d.role] || d.role}`, d.active === 0 || d.active === false ? 'usuário DESATIVADO' : 'usuário ativo'];
         if (d.passwordReset) bits.push('senha redefinida pelo administrador');
         if (d.resetMfa) bits.push('verificação em duas etapas reiniciada');
         return E('usuarios', d.active === 0 || d.active === false || d.resetMfa ? 'warn' : '', `Alterou o usuário ${d.email || '#' + d.id}`, bits.join(' · ') + '.');
       }
+      case 'user.photo': return E('conta', '', d.set ? 'Trocou a própria foto de perfil' : 'Removeu a própria foto de perfil');
+      case 'user.photo_removed': return E('usuarios', 'warn', `Removeu a foto de perfil de ${d.email || '#' + d.id}`);
+      case 'whatsapp.connect': return E('cadastros', 'warn', 'Iniciou a conexão do WhatsApp pelo QR Code');
+      case 'whatsapp.disconnect': return E('cadastros', 'warn', 'Desconectou o WhatsApp (QR Code)', 'Os alertas por WhatsApp pararam até uma nova conexão.');
+      case 'whatsapp.logged_out': return E('sistema', 'bad', 'O WhatsApp foi desconectado pelo celular', 'É preciso ler o QR Code de novo para voltar a enviar alertas.');
+      case 'template.update': return E('cadastros', '', `Alterou o texto da mensagem "${TPL_KIND[d.kind] || d.kind}" (${d.channel === 'email' ? 'e-mail' : 'WhatsApp'})`);
+      case 'template.restore': return E('cadastros', '', `Voltou ao texto padrão da mensagem "${TPL_KIND[d.kind] || d.kind}" (${d.channel === 'email' ? 'e-mail' : 'WhatsApp'})`);
+      case 'role.create': return E('usuarios', '', `Criou o perfil de acesso "${d.name}"`, `${d.scope === 'all' ? 'Todas as filiais' : 'Só as filiais do usuário'} · ${plural((d.perms || []).length, 'permissão', 'permissões')}.`);
+      case 'role.update': {
+        const bits = [];
+        if (d.renamedFrom) bits.push(`antes se chamava "${d.renamedFrom}"`);
+        if (d.scopeFrom) bits.push(d.scope === 'all' ? 'passou a ver TODAS as filiais' : 'passou a ver só as filiais do usuário');
+        if (d.added?.length) bits.push('ganhou: ' + d.added.map(permLabel).join(', '));
+        if (d.removed?.length) bits.push('perdeu: ' + d.removed.map(permLabel).join(', '));
+        return E('usuarios', d.added?.length || d.scopeFrom ? 'warn' : '', `Alterou as permissões do perfil "${d.name}"`, bits.length ? bits.join(' · ') + '.' : 'Sem mudança nas permissões.');
+      }
+      case 'role.delete': return E('usuarios', 'warn', `Excluiu o perfil de acesso "${d.name}"`);
       case 'branch.create': return E('cadastros', '', `Cadastrou a filial "${d.name || d.code || '#' + d.id}"`, [d.code && `Código ${d.code}`, d.city].filter(Boolean).join(' · '));
       case 'branch.update': return E('cadastros', '', `Alterou a filial "${d.name || brName(d.id)}"`, d.active === 0 || d.active === false ? 'Filial DESATIVADA.' : '');
       case 'branch.set_survey': return E('cadastros', '', `Definiu a pesquisa padrão da filial "${brName(d.branchId)}"`, d.surveyId ? `Pesquisa: ${sv(d.surveyId)}.` : 'Sem pesquisa padrão.');
@@ -1431,7 +2021,9 @@
       case 'survey.update': return E('cadastros', '', `Alterou a pesquisa "${d.title || sv(d.id)}"`);
       case 'survey.duplicate': return E('cadastros', '', `Duplicou a pesquisa "${sv(d.from)}"`, 'Criou uma cópia para editar.');
       case 'media.upload': return E('cadastros', '', `Enviou ${String(d.mime || '').startsWith('video/') ? 'um vídeo' : 'uma imagem'}`, d.size ? `Tamanho: ${d.size > 1048576 ? (d.size / 1048576).toFixed(1) + ' MB' : Math.round(d.size / 1024) + ' KB'}.` : '');
-      case 'settings.update': return E('cadastros', '', 'Alterou as configurações do sistema', d.companyName ? `Empresa: ${d.companyName}.` : '');
+      case 'settings.update': return E('cadastros', '', 'Alterou as configurações do sistema', d.changes
+        ? Object.entries(d.changes).map(([k, v]) => `${k}: ${v.antes} → ${v.depois}`).join(' · ')
+        : (d.companyName ? `Empresa: ${d.companyName}.` : ''));
       case 'settings.delivery': return E('cadastros', 'warn', 'Alterou a configuração de e-mail/WhatsApp', [d.smtp && `E-mail: ${d.smtp}`, d.whatsapp && `WhatsApp: ${d.whatsapp}`].filter(Boolean).join(' · ') + '. (senhas e tokens não são registrados)');
       case 'device.create': return E('tablets', '', `Cadastrou o tablet "${d.name || '#' + d.id}"`, d.branchId ? `Filial: ${brName(d.branchId)}.` : '');
       case 'device.new_code': return E('tablets', 'warn', `Gerou um novo código de pareamento para o tablet "${ctx.devices.get(Number(d.id)) || '#' + d.id}"`, 'O tablet atual perdeu o acesso até ser pareado de novo.');
@@ -1456,7 +2048,9 @@
   const TONE_LABEL = { ok: 'Normal', warn: 'Atenção', bad: 'Importante' };
 
   async function pageAudit() {
-    const [rows, brs, svs, users, devs] = await Promise.all([api('/audit?limit=500'), branches(), surveys(), api('/users'), api('/devices')]);
+    // Nomes de pessoas e tablets só aparecem se o perfil também puder ver essas telas.
+    const [rows, brs, svs, users, devs] = await Promise.all([api('/audit?limit=500'), branches(), surveys(),
+      can('usuarios') ? api('/users') : [], can('tablets') ? api('/devices') : []]);
     const ctx = { branches: new Map(brs.map((b) => [b.id, b.name])), surveys: new Map(svs.map((x) => [x.id, x.title])),
       users: new Map(users.map((u) => [u.id, u.name])), devices: new Map(devs.map((x) => [x.id, x.name])) };
     const events = rows.map((r) => ({ r, e: auditEvent(r, ctx) }));
@@ -1488,6 +2082,197 @@
       list);
   }
 
+  // ------------------------------------------------------------ ajuda (manual) e novidades (notas de versão)
+  // Os textos ficam em public/admin/ajuda/*.md e novidades.json. O Markdown é convertido em elementos da página
+  // (nunca em HTML livre): títulos, listas, dicas, imagens do próprio manual e links internos.
+  const helpCache = {};
+  async function helpIndex() {
+    if (!helpCache.index) helpCache.index = await fetch('/admin/ajuda/index.json', { cache: 'no-cache' }).then((r) => r.json());
+    return helpCache.index.filter((a) => !a.perm || a.perm.some((m) => can(m)));
+  }
+  async function helpText(slug) {
+    if (!helpCache[slug]) helpCache[slug] = await fetch(`/admin/ajuda/${slug}.md`, { cache: 'no-cache' }).then((r) => (r.ok ? r.text() : ''));
+    return helpCache[slug];
+  }
+  // Texto em linha: **negrito**, `código`, [texto](#/ajuda/artigo) e links https.
+  function mdInline(text, mark) {
+    const out = [];
+    const re = /(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\((?:#\/[a-z0-9/_-]*|https:\/\/[^)\s]+)\))/g;
+    let last = 0;
+    const plain = (t) => {
+      if (!mark) return [t];
+      const parts = []; const low = t.toLowerCase(); let i = 0; let j;
+      while (mark && (j = low.indexOf(mark, i)) !== -1) { parts.push(t.slice(i, j), h('mark', {}, t.slice(j, j + mark.length))); i = j + mark.length; }
+      parts.push(t.slice(i)); return parts;
+    };
+    for (const m of text.matchAll(re)) {
+      if (m.index > last) out.push(...plain(text.slice(last, m.index)));
+      const t = m[0];
+      if (t.startsWith('**')) out.push(h('b', {}, ...plain(t.slice(2, -2))));
+      else if (t.startsWith('`')) out.push(h('span', { class: 'kbd' }, t.slice(1, -1)));
+      else { const [, label, url] = /^\[([^\]]+)\]\((.+)\)$/.exec(t); out.push(h('a', url.startsWith('https:') ? { href: url, target: '_blank', rel: 'noopener noreferrer' } : { href: url }, label)); }
+      last = m.index + t.length;
+    }
+    if (last < text.length) out.push(...plain(text.slice(last)));
+    return out;
+  }
+  function mdRender(md, mark) {
+    const box = h('div', { class: 'md' });
+    let list = null; let para = [];
+    const flush = () => { if (para.length) { box.append(h('p', {}, mdInline(para.join(' '), mark))); para = []; } };
+    for (const raw of md.split('\n')) {
+      const line = raw.trimEnd();
+      let m;
+      if (!line.trim()) { flush(); list = null; continue; }
+      if ((m = /^(#{2,3}) (.+)$/.exec(line))) { flush(); list = null; box.append(h(m[1].length === 2 ? 'h3' : 'h4', {}, mdInline(m[2], mark))); continue; }
+      if ((m = /^!\[([^\]]*)\]\((img\/[a-z0-9-]+\.(?:jpg|png))\)$/.exec(line))) {
+        flush(); list = null;
+        box.append(h('figure', {}, h('img', { src: '/admin/ajuda/' + m[2], alt: m[1], loading: 'lazy' }), m[1] ? h('figcaption', {}, m[1]) : null)); continue;
+      }
+      if ((m = /^> (.+)$/.exec(line))) { flush(); list = null; box.append(h('div', { class: 'tip' }, mdInline(m[1], mark))); continue; }
+      if ((m = /^(-|\d+\.) (.+)$/.exec(line))) {
+        flush();
+        const tag = m[1] === '-' ? 'ul' : 'ol';
+        if (!list || list.tagName.toLowerCase() !== tag) { list = h(tag, { class: tag === 'ol' ? 'steps-n' : '' }); box.append(list); }
+        list.append(h('li', {}, h('span', {}, mdInline(m[2], mark)))); continue;
+      }
+      list = null; para.push(line.trim());
+    }
+    flush();
+    return box;
+  }
+
+  let helpQuery = '';
+  async function pageHelp(slug) {
+    const index = await helpIndex();
+    const texts = Object.fromEntries(await Promise.all(index.map(async (a) => [a.slug, await helpText(a.slug)])));
+    const current = index.find((a) => a.slug === slug) || index[0];
+    const search = h('input', { type: 'search', value: helpQuery, placeholder: 'Buscar no manual (ex.: QR Code, senha, WhatsApp)', 'aria-label': 'Buscar no manual' });
+    const nav = h('nav', { class: 'help-nav', 'aria-label': 'Artigos do manual' });
+    const article = h('article', { class: 'help-article card' });
+    const results = h('div');
+    const plainText = (md) => md.replace(/!\[[^\]]*\]\([^)]*\)/g, '').replace(/[#*`>]/g, '').replace(/\[([^\]]+)\]\([^)]*\)/g, '$1');
+    const drawNav = () => {
+      const groups = [...new Set(index.map((a) => a.group))];
+      nav.replaceChildren(...groups.map((g) => h('div', {}, h('div', { class: 'nav-label' }, g),
+        index.filter((a) => a.group === g).map((a) => h('a', { href: '#/ajuda/' + a.slug, class: a.slug === current.slug ? 'active' : null }, a.title)))));
+    };
+    const drawArticle = () => {
+      const who = !current.perm ? 'Todos os perfis' : 'Quem tem acesso a ' + current.perm.map((m) => permCatalog?.modules.find((x) => x.key === m)?.label || m).join(' ou ');
+      article.replaceChildren(h('div', { class: 'row small muted' }, h('span', { class: 'badge' }, current.group), h('span', {}, who), h('span', {}, `· atualizado na versão ${current.updated}`)),
+        h('h2', { class: 'help-title' }, current.title), mdRender(texts[current.slug], helpQuery.trim().toLowerCase() || null));
+    };
+    const drawResults = () => {
+      const q = search.value.trim().toLowerCase();
+      helpQuery = search.value;
+      if (q.length < 2) { results.replaceChildren(); article.classList.remove('hidden'); drawArticle(); return; }
+      const found = index.map((a) => {
+        const t = plainText(texts[a.slug]); const low = t.toLowerCase(); const at = low.indexOf(q);
+        const inTitle = a.title.toLowerCase().includes(q);
+        if (at === -1 && !inTitle) return null;
+        const start = Math.max(0, at - 60);
+        return { a, snippet: at === -1 ? t.slice(0, 140) : (start ? '…' : '') + t.slice(start, at + q.length + 90) + '…', score: inTitle ? 0 : 1 };
+      }).filter(Boolean).sort((x, y) => x.score - y.score);
+      article.classList.add('hidden');
+      results.replaceChildren(h('div', { class: 'card' }, h('h2', {}, `${found.length} ${found.length === 1 ? 'artigo encontrado' : 'artigos encontrados'} para "${search.value.trim()}"`),
+        found.length ? found.map(({ a, snippet }) => h('a', { class: 'help-hit', href: '#/ajuda/' + a.slug }, h('b', {}, mdInline(a.title, q)), h('span', { class: 'small muted' }, mdInline(snippet.replace(/\s+/g, ' '), q))))
+          : h('p', { class: 'muted' }, 'Nada encontrado. Tente outra palavra, como "tablet", "relatório" ou "senha".')));
+    };
+    search.addEventListener('input', drawResults);
+    drawNav(); drawResults();
+    return h('div', {}, pageHead('Ajuda', 'Manual do painel, por assunto. Cada pessoa vê os artigos das telas que pode abrir.'),
+      h('div', { class: 'help-search card' }, icon('search', 18), search),
+      h('div', { class: 'help-layout' }, nav, h('div', {}, results, article)));
+  }
+
+  let newsCache = null;
+  const NEWS_TYPE = { novo: ['Novo', 'ok'], melhoria: ['Melhoria', 'info'], correcao: ['Correção', 'warn'] };
+  async function newsData() { if (!newsCache) newsCache = await fetch('/admin/novidades.json', { cache: 'no-cache' }).then((r) => r.json()); return newsCache; }
+  let newsFilter = '';
+  async function pageNews() {
+    const versions = await newsData();
+    const list = h('div');
+    const chips = h('div', { class: 'row chips', role: 'group', 'aria-label': 'Filtrar por tipo' });
+    const draw = () => {
+      chips.replaceChildren(...[['', 'Tudo'], ...Object.entries(NEWS_TYPE).map(([k, [l]]) => [k, l])].map(([k, l]) =>
+        h('button', { class: 'chip' + (newsFilter === k ? ' active' : ''), 'aria-pressed': String(newsFilter === k), onclick: () => { newsFilter = k; draw(); } }, l)));
+      list.replaceChildren(...versions.map((v) => {
+        const items = v.items.filter((i) => !newsFilter || i.type === newsFilter);
+        if (!items.length) return null;
+        return h('section', { class: 'release' },
+          h('div', { class: 'release-head' }, h('h2', {}, 'Versão ' + v.version), h('span', { class: 'small muted' }, v.date.split('-').reverse().join('/')),
+            v.version === appVersion ? h('span', { class: 'badge ok' }, 'versão atual') : null),
+          h('div', { class: 'release-items' }, items.map((i) => h('div', { class: 'card release-item' + (i.image ? '' : ' no-img') },
+            h('div', {}, h('span', { class: 'badge ' + NEWS_TYPE[i.type][1] }, NEWS_TYPE[i.type][0]), h('h3', {}, i.title), h('p', { class: 'small muted' }, i.text),
+              i.help ? h('a', { class: 'small', href: '#/ajuda/' + i.help }, 'Como usar →') : null),
+            i.image ? h('img', { src: '/admin/ajuda/img/' + i.image, alt: 'Print: ' + i.title, loading: 'lazy' }) : null))));
+      }).filter(Boolean));
+    };
+    draw();
+    return h('div', {}, pageHead('Novidades', 'O que mudou em cada versão do sistema'), chips, list);
+  }
+
+  // Janela "O que há de novo": aparece uma vez por pessoa a cada versão nova.
+  let newsShown = false;
+  async function maybeShowNews() {
+    if (newsShown || !hasNews() || location.hash.startsWith('#/novidades')) return;
+    newsShown = true;
+    try {
+      const v = (await newsData()).find((x) => x.version === appVersion);
+      await api('/me/seen-version', { method: 'POST' });
+      me.lastSeenVersion = appVersion;
+      if (!v || document.querySelector('.modal-bg')) return;
+      const close = modal(`O que há de novo na versão ${v.version}`, h('div', { class: 'whats-new' },
+        h('ul', {}, v.items.filter((i) => i.type === 'novo' || i.highlight).slice(0, 6).map((i) => h('li', {}, h('b', {}, i.title), h('div', { class: 'small muted' }, i.text))))),
+      [{ label: 'Ver todas as novidades', onClick: (c) => { c(); location.hash = '#/novidades'; } }]);
+      void close;
+    } catch { /* sem novidades: segue normalmente */ }
+  }
+
+  // ------------------------------------------------------------ recorte da foto de perfil
+  // Recorta em círculo no navegador (arrastar para posicionar, zoom pela barra ou roda do mouse) e gera 256×256.
+  function photoCropper(file, onSave) {
+    const VIEW = 260; const OUT = 256;
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    const canvas = h('canvas', { width: String(VIEW), height: String(VIEW), class: 'crop-canvas', 'aria-label': 'Foto para recortar' });
+    const ctx = canvas.getContext('2d');
+    const zoom = h('input', { type: 'range', min: '100', max: '300', value: '100', 'aria-label': 'Zoom' });
+    let base = 1; let x = 0; let y = 0; // posição do centro da imagem em relação ao centro do quadro
+    const scale = () => base * (Number(zoom.value) / 100);
+    const clamp = () => {
+      const s = scale(); const maxX = Math.max(0, (img.width * s - VIEW) / 2); const maxY = Math.max(0, (img.height * s - VIEW) / 2);
+      x = Math.min(maxX, Math.max(-maxX, x)); y = Math.min(maxY, Math.max(-maxY, y));
+    };
+    const paint = (c, size) => {
+      const k = size / VIEW; const s = scale() * k;
+      c.fillStyle = '#ffffff'; c.fillRect(0, 0, size, size);
+      c.drawImage(img, size / 2 + x * k - (img.width * s) / 2, size / 2 + y * k - (img.height * s) / 2, img.width * s, img.height * s);
+    };
+    const draw = () => { clamp(); paint(ctx, VIEW); };
+    let drag = null;
+    canvas.addEventListener('pointerdown', (e) => { drag = { px: e.clientX, py: e.clientY, x, y }; canvas.setPointerCapture(e.pointerId); });
+    canvas.addEventListener('pointermove', (e) => { if (!drag) return; x = drag.x + e.clientX - drag.px; y = drag.y + e.clientY - drag.py; draw(); });
+    canvas.addEventListener('pointerup', () => { drag = null; });
+    canvas.addEventListener('wheel', (e) => { e.preventDefault(); zoom.value = String(Math.min(300, Math.max(100, Number(zoom.value) - Math.sign(e.deltaY) * 10))); draw(); }, { passive: false });
+    zoom.addEventListener('input', draw);
+    img.onload = () => { base = Math.max(VIEW / img.width, VIEW / img.height); draw(); };
+    img.onerror = () => { toast('Não foi possível abrir esta imagem.', true); document.querySelector('.modal-bg')?.remove(); };
+    img.src = url;
+    const close = modal('Ajustar foto', h('div', { class: 'cropper' },
+      h('div', { class: 'crop-wrap' }, canvas),
+      h('label', { class: 'f crop-zoom' }, 'Zoom', zoom),
+      h('p', { class: 'small muted' }, 'Arraste a foto para posicionar. Só a parte dentro do círculo aparece.')),
+    [{ label: 'Salvar foto', onClick: async (done) => {
+      const out = h('canvas', { width: String(OUT), height: String(OUT) });
+      paint(out.getContext('2d'), OUT);
+      let q = 0.9; let blob;
+      do { blob = await new Promise((r) => out.toBlob(r, 'image/jpeg', q)); q -= 0.15; } while (blob && blob.size > 350 * 1024 && q > 0.3);
+      try { await onSave(blob); URL.revokeObjectURL(url); done(); } catch (ex) { toast(ex.message, true); }
+    } }]);
+    void close;
+  }
+
   // ------------------------------------------------------------ minha conta
   async function pageAccount() {
     const cur = h('input', { type: 'password', autocomplete: 'current-password' });
@@ -1504,7 +2289,29 @@
       try { await api('/me/notifications', { method: 'PUT', body: { [key]: e.target.checked } }); me.notify[key] = e.target.checked; toast('Preferência salva.'); } catch (ex) { toast(ex.message, true); }
     } }), label);
     const wa = h('input', { value: me.whatsapp || '', placeholder: '5511999990000', inputmode: 'numeric', autocomplete: 'tel' });
+    const pick = h('input', { type: 'file', accept: 'image/jpeg,image/png,image/webp', class: 'hidden', onchange: (e) => {
+      const f = e.target.files[0]; e.target.value = '';
+      if (!f) return;
+      if (!/^image\/(jpeg|png|webp)$/.test(f.type)) return toast('Use uma foto JPG, PNG ou WEBP.', true);
+      if (f.size > 15 * 1024 * 1024) return toast('Foto maior que 15 MB.', true);
+      photoCropper(f, async (blob) => {
+        const r = await api('/me/photo', { method: 'PUT', body: blob, headers: { 'Content-Type': 'application/octet-stream' } });
+        me.photo_at = r.photo_at; toast('Foto salva.'); route();
+      });
+    } });
+    const photoCard = h('div', { class: 'card' }, h('h2', {}, 'Foto e perfil'),
+      h('div', { class: 'photo-card' },
+        h('button', { class: 'photo-big', type: 'button', title: 'Trocar foto', onclick: () => pick.click() }, avatar(me, 'xl'), h('span', { class: 'cam' }, icon('image', 16))),
+        h('div', { class: 'grid', style: null },
+          h('div', {}, h('b', { class: 'big' }, me.name), h('div', { class: 'small muted' }, `${me.access.roleName} · ${me.access.scopeAll ? 'todas as filiais' : 'filiais ligadas a você'}`)),
+          h('div', { class: 'row' }, pick, h('button', { class: 'btn sm', onclick: () => pick.click() }, me.photo_at ? 'Trocar foto' : 'Enviar foto'),
+            me.photo_at ? h('button', { class: 'btn secondary sm', onclick: async () => {
+              if (!confirm('Remover sua foto?')) return;
+              try { await api('/me/photo', { method: 'DELETE' }); me.photo_at = null; toast('Foto removida.'); route(); } catch (ex) { toast(ex.message, true); }
+            } }, 'Remover') : null),
+          h('div', { class: 'small muted' }, 'JPG, PNG ou WEBP. Você recorta e ajusta antes de salvar; a foto fica com 256 × 256 pixels e só aparece para quem está logado no painel.'))));
     return h('div', {}, pageHead('Minha conta', me.email),
+      photoCard,
       h('div', { class: 'grid c2' },
         h('div', { class: 'card' }, h('h2', {}, 'Verificação em duas etapas (2FA)'),
           h('p', {}, mfa.enabled ? h('span', { class: 'badge ok' }, icon('shield', 14), 'Ativa') : h('span', { class: 'badge warn' }, 'Desativada'),
@@ -1512,8 +2319,8 @@
           h('p', { class: 'small muted' }, 'Além da senha, o login pede um código que muda a cada 30 segundos no seu celular.'),
           h('div', { class: 'row' },
             !mfa.enabled ? h('button', { class: 'btn', onclick: () => showMfaSetup(false) }, 'Ativar 2FA') : null,
-            mfa.enabled ? h('button', { class: 'btn secondary', onclick: () => askPw('Gerar novos códigos de recuperação', false, async (p, _c, close) => {
-              const r = await api('/mfa/recovery-codes', { method: 'POST', body: { password: p } }); close(); showRecoveryCodes(r.recoveryCodes, false);
+            mfa.enabled ? h('button', { class: 'btn secondary', onclick: () => askPw('Gerar novos códigos de recuperação', true, async (p, c, close) => {
+              const r = await api('/mfa/recovery-codes', { method: 'POST', body: { password: p, code: c } }); close(); showRecoveryCodes(r.recoveryCodes, false);
             }) }, 'Novos códigos de recuperação') : null,
             mfa.enabled && !mfa.required ? h('button', { class: 'btn danger', onclick: () => askPw('Desativar 2FA', true, async (p, c, close) => {
               await api('/mfa/disable', { method: 'POST', body: { password: p, code: c } }); close(); toast('2FA desativado.'); route();

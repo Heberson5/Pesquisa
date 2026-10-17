@@ -46,14 +46,7 @@ function publicView() {
   };
 }
 
-const isPrivateOrLocal = (ip) => {
-  if (net.isIPv4(ip)) {
-    const [a, b] = ip.split('.').map(Number);
-    return a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || a >= 224;
-  }
-  const x = ip.toLowerCase();
-  return x === '::1' || x === '::' || x.startsWith('fc') || x.startsWith('fd') || x.startsWith('fe8') || x.startsWith('fe9') || x.startsWith('fea') || x.startsWith('feb') || x.startsWith('::ffff:');
-};
+const isPrivateOrLocal = (ip) => !require('./netguard').isPublicIp(ip);
 
 // Resolve o servidor SMTP para um IP PÚBLICO (impede apontar para serviços internos da VPS). O IP é "fixado" no envio.
 async function resolvePublic(host) {

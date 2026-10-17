@@ -29,6 +29,7 @@ router.post('/pair', pairLimiter, (req, res) => {
   run(`UPDATE devices SET token_hash = ?, pair_code_hash = NULL, pair_expires_at = NULL,
        paired_at = ?, last_seen_at = ?, last_ip = ? WHERE id = ?`, sha256(token), Date.now(), Date.now(), req.ip, device.id);
   audit(null, 'device.paired', { deviceId: device.id }, req.ip);
+  require('../live').publish('tablets', { branchId: device.branch_id });
   res.json({ token });
 });
 

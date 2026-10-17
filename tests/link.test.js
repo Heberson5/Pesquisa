@@ -40,8 +40,10 @@ test.after(stop);
 const tablet = (body) => new Client().req('POST', '/api/kiosk/responses', { body, headers: { Authorization: 'Bearer ' + devTok } });
 const resp = (answers, extra = {}) => ({ uuid: crypto.randomUUID(), surveyId: survey, answers, ...extra });
 
-test('condicionais: pergunta escondida não pode ser respondida; visível obrigatória é exigida', async () => {
-  assert.equal((await tablet(resp([{ questionId: q[0].id, value: 10 }, { questionId: q[1].id, value: 'Preço' }]))).status, 400, 'pergunta de detrator respondida por promotor');
+test('condicionais: resposta de pergunta escondida é descartada; visível obrigatória é exigida', async () => {
+  const u = crypto.randomUUID();
+  assert.equal((await tablet({ ...resp([{ questionId: q[0].id, value: 10 }, { questionId: q[1].id, value: 'Preço' }]), uuid: u })).status, 201, 'promotor com resposta da pergunta de detrator');
+  assert.equal(get('SELECT COUNT(*) AS n FROM answers a JOIN responses r ON r.id = a.response_id WHERE r.uuid = ?', u).n, 1, 'só a nota é gravada');
   assert.equal((await tablet(resp([{ questionId: q[0].id, value: 3 }]))).status, 400, 'detrator sem responder a obrigatória visível');
   assert.equal((await tablet(resp([{ questionId: q[0].id, value: 3 }, { questionId: q[1].id, value: 'Fila' }]))).status, 201);
   assert.equal((await tablet(resp([{ questionId: q[0].id, value: 10 }, { questionId: q[2].id, value: 'Atendimento' }]))).status, 201);

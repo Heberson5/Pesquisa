@@ -3,6 +3,7 @@
 const { get, run } = require('./db');
 const { randomToken, sha256, safeEqual } = require('./security');
 const { HttpError } = require('./validate');
+const { accessFor, isPrivileged } = require('./permissions');
 
 const SECURE_COOKIE = process.env.COOKIE_SECURE === 'true' || process.env.NODE_ENV === 'production';
 const COOKIE_NAME = SECURE_COOKIE ? '__Host-sid' : 'sid';
@@ -13,7 +14,9 @@ function parseCookies(header) {
   const out = {};
   for (const part of String(header || '').split(';')) {
     const i = part.indexOf('=');
-    if (i > 0) out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim());
+    if (i <= 0) continue;
+    // Cookie mal codificado (de outro site do mesmo domínio, por exemplo) é ignorado em vez de derrubar o painel.
+    try { out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim()); } catch { /* ignora */ }
   }
   return out;
 }
@@ -43,14 +46,22 @@ function destroySession(req, res) {
 
 function destroyUserSessions(userId) { run('DELETE FROM sessions WHERE user_id = ?', userId); }
 
+// Sessão ainda vale? (mesmas regras do requireUser: usuário ativo, tempo sem uso e tempo máximo do login).
+// Usada pelo canal de tempo real, que fica aberto sem novas requisições.
+function sessionValid(tokenHash, now = Date.now()) {
+  const s = get('SELECT s.created_at, s.last_seen_at, u.active FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ?', tokenHash);
+  return !!s && !!s.active && now - s.last_seen_at <= IDLE_MS && now - s.created_at <= ABSOLUTE_MS;
+}
+
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
-const MFA_SETUP_ALLOWED = new Set(['GET /me', 'POST /mfa/setup', 'POST /mfa/enable', 'POST /logout']);
+// Caminho completo (com o prefixo do roteador): rotas de mesmo nome em outros roteadores não passam.
+const MFA_SETUP_ALLOWED = new Set(['GET /api/admin/me', 'POST /api/admin/mfa/setup', 'POST /api/admin/mfa/enable', 'POST /api/admin/logout']);
 
 // Middleware: exige sessão válida; em métodos que alteram dados exige CSRF + Origin.
 function requireUser(req, res, next) {
   const token = parseCookies(req.headers.cookie)[COOKIE_NAME];
   if (!token || token.length > 100) throw new HttpError(401, 'Sessão expirada. Faça login novamente.');
-  const s = get(`SELECT s.*, u.name, u.email, u.role, u.active FROM sessions s JOIN users u ON u.id = s.user_id
+  const s = get(`SELECT s.*, u.name, u.email, u.role, u.role_id, u.active, u.totp_enabled FROM sessions s JOIN users u ON u.id = s.user_id
                  WHERE s.token_hash = ?`, sha256(token));
   const now = Date.now();
   if (!s || !s.active || now - s.last_seen_at > IDLE_MS || now - s.created_at > ABSOLUTE_MS) {
@@ -64,15 +75,14 @@ function requireUser(req, res, next) {
   }
   if (now - s.last_seen_at > 60_000) run('UPDATE sessions SET last_seen_at = ? WHERE token_hash = ?', now, s.token_hash);
   req.user = { id: s.user_id, name: s.name, email: s.email, role: s.role, csrf: s.csrf, mfaSetupRequired: !!s.mfa_setup_required, sessionHash: s.token_hash };
+  // Perfil lido a cada requisição: mudar as permissões de um perfil vale na hora, sem novo login.
+  req.user.access = accessFor({ id: s.user_id, role: s.role, role_id: s.role_id });
+  // 2FA obrigatório ligado depois do login: vale também para as sessões já abertas.
+  if (!req.user.mfaSetupRequired && !s.totp_enabled && require('./settings').getSettings().requireAdminMfa && isPrivileged(req.user)) req.user.mfaSetupRequired = true;
   // Administrador sem 2FA (quando obrigatório): só pode configurar o 2FA, ver seus dados ou sair.
-  if (req.user.mfaSetupRequired && !MFA_SETUP_ALLOWED.has(`${req.method} ${req.path}`)) {
+  if (req.user.mfaSetupRequired && !MFA_SETUP_ALLOWED.has(`${req.method} ${req.baseUrl}${req.path}`)) {
     return res.status(403).json({ error: 'Ative a autenticação em duas etapas para continuar.', code: 'MFA_SETUP_REQUIRED' });
   }
-  next();
-}
-
-function requireAdmin(req, res, next) {
-  if (req.user?.role !== 'admin') throw new HttpError(403, 'Acesso restrito a administradores.');
   next();
 }
 
@@ -90,4 +100,4 @@ function requireDevice(req, res, next) {
   next();
 }
 
-module.exports = { createSession, destroySession, destroyUserSessions, requireUser, requireAdmin, requireDevice };
+module.exports = { createSession, destroySession, destroyUserSessions, sessionValid, requireUser, requireDevice };

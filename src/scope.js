@@ -1,11 +1,12 @@
 'use strict';
-// Escopo por filial: admin vê todas; gestor só as filiais vinculadas a ele.
+// Escopo por filial: perfis com "todas as filiais" (e o administrador) veem tudo; os demais só as filiais vinculadas ao usuário.
 const { get, all } = require('./db');
 const { HttpError } = require('./validate');
+const { accessFor } = require('./permissions');
 
-// Retorna null (todas as filiais) para admin, ou a lista de filiais do gestor.
+// Retorna null (todas as filiais) ou a lista de filiais do usuário.
 function scope(user) {
-  if (user.role === 'admin') return null;
+  if (accessFor(user).scopeAll) return null;
   return all('SELECT branch_id FROM user_branches WHERE user_id = ?', user.id).map((r) => r.branch_id);
 }
 function assertBranch(user, branchId) {

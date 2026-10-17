@@ -5,6 +5,8 @@ const crypto = require('node:crypto');
 const { get, run, tx } = require('../src/db');
 const { hashPassword, passwordPolicyError } = require('../src/security');
 const { encrypt, lookup } = require('../src/vault');
+const { GESTOR_DEFAULT } = require('../src/permissions');
+const { localDay } = require('../src/time');
 
 if (process.env.NODE_ENV === 'production') { console.error('seed:demo não pode rodar em produção.'); process.exit(1); }
 if (get('SELECT 1 FROM surveys LIMIT 1')) { console.error('O banco já possui dados; seed ignorado.'); process.exit(0); }
@@ -23,7 +25,7 @@ tx(() => {
   const adminId = run("INSERT INTO users (name, email, password_hash, role, created_at) VALUES (?,?,?,'admin',?)",
     'Administrador Demo', 'admin@demo.local', hashPassword(adminPw), now).lastInsertRowid;
   const week = JSON.stringify([null, ...Array(5).fill({ open: '08:00', close: '20:00' }), { open: '09:00', close: '14:00' }]);
-  const branches = [['SP01', 'São Paulo — Paulista', 'São Paulo', 62, 50], ['RJ01', 'Rio — Barra', 'Rio de Janeiro', 35, 40], ['BH01', 'Belo Horizonte — Savassi', 'Belo Horizonte', 15, 30]]
+  const branches = [['SP01', 'São Paulo — Paulista', 'São Paulo', 62, 75], ['RJ01', 'Rio — Barra', 'Rio de Janeiro', 35, 70], ['BH01', 'Belo Horizonte — Savassi', 'Belo Horizonte', 15, 65]]
     .map(([code, name, city, bias, goal]) => ({ id: run('INSERT INTO branches (code, name, city, nps_goal, hours_json, alert_emails, created_at) VALUES (?,?,?,?,?,?,?)',
       code, name, city, goal, null, JSON.stringify([`gerente.${code.toLowerCase()}@demo.local`]), now).lastInsertRowid, bias }));
   void week;
@@ -65,11 +67,12 @@ tx(() => {
       // ~30% das respostas vieram pelo QR Code; a maioria autorizou a localização (cidade/UF/região).
       const viaQr = Math.random() < 0.3;
       const place = viaQr && Math.random() < 0.75 ? PLACES[rnd(0, PLACES.length - 1)] : null;
-      const rid = run(`INSERT INTO responses (uuid, survey_id, branch_id, device_id, started_at, submitted_at, received_at, channel, geo_city, geo_uf, geo_region, geo_lat, geo_lng, device_label)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      const rid = run(`INSERT INTO responses (uuid, survey_id, branch_id, device_id, started_at, submitted_at, received_at, channel, geo_city, geo_uf, geo_region, geo_lat, geo_lng, device_label, local_day)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       crypto.randomUUID(), surveyId, b.id, viaQr ? null : devId, t - rnd(20, 90) * 1000, t, t, viaQr ? 'link' : 'tablet',
       place?.[0] ?? null, place?.[1] ?? null, place?.[2] ?? null, place?.[3] ?? null, place?.[4] ?? null,
-      viaQr ? ['iPhone · Safari', 'Android (celular) · Chrome', 'Android (celular) · Samsung Internet', 'iPhone · Instagram'][rnd(0, 3)] : (devName || null)).lastInsertRowid;
+      viaQr ? ['iPhone · Safari', 'Android (celular) · Chrome', 'Android (celular) · Samsung Internet', 'iPhone · Instagram'][rnd(0, 3)] : (devName || null),
+      localDay(t)).lastInsertRowid; // dia local já gravado: aparece nos filtros mesmo com o servidor rodando
       const happy = Math.random() * 100 < b.bias + 30;
       const score = happy ? rnd(8, 10) : rnd(2, 8);
       const nps0 = Math.max(0, Math.min(10, score + rnd(-1, 1)));
@@ -101,6 +104,10 @@ tx(() => {
     }
   }
   void adminId;
+  // Perfis: os usuários recebem o perfil padrão equivalente; mais um perfil de exemplo criado pela empresa.
+  run("UPDATE users SET role_id = (SELECT id FROM roles WHERE builtin = users.role) WHERE role_id IS NULL");
+  run("INSERT INTO roles (name, description, scope, perms, created_at, updated_at) VALUES ('Supervisor regional', 'Exemplo: vê todas as filiais, cuida de campanhas e tablets.', 'all', ?, ?, ?)",
+    JSON.stringify([...GESTOR_DEFAULT, 'campanhas.incluir', 'campanhas.excluir', 'filiais.qrcode', 'auditoria.ver']), now, now);
 });
 console.log('Dados de demonstração criados.');
 console.log('  admin:  admin@demo.local');

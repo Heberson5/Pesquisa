@@ -37,7 +37,9 @@ docker compose up -d --build          # o app fica em 127.0.0.1:3000 (inacessív
 e configure seu proxy apontando para `127.0.0.1:3000` (exemplo pronto para nginx em `deploy/nginx-exemplo.conf`;
 certificado com `sudo certbot --nginx -d pesquisa.sauberlich.com.br`).
 O proxy **precisa substituir** o cabeçalho `X-Forwarded-For` pelo IP real do cliente (o exemplo já faz isso);
-senão os limites de tentativas por IP podem ser burlados.
+senão os limites de tentativas por IP podem ser burlados. O app só aceita esse cabeçalho vindo da própria VPS ou
+da rede interna do Docker (`TRUST_PROXY: loopback,uniquelocal` no `docker-compose.yml`). Se rodar a imagem sem o
+compose, defina `TRUST_PROXY` do mesmo jeito; sem proxy na frente, deixe sem definir.
 
 Confira: `docker compose ps` (app **healthy**) e abra https://pesquisa.sauberlich.com.br/admin/
 
@@ -53,7 +55,17 @@ No primeiro login o sistema exige ativar o 2FA (Google Authenticator/Microsoft A
 3. **Filiais**: cadastre as filiais (e-mails de alerta, meta, horário).
 4. **Pesquisas**: ajuste a pesquisa e escolha a pesquisa padrão de cada filial.
 5. **Tablets**: gere o código e siga o **Guia de instalação** (docs/INSTALACAO-TABLET.md).
-6. **Usuários**: crie os gestores e vincule às filiais.
+6. **Permissões**: confira os perfis (o "Gestor de filial" já vem pronto) e crie outros se precisar.
+7. **Usuários**: crie as pessoas, escolha o perfil de cada uma e vincule às filiais.
+8. **Configurações → E-mail e WhatsApp**: escolha como o WhatsApp envia os alertas. No modo **QR Code**, leia o código
+   com o celular da empresa (WhatsApp → Aparelhos conectados). Use um chip só para os alertas.
+
+### WhatsApp pelo QR Code
+- O servidor precisa conseguir sair para `web.whatsapp.com` na porta 443 (é o padrão de uma VPS; só muda se houver um firewall de saída).
+- A sessão fica criptografada no banco, com a mesma chave dos outros segredos. Quem tem o backup do banco **e** a chave
+  consegue enviar mensagens como esse número: guarde os dois separados.
+- Ao atualizar ou reiniciar o servidor, a conexão volta sozinha. Se o celular desconectar o sistema, os administradores
+  recebem um e-mail e as mensagens esperam na fila por até 24 horas.
 
 ## Firewall da VPS
 Libere apenas 22 (SSH), 80 e 443. Exemplo com UFW:

@@ -4,12 +4,29 @@
 const { get, run, tx } = require('./db');
 const geoLib = require('./geo');
 const { HttpError, bad, int, str, UUID_RE } = require('./validate');
-const { loadSurvey, normalizeAnswer, isVisible, LANGS } = require('./surveys');
+const { loadSurvey, normalizeAnswer, isVisible, nextIndex, LANGS } = require('./surveys');
 const { encrypt, lookup, normPhone, normEmail } = require('./vault');
 const { isEmail } = require('./notify');
 const { publicBranding } = require('./settings');
 const alerts = require('./alerts');
 const { timezone } = require('./config');
+const zones = require('./zones');
+const { localDay } = require('./time');
+
+// Respostas gravadas antes do "dia local": calcula pelo fuso atual da filial (uma vez, na atualização).
+(function backfillLocalDays() {
+  const { all } = require('./db');
+  const rows = all('SELECT r.id, r.submitted_at, r.branch_id, d.timezone AS device_tz FROM responses r LEFT JOIN devices d ON d.id = r.device_id WHERE r.local_day IS NULL');
+  if (!rows.length) return;
+  const tzMemo = new Map(); // um cálculo por filial + fuso do tablet
+  tx(() => {
+    for (const r of rows) {
+      const k = `${r.branch_id}|${r.device_tz}`;
+      if (!tzMemo.has(k)) tzMemo.set(k, zones.forBranch(get('SELECT id, timezone FROM branches WHERE id = ?', r.branch_id), r.device_tz ? { timezone: r.device_tz } : null));
+      run('UPDATE responses SET local_day = ? WHERE id = ?', localDay(r.submitted_at, tzMemo.get(k)), r.id);
+    }
+  });
+})();
 
 // ---------------------------------------------------------------- pesquisa vigente (com campanhas agendadas)
 // A campanha mais recente que cobre o momento vence; sem campanha, vale a pesquisa padrão da filial.
@@ -47,8 +64,8 @@ function surveyPayload(survey) {
     idleSeconds: survey.idle_seconds,
     contactMode: survey.contact_mode,
     questions: survey.questions.map((q) => ({
-      id: q.id, text: q.text, helpText: q.help_text, type: q.type, required: q.required, options: q.options,
-      display: q.display, icon: q.icon, showIf: q.show_if, i18n: q.i18n,
+      id: q.id, text: q.text, helpText: q.help_text, type: q.type, required: q.required, isNps: q.is_nps, options: q.options,
+      display: q.display, icon: q.icon, showIf: q.show_if, jumps: q.jumps, i18n: q.i18n,
     })),
   };
 }
@@ -87,8 +104,10 @@ function buildConfig(branch, extra = {}, tz = timezone) {
 function parseContact(raw, survey, minNps) {
   if (raw === undefined || raw === null) return null;
   if (typeof raw !== 'object' || Array.isArray(raw)) throw bad('Contato inválido.');
-  if (survey.contact_mode === 'never') throw bad('Esta pesquisa não coleta contato.');
-  if (survey.contact_mode === 'detractors' && !(minNps !== null && minNps <= alerts.DETRACTOR_MAX)) throw bad('Contato não disponível para esta resposta.');
+  // Contato que a pesquisa não pede (desligado, ou cliente que não é detrator): é descartado — nunca gravado —,
+  // mas a resposta é aceita (recusar faria o tablet perder as notas do cliente).
+  if (survey.contact_mode === 'never') return null;
+  if (survey.contact_mode === 'detractors' && !(minNps !== null && minNps <= alerts.DETRACTOR_MAX)) return null;
   if (raw.consent !== true) throw bad('É preciso autorizar o uso dos dados de contato.');
   const name = str(raw.name, { field: 'nome', max: 100, optional: true });
   const phone = raw.phone ? normPhone(str(raw.phone, { field: 'telefone', max: 30 })) : null;
@@ -100,7 +119,10 @@ function parseContact(raw, survey, minNps) {
 }
 
 // ---------------------------------------------------------------- gravação
-function saveResponse({ branch, deviceId = null, deviceLabel = null, channel, body }) {
+// claim: função chamada dentro da transação, antes de gravar (ex.: marcar o bilhete do QR Code como usado);
+// se devolver false, nada é gravado. startedVersionAt: quando o cliente abriu a pesquisa, por fonte confiável
+// (o bilhete assinado do QR Code) — vale mais que o que o aparelho informa.
+function saveResponse({ branch, deviceId = null, deviceLabel = null, channel, body, claim = null, startedVersionAt = null }) {
   if (!body || typeof body !== 'object') throw bad('Resposta inválida.');
   if (typeof body.uuid !== 'string' || !UUID_RE.test(body.uuid)) throw bad('Identificador inválido.');
   const surveyId = int(body.surveyId, { field: 'pesquisa', min: 1 });
@@ -128,18 +150,30 @@ function saveResponse({ branch, deviceId = null, deviceLabel = null, channel, bo
   const known = new Set(survey.questions.map((q) => q.id));
   for (const qid of byId.keys()) if (!known.has(qid)) throw bad('Pergunta não pertence à pesquisa.');
 
-  // Perguntas condicionais: só valem (e só são obrigatórias) quando a condição é atendida.
+  // Refaz o caminho do cliente: ramificações pulam perguntas e condicionais só valem quando atendidas.
+  // Resposta para pergunta fora do caminho é descartada (não é gravada nem conta nos relatórios): assim uma
+  // resposta guardada offline antes de alguém mudar as regras não é perdida. Pelo mesmo motivo, se a pesquisa
+  // foi alterada depois que o cliente começou, as obrigatórias do novo caminho não são exigidas.
+  // A versão que o cliente exibiu (config.survey.version) é a referência: um tablet offline pode continuar com a
+  // versão antiga por horas e o cliente começar DEPOIS da alteração. Sem versão (clientes antigos), vale o horário.
+  // (Valor estranho é ignorado em vez de recusar: recusar descartaria a resposta guardada no tablet.)
+  // No QR Code (aberto a qualquer pessoa) vale só o horário do bilhete assinado pelo servidor; no tablet (aparelho
+  // pareado), a versão exibida — só versão ANTERIOR à atual dispensa as obrigatórias.
+  const clientVersion = Number.isSafeInteger(body.surveyVersion) ? body.surveyVersion : null;
+  const changedSince = startedVersionAt !== null ? startedVersionAt < survey.updated_at
+    : clientVersion !== null ? clientVersion < survey.updated_at : (startedAt ?? submittedAt) < survey.updated_at;
   const raw = new Map();
   const normalized = [];
-  for (const q of survey.questions) {
-    if (!isVisible(q, raw)) {
-      const v = byId.get(q.id);
-      if (!(v === undefined || v === null || v === '' || (Array.isArray(v) && !v.length))) throw bad('Resposta para pergunta que não deveria aparecer.');
-      continue;
+  let next = 0;
+  survey.questions.forEach((q, i) => {
+    if (i < next || !isVisible(q, raw)) {
+      if (i >= next) next = i + 1;
+      return;
     }
-    const v = normalizeAnswer(q, byId.get(q.id));
+    const v = normalizeAnswer(changedSince ? { ...q, required: false } : q, byId.get(q.id));
     if (v !== null) { normalized.push({ q, v }); raw.set(q.id, byId.get(q.id)); }
-  }
+    next = nextIndex(survey.questions, i, raw.get(q.id));
+  });
   if (normalized.length === 0) throw bad('Resposta vazia.');
 
   const npsScores = normalized.filter((x) => x.q.is_nps).map((x) => x.v.num);
@@ -155,20 +189,29 @@ function saveResponse({ branch, deviceId = null, deviceLabel = null, channel, bo
   const lang = typeof body.lang === 'string' && survey.languages.includes(body.lang) && LANGS.includes(body.lang) ? body.lang : null;
 
   const result = tx(() => {
+    if (claim && !claim()) throw new HttpError(409, 'Esta avaliação já foi enviada. Obrigado!');
     if (get('SELECT 1 FROM responses WHERE uuid = ?', body.uuid.toLowerCase())) return { created: false };
+    // Dia no calendário do tablet (ou da filial, no QR Code): é o que vale nos filtros e gráficos.
+    const tz = zones.forBranch(branch, deviceId ? get('SELECT timezone FROM devices WHERE id = ?', deviceId) : null);
     const r = run(`INSERT INTO responses (uuid, survey_id, branch_id, device_id, started_at, submitted_at, received_at, channel, lang,
-        contact_name_enc, contact_phone_enc, contact_email_enc, contact_phone_lookup, contact_email_lookup, contact_consent_at, geo_lat, geo_lng, geo_city, geo_uf, geo_region, device_label)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        contact_name_enc, contact_phone_enc, contact_email_enc, contact_phone_lookup, contact_email_lookup, contact_consent_at, geo_lat, geo_lng, geo_city, geo_uf, geo_region, device_label, local_day)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     body.uuid.toLowerCase(), survey.id, branch.id, deviceId, startedAt, submittedAt, now, channel, lang,
     contact ? encrypt(contact.name) : null, contact ? encrypt(contact.phone) : null, contact ? encrypt(contact.email) : null,
     contact?.phone ? lookup('phone:' + contact.phone) : null, contact?.email ? lookup('email:' + contact.email) : null, contact ? now : null,
-    geo?.lat ?? null, geo?.lng ?? null, geo?.city ?? null, geo?.uf ?? null, geo?.region ?? null, deviceLabel ? String(deviceLabel).slice(0, 80) : null);
+    geo?.lat ?? null, geo?.lng ?? null, geo?.city ?? null, geo?.uf ?? null, geo?.region ?? null, deviceLabel ? String(deviceLabel).slice(0, 80) : null, localDay(submittedAt, tz));
     for (const { q, v } of normalized) {
       run('INSERT INTO answers (response_id, question_id, value_num, value_text) VALUES (?,?,?,?)', r.lastInsertRowid, q.id, v.num, v.text);
     }
     return { created: true, id: Number(r.lastInsertRowid) };
   });
-  if (result.created) alerts.onResponse(result.id);
+  if (result.created) {
+    const caseId = alerts.onResponse(result.id);
+    // Tempo real: os painéis que enxergam esta filial atualizam Visão geral, Respostas e Casos.
+    const live = require('./live');
+    live.publish('respostas', { branchId: branch.id });
+    if (caseId) live.publish('casos', { branchId: branch.id });
+  }
   return result;
 }
 

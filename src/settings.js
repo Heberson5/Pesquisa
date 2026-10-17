@@ -22,16 +22,20 @@ const DEFAULTS = {
   faceStyle: 'color', // carinhas coloridas ou monocromáticas
   requireAdminMfa: true, // 2FA obrigatório para administradores
   privacyText: 'Suas respostas são usadas apenas para melhorar nosso atendimento. Dados de contato e localização (cidade e estado aproximados, apenas pelo QR Code) só são coletados com sua autorização, ficam protegidos e podem ser excluídos a qualquer momento a seu pedido.',
-  retention: { commentsMonths: 24, contactsMonths: 12, auditMonths: 24 },
+  // Prazos de guarda (LGPD), em meses, até 10 anos. As notas (sem dados pessoais) ficam sem prazo: são a base dos relatórios.
+  retention: { commentsMonths: 24, contactsMonths: 12, geoMonths: 12, auditMonths: 24 },
   alerts: { detractorEmail: true, webhookUrl: null, whatsappTemplate: null, whatsappLanguage: 'pt_BR' },
+  // WhatsApp: 'meta' (API oficial, modelo aprovado), 'qr' (número da empresa conectado por QR Code) ou 'off'.
+  // No modo QR as mensagens saem uma por vez, com pausa sorteada entre o mínimo e o máximo (15 a 60 s).
+  whatsapp: { mode: 'meta', minDelaySec: 15, maxDelaySec: 60 },
   weeklyReport: { enabled: false, weekday: 1, hour: 8, extraEmails: [] },
-  defaultNpsGoal: 50,
+  defaultNpsGoal: 75, // escala de 0 a 100
   offlineAlert: { enabled: true, minutes: 30 },
   // Tela do tablet: mantém acesa e escurece (economiza bateria) depois de um tempo sem toque.
   screen: { keepAwake: true, dim: true, dimAfterSeconds: 30, dimLevel: 70 },
 };
 
-const OBJECT_KEYS = ['menuIcons', 'retention', 'alerts', 'weeklyReport', 'offlineAlert', 'screen'];
+const OBJECT_KEYS = ['menuIcons', 'retention', 'alerts', 'whatsapp', 'weeklyReport', 'offlineAlert', 'screen'];
 
 // Aceita somente texto (recusa listas/objetos que virariam texto por conversão automática).
 function text(v, fallback, field) {
@@ -54,7 +58,12 @@ function getSettings() {
   const out = structuredClone(DEFAULTS);
   for (const { key, value } of all('SELECT key, value FROM settings')) {
     if (!Object.hasOwn(DEFAULTS, key)) continue;
-    try { out[key] = OBJECT_KEYS.includes(key) ? { ...DEFAULTS[key], ...JSON.parse(value) } : JSON.parse(value); } catch { /* ignora valor corrompido */ }
+    try {
+      const v = JSON.parse(value);
+      out[key] = OBJECT_KEYS.includes(key) ? { ...DEFAULTS[key], ...v } : v;
+      // Versões antigas não tinham prazo próprio para a localização: valia o dos contatos.
+      if (key === 'retention' && v && v.geoMonths === undefined) out.retention.geoMonths = out.retention.contactsMonths;
+    } catch { /* ignora valor corrompido */ }
   }
   return out;
 }
@@ -105,7 +114,7 @@ function saveSettings(input) {
   next.retention = { ...cur.retention };
   if (input.retention !== undefined) {
     obj(input.retention, 'retenção');
-    for (const [k, min, max] of [['commentsMonths', 1, 120], ['contactsMonths', 1, 60], ['auditMonths', 6, 120]]) {
+    for (const [k, min, max] of [['commentsMonths', 1, 120], ['contactsMonths', 1, 120], ['geoMonths', 1, 120], ['auditMonths', 6, 120]]) {
       if (input.retention[k] !== undefined) next.retention[k] = int(input.retention[k], { field: 'prazo de retenção', min, max });
     }
   }
@@ -129,6 +138,18 @@ function saveSettings(input) {
       next.alerts.whatsappLanguage = a.whatsappLanguage;
     }
   }
+  next.whatsapp = { ...cur.whatsapp };
+  if (input.whatsapp !== undefined) {
+    obj(input.whatsapp, 'WhatsApp');
+    const w = input.whatsapp;
+    if (w.mode !== undefined) {
+      if (!['meta', 'qr', 'off'].includes(w.mode)) throw bad('Forma de conexão do WhatsApp inválida.');
+      next.whatsapp.mode = w.mode;
+    }
+    if (w.minDelaySec !== undefined) next.whatsapp.minDelaySec = int(w.minDelaySec, { field: 'intervalo mínimo', min: 15, max: 60 });
+    if (w.maxDelaySec !== undefined) next.whatsapp.maxDelaySec = int(w.maxDelaySec, { field: 'intervalo máximo', min: 15, max: 60 });
+    if (next.whatsapp.minDelaySec > next.whatsapp.maxDelaySec) throw bad('O intervalo mínimo não pode ser maior que o máximo.');
+  }
   next.weeklyReport = { ...cur.weeklyReport };
   if (input.weeklyReport !== undefined) {
     obj(input.weeklyReport, 'relatório semanal');
@@ -138,7 +159,7 @@ function saveSettings(input) {
     if (w.hour !== undefined) next.weeklyReport.hour = int(w.hour, { field: 'hora', min: 0, max: 23 });
     if (w.extraEmails !== undefined) next.weeklyReport.extraEmails = emailList(w.extraEmails);
   }
-  if (input.defaultNpsGoal !== undefined) next.defaultNpsGoal = input.defaultNpsGoal === null ? null : int(input.defaultNpsGoal, { field: 'meta de NPS', min: -100, max: 100 });
+  if (input.defaultNpsGoal !== undefined) next.defaultNpsGoal = input.defaultNpsGoal === null ? null : int(input.defaultNpsGoal, { field: 'meta de NPS', min: 0, max: 100 });
   else next.defaultNpsGoal = cur.defaultNpsGoal;
   next.offlineAlert = { ...cur.offlineAlert };
   if (input.offlineAlert !== undefined) {

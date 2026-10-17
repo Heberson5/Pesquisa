@@ -34,6 +34,7 @@ async function tick() {
 }
 
 function start() {
+  require('./whatsapp-qr').boot(); // reconecta o WhatsApp por QR Code, se estiver em uso
   const t = setInterval(tick, 15_000);
   t.unref();
   setTimeout(tick, 2_000).unref();

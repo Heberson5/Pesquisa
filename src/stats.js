@@ -3,7 +3,8 @@ const { UFS } = require('./geo');
 // Estatísticas e relatório: usados pelo painel, pela exportação PowerPoint e pelo relatório semanal por e-mail.
 // O escopo do usuário (admin: todas as filiais; gestor: as dele) é aplicado em todas as consultas.
 const { get, all } = require('./db');
-const { bad, id, dateParam } = require('./validate');
+const { bad, id, dayParam } = require('./validate');
+const zones = require('./zones');
 const { scope, assertBranch, placeholders } = require('./scope');
 const { loadSurvey, npsFromCounts } = require('./surveys');
 const { getSettings } = require('./settings');
@@ -14,16 +15,25 @@ const { MEDIA_DIR } = require('./db');
 function responseFilter(user, q) {
   const where = [];
   const params = [];
-  const from = dateParam(q.from, 'de');
-  const to = dateParam(q.to, 'até');
-  if (from !== null) { where.push('r.submitted_at >= ?'); params.push(from); }
-  if (to !== null) { where.push('r.submitted_at < ?'); params.push(to + 86_400_000); }
+  // Período pelo dia local da resposta (fuso do tablet/filial), não pelo relógio do servidor.
+  const from = dayParam(q.from, 'de');
+  const to = dayParam(q.to, 'até');
+  if (from !== null) { where.push('r.local_day >= ?'); params.push(from); }
+  if (to !== null) { where.push('r.local_day <= ?'); params.push(to); }
   if (q.surveyId) { where.push('r.survey_id = ?'); params.push(id(q.surveyId, 'pesquisa')); }
   if (q.channel) { if (!['tablet', 'link'].includes(q.channel)) throw bad('Canal inválido.'); where.push('r.channel = ?'); params.push(q.channel); }
   if (q.branchId) {
     const bid = id(q.branchId, 'filial');
     assertBranch(user, bid);
     where.push('r.branch_id = ?'); params.push(bid);
+  }
+  // Classificação no NPS (atalho dos cards Promotores e Detratores): respostas com nota de NPS na faixa.
+  if (q.nps) {
+    const range = { promotores: [9, 10], neutros: [7, 8], detratores: [0, 6] }[q.nps];
+    if (!range) throw bad('Classificação de NPS inválida.');
+    where.push(`EXISTS (SELECT 1 FROM answers an JOIN questions qn ON qn.id = an.question_id AND qn.is_nps = 1
+      WHERE an.response_id = r.id AND an.value_num BETWEEN ? AND ?)`);
+    params.push(...range);
   }
   if (q.uf) {
     if (q.uf === '_sem') where.push("r.channel = 'link' AND r.geo_region IS NULL");
@@ -61,14 +71,15 @@ function computeStats(user, query) {
   const byQuestion = all(`SELECT q.id, q.text, s.title AS survey, ${NPS_AGG}
       FROM responses r ${NPS_JOIN} JOIN surveys s ON s.id = q.survey_id ${f.sql} GROUP BY q.id ORDER BY s.title, q.position`, ...f.params)
     .map((r) => ({ id: r.id, text: r.text, survey: r.survey, ...npsRow(r) }));
-  const trend = all(`SELECT date(r.submitted_at / 1000, 'unixepoch', 'localtime') AS day, COUNT(DISTINCT r.id) AS responses, ${NPS_AGG}
+  const trend = all(`SELECT r.local_day AS day, COUNT(DISTINCT r.id) AS responses, ${NPS_AGG}
       FROM responses r LEFT JOIN answers a ON a.response_id = r.id AND a.question_id IN (SELECT id FROM questions WHERE is_nps = 1)
       ${f.sql} GROUP BY day ORDER BY day`, ...f.params)
     .map((r) => ({ day: r.day, responses: r.responses, nps: npsRow(r).nps }));
   const scoreDist = all(`SELECT a.value_num AS score, COUNT(*) AS n FROM responses r ${NPS_JOIN} ${f.sql} GROUP BY a.value_num`, ...f.params);
-  const comments = all(`SELECT r.submitted_at, b.name AS branch, q.text AS question, a.value_text AS comment
+  const comments = all(`SELECT r.submitted_at, r.local_day AS day, b.id AS branch_id, b.timezone AS branch_tz, b.name AS branch, q.text AS question, a.value_text AS comment
       FROM responses r JOIN answers a ON a.response_id = r.id JOIN questions q ON q.id = a.question_id AND q.type = 'text'
-      JOIN branches b ON b.id = r.branch_id ${f.sql} ORDER BY r.submitted_at DESC LIMIT 15`, ...f.params);
+      JOIN branches b ON b.id = r.branch_id ${f.sql} ORDER BY r.submitted_at DESC LIMIT 15`, ...f.params)
+    .map(({ branch_id: bid, branch_tz: btz, ...c }) => ({ ...c, tz: zones.forBranch({ id: bid, timezone: btz }) }));
   const channels = all(`SELECT r.channel, COUNT(*) AS n FROM responses r ${f.sql} GROUP BY r.channel`, ...f.params);
   // Regiões de onde vieram as respostas do QR/link (somente quem autorizou a localização).
   const geoWhere = `${f.sql ? f.sql + ' AND' : 'WHERE'} r.geo_region IS NOT NULL`;
