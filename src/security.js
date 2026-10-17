@@ -2,23 +2,43 @@
 // Primitivas de segurança: hash de senha, tokens, rate limit, cabeçalhos HTTP.
 const crypto = require('node:crypto');
 
-const SCRYPT = { N: 16384, r: 8, p: 1, keylen: 64 };
+// scrypt com N=2^14, r=8, p=5: custo equivalente ao recomendado pela OWASP usando só 16 MiB por cálculo
+// (cabe no limite de memória do contêiner). O formato guarda os parâmetros: hashes antigos continuam valendo
+// e são refeitos no próximo login (needsRehash).
+const SCRYPT = { N: 16384, r: 8, p: 5, keylen: 64 };
+const MAXMEM = 64 * 1024 * 1024;
 
 function hashPassword(password) {
   const salt = crypto.randomBytes(16);
-  const hash = crypto.scryptSync(password, salt, SCRYPT.keylen, SCRYPT);
+  const hash = crypto.scryptSync(password, salt, SCRYPT.keylen, { N: SCRYPT.N, r: SCRYPT.r, p: SCRYPT.p, maxmem: MAXMEM });
   return `scrypt$${SCRYPT.N}$${SCRYPT.r}$${SCRYPT.p}$${salt.toString('base64')}$${hash.toString('base64')}`;
 }
 
-function verifyPassword(password, stored) {
+function parseHash(stored) {
   const parts = String(stored || '').split('$');
-  if (parts.length !== 6 || parts[0] !== 'scrypt') return false;
+  if (parts.length !== 6 || parts[0] !== 'scrypt') return null;
   const [, N, r, p, saltB64, hashB64] = parts;
-  const expected = Buffer.from(hashB64, 'base64');
-  const actual = crypto.scryptSync(String(password), Buffer.from(saltB64, 'base64'), expected.length,
-    { N: Number(N), r: Number(r), p: Number(p) });
-  return crypto.timingSafeEqual(actual, expected);
+  const opts = { N: Number(N), r: Number(r), p: Number(p), maxmem: MAXMEM };
+  // Parâmetros absurdos num hash adulterado não podem travar o servidor.
+  if (![opts.N, opts.r, opts.p].every(Number.isInteger) || opts.N > 2 ** 17 || opts.r > 16 || opts.p > 16) return null;
+  return { opts, salt: Buffer.from(saltB64, 'base64'), expected: Buffer.from(hashB64, 'base64') };
 }
+
+function verifyPassword(password, stored) {
+  const h = parseHash(stored);
+  if (!h) return false;
+  const actual = crypto.scryptSync(String(password), h.salt, h.expected.length, h.opts);
+  return crypto.timingSafeEqual(actual, h.expected);
+}
+
+// Mesma conferência, fora da linha principal do servidor: um login não trava os tablets e o painel.
+function verifyPasswordAsync(password, stored) {
+  const h = parseHash(stored);
+  if (!h) return Promise.resolve(false);
+  return new Promise((resolve, reject) => crypto.scrypt(String(password), h.salt, h.expected.length, h.opts,
+    (err, actual) => (err ? reject(err) : resolve(crypto.timingSafeEqual(actual, h.expected)))));
+}
+const needsRehash = (stored) => !String(stored || '').startsWith(`scrypt$${SCRYPT.N}$${SCRYPT.r}$${SCRYPT.p}$`);
 
 // Hash "falso" usado quando o e-mail não existe, para que o tempo de resposta
 // seja igual e não revele quais usuários existem.
@@ -125,6 +145,6 @@ function securityHeaders(req, res, next) {
 }
 
 module.exports = {
-  hashPassword, verifyPassword, DUMMY_HASH, randomToken, sha256, safeEqual,
+  hashPassword, verifyPassword, verifyPasswordAsync, needsRehash, DUMMY_HASH, randomToken, sha256, safeEqual,
   pairingCode, passwordPolicyError, rateLimiter, clientKey, securityHeaders,
 };

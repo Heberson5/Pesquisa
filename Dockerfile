@@ -10,7 +10,6 @@ ENV NODE_ENV=production \
     HOST=0.0.0.0 \
     PORT=3000 \
     DATA_DIR=/data \
-    TRUST_PROXY=1 \
     NODE_OPTIONS=--disable-warning=ExperimentalWarning
 WORKDIR /app
 RUN mkdir -p /data /backups && chown node:node /data /backups

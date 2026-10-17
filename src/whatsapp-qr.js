@@ -158,15 +158,24 @@ const randomGap = () => {
 };
 
 // Enfileira uma mensagem já com o horário de envio sorteado: o primeiro sai na hora (se o número estava parado)
-// e cada um dos seguintes espera de 15 a 60 s depois do anterior.
-function queue(phone, text, kind, label = null) {
+// e cada um dos seguintes espera de 15 a 60 s depois do anterior. Fila com teto: se o próximo horário livre
+// estiver a mais de 2 horas (rajada de alertas), a mensagem é registrada como não enviada em vez de atrasar
+// todas as próximas por horas e arriscar o número da empresa.
+const MAX_BACKLOG_MS = 2 * 3_600_000;
+function queue(phone, text, kind, label = null, responseId = null) {
   const now = Date.now();
   const last = Number(persisted().lastSlot || 0);
   const gap = randomGap();
   const at = Math.max(now, last + gap);
+  const payload = JSON.stringify({ mode: 'qr', text: String(text).slice(0, 4000), label, gap: at === now ? 0 : gap });
+  if (at - now > MAX_BACKLOG_MS) {
+    run("INSERT INTO outbox (kind, channel, recipient, payload, status, last_error, next_attempt_at, created_at, response_id) VALUES (?,?,?,?,'failed',?,?,?,?)",
+      kind, 'whatsapp', phone, payload, 'Fila do WhatsApp cheia (mais de 2 horas de mensagens): não enviada.', now, now, responseId);
+    return null;
+  }
   persist({ lastSlot: at });
-  run('INSERT INTO outbox (kind, channel, recipient, payload, next_attempt_at, created_at) VALUES (?,?,?,?,?,?)',
-    kind, 'whatsapp', phone, JSON.stringify({ mode: 'qr', text: String(text).slice(0, 4000), label, gap: at === now ? 0 : gap }), at, now);
+  run('INSERT INTO outbox (kind, channel, recipient, payload, next_attempt_at, created_at, response_id) VALUES (?,?,?,?,?,?,?)',
+    kind, 'whatsapp', phone, payload, at, now, responseId);
   return at;
 }
 
@@ -181,7 +190,8 @@ async function jidFor(phone) {
 async function sendNow(phone, text) {
   if (transport) return transport.send(phone, text);
   if (!sock || status.state !== 'connected') throw new Error('WhatsApp desconectado.');
-  await sock.sendMessage(await jidFor(phone), { text });
+  // Sem prévia de link: a biblioteca buscaria o endereço citado no texto (que pode vir de um cliente).
+  await sock.sendMessage(await jidFor(phone), { text, linkPreview: null });
 }
 
 // Um envio por vez. Nunca manda dois seguidos antes do intervalo mínimo, nem se o servidor ficou parado.

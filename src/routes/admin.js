@@ -6,18 +6,19 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { get, all, run, tx, audit } = require('../db');
-const { hashPassword, verifyPassword, pairingCode, sha256, passwordPolicyError, rateLimiter } = require('../security');
+const { hashPassword, verifyPasswordAsync, pairingCode, sha256, passwordPolicyError, rateLimiter } = require('../security');
 const { destroySession, destroyUserSessions, requireUser } = require('../auth');
 const perm = require('../permissions');
 const { can, need, needAny } = perm;
 const { HttpError, bad, str, int, bool, id, email } = require('../validate');
 const { QUESTION_TYPES, DISPLAYS, LANGS, LANG_LABELS, CONTACT_MODES, loadSurvey, normalizeQuestions, normalizeI18n, npsFromCounts } = require('../surveys');
 const { getSettings, saveSettings, emailList } = require('../settings');
-const { queueEmail, queueWhatsApp, processOutbox, outboxStatus, webhookSecret, whatsappCheck } = require('../notify');
+const { queueEmail, queueWhatsApp, processOutbox, outboxStatus, webhookSecret, rotateWebhookSecret, whatsappCheck } = require('../notify');
 const delivery = require('../delivery');
 const zones = require('../zones');
 const { responseFilter, computeStats, computeBreakdown, reportFor, NPS_AGG, NPS_JOIN, npsRow } = require('../stats');
-const { resetUserMfa } = require('./auth');
+const authRoutes = require('./auth');
+const { resetUserMfa } = authRoutes;
 const QRCode = require('qrcode');
 const { encrypt, decrypt, lookup } = require('../vault');
 const { publicUrl, timezone: companyTz } = require('../config');
@@ -98,12 +99,19 @@ router.put('/me/notifications', (req, res) => {
   res.json({ ok: true });
 });
 
-router.post('/me/password', loginLimiter, (req, res) => {
+// Troca da própria senha: erro na senha atual conta como tentativa de login (bloqueia quem chuta com uma
+// sessão roubada) e o limite é por pessoa, não só por IP.
+const passwordLimiter = rateLimiter({ windowMs: 15 * 60_000, max: 10, keyFn: (req) => 'pw:' + req.user.id, message: 'Muitas tentativas. Aguarde 15 minutos.' });
+router.post('/me/password', loginLimiter, passwordLimiter, async (req, res) => {
   const u = get('SELECT * FROM users WHERE id = ?', req.user.id);
-  if (!verifyPassword(String(req.body?.current || ''), u.password_hash)) throw bad('Senha atual incorreta.');
+  if (authRoutes.isBlocked(u, req) || !(await verifyPasswordAsync(String(req.body?.current || '').slice(0, 200), u.password_hash))) {
+    authRoutes.registerFailure(u, req, 'user.password_change_failed');
+    throw bad('Senha atual incorreta.');
+  }
   const err = passwordPolicyError(req.body?.password);
   if (err) throw bad(err);
   run('UPDATE users SET password_hash = ? WHERE id = ?', hashPassword(req.body.password), u.id);
+  run('DELETE FROM password_resets WHERE user_id = ?', u.id); // links de redefinição pendentes deixam de valer
   destroyUserSessions(u.id);
   audit(u.id, 'user.password_changed', null, req.ip);
   destroySession(req, res);
@@ -220,8 +228,18 @@ function hoursInput(v) {
   return JSON.stringify(out);
 }
 
+// Os e-mails e WhatsApps avulsos da filial recebem o contato dos clientes insatisfeitos: só quem pode ver o
+// contato do cliente (Casos · Ver contato) pode mudar esses destinatários.
+function assertAlertRecipients(user, b, current = { alert_emails: '[]', alert_phones: '[]' }) {
+  const same = (a, c) => JSON.stringify([...JSON.parse(a || '[]')].sort()) === JSON.stringify([...JSON.parse(c || '[]')].sort());
+  if ((!same(b.alert_emails, current.alert_emails) || !same(b.alert_phones, current.alert_phones)) && !can(user, 'casos', 'contato')) {
+    throw new HttpError(403, 'Os destinatários de alerta recebem o contato dos clientes: só quem pode ver o contato do cliente pode alterá-los.');
+  }
+}
+
 router.post('/branches', need('filiais', 'incluir'), (req, res) => {
   const b = branchInput(req.body);
+  assertAlertRecipients(req.user, b);
   if (get('SELECT 1 FROM branches WHERE code = ?', b.code)) throw new HttpError(409, 'Já existe uma filial com esse código.');
   const r = run('INSERT INTO branches (code, name, city, active, alert_emails, alert_phones, nps_goal, hours_json, timezone, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)',
     b.code, b.name, b.city, b.active, b.alert_emails, b.alert_phones, b.nps_goal, b.hours_json, b.timezone, Date.now());
@@ -233,6 +251,7 @@ router.put('/branches/:id', need('filiais', 'editar'), (req, res) => {
   const bid = id(req.params.id);
   assertBranch(req.user, bid);
   const b = branchInput(req.body);
+  assertAlertRecipients(req.user, b, get('SELECT alert_emails, alert_phones FROM branches WHERE id = ?', bid));
   if (get('SELECT 1 FROM branches WHERE code = ? AND id <> ?', b.code, bid)) throw new HttpError(409, 'Já existe uma filial com esse código.');
   run('UPDATE branches SET code = ?, name = ?, city = ?, active = ?, alert_emails = ?, alert_phones = ?, nps_goal = ?, hours_json = ?, timezone = ? WHERE id = ?',
     b.code, b.name, b.city, b.active, b.alert_emails, b.alert_phones, b.nps_goal, b.hours_json, b.timezone, bid);
@@ -323,12 +342,15 @@ router.delete('/schedules/:id', need('campanhas', 'excluir'), (req, res) => {
 });
 
 // ---------------------------------------------------------------- pesquisas
-router.get('/surveys', (req, res) => {
+// Lista de pesquisas: usada pelas telas e filtros que dependem dela. A contagem de respostas respeita as filiais da pessoa.
+router.get('/surveys', needAny(['pesquisas', 'ver'], ['campanhas', 'ver'], ['dashboard', 'ver'], ['respostas', 'ver'], ['filiais', 'ver'], ['auditoria', 'ver']), (req, res) => {
+  const sc = scope(req.user);
+  const inScope = sc ? ` AND r.branch_id IN (${sc.length ? placeholders(sc) : 'NULL'})` : '';
   res.json(all(`SELECT s.id, s.title, s.active, s.updated_at,
       (SELECT COUNT(*) FROM questions q WHERE q.survey_id = s.id) AS questions,
       (SELECT COUNT(*) FROM questions q WHERE q.survey_id = s.id AND q.is_nps = 1) AS nps_questions,
-      (SELECT COUNT(*) FROM responses r WHERE r.survey_id = s.id) AS responses
-    FROM surveys s ORDER BY s.active DESC, s.updated_at DESC`));
+      (SELECT COUNT(*) FROM responses r WHERE r.survey_id = s.id${inScope}) AS responses
+    FROM surveys s ORDER BY s.active DESC, s.updated_at DESC`, ...(sc || [])));
 });
 
 router.get('/surveys/:id', need('pesquisas', 'ver'), (req, res) => {
@@ -473,14 +495,23 @@ function sniffMime(buf) {
   return null; // SVG, HTML, PDF, executáveis etc. são recusados
 }
 
-router.post('/media', needAny(['pesquisas', 'incluir'], ['pesquisas', 'editar'], ['cfg_marca', 'editar']), express.raw({ type: () => true, limit: MEDIA_MAX }), (req, res) => {
+// Limite de envios por pessoa e espaço total para mídias: ninguém enche o disco do servidor.
+const mediaLimiter = rateLimiter({ windowMs: 60 * 60_000, max: 30, keyFn: (req) => 'media:' + req.user.id, message: 'Muitos arquivos enviados. Aguarde um pouco.' });
+const MEDIA_QUOTA = Number(process.env.MEDIA_QUOTA_MB || 2048) * 1024 * 1024;
+router.post('/media', needAny(['pesquisas', 'incluir'], ['pesquisas', 'editar'], ['cfg_marca', 'editar']), mediaLimiter, express.raw({ type: () => true, limit: MEDIA_MAX }), (req, res) => {
   if (!Buffer.isBuffer(req.body) || req.body.length === 0) throw bad('Arquivo vazio.');
   const mime = sniffMime(req.body);
   if (!mime) throw new HttpError(415, 'Formato não suportado. Use JPG, PNG, WEBP, GIF, MP4 ou WEBM.');
+  // Tudo é conferido antes de gravar o arquivo (nome mal codificado não deixa arquivo perdido no disco).
+  let original;
+  try { original = str(decodeURIComponent(String(req.get('x-filename') || '')).slice(0, 200), { field: 'nome', max: 200, optional: true }); } catch { throw bad('Nome do arquivo inválido.'); }
+  if ((get('SELECT COALESCE(SUM(size), 0) AS n FROM media').n + req.body.length) > MEDIA_QUOTA) throw new HttpError(413, 'Espaço para imagens e vídeos esgotado. Remova mídias antigas das pesquisas.');
   const mediaId = crypto.randomBytes(16).toString('hex');
-  fs.writeFileSync(path.join(MEDIA_DIR, mediaId), req.body, { flag: 'wx', mode: 0o640 });
-  const original = str(decodeURIComponent(String(req.get('x-filename') || '')).slice(0, 200), { field: 'nome', max: 200, optional: true });
-  run('INSERT INTO media (id, mime, size, original_name, created_at) VALUES (?,?,?,?,?)', mediaId, mime, req.body.length, original, Date.now());
+  const file = path.join(MEDIA_DIR, mediaId);
+  fs.writeFileSync(file, req.body, { flag: 'wx', mode: 0o640 });
+  try {
+    run('INSERT INTO media (id, mime, size, original_name, created_at) VALUES (?,?,?,?,?)', mediaId, mime, req.body.length, original, Date.now());
+  } catch (e) { fs.rmSync(file, { force: true }); throw e; }
   audit(req.user.id, 'media.upload', { id: mediaId, mime, size: req.body.length }, req.ip);
   res.status(201).json({ id: mediaId, mime, url: `/media/${mediaId}` });
 });
@@ -543,9 +574,9 @@ router.get('/surveys/:id/breakdown', need('dashboard', 'ver'), (req, res) => {
   res.json(computeBreakdown(req.user, survey, req.query));
 });
 
-function listResponses(user, query, limit, offset) {
+function listResponses(user, query, limit, offset, { count = true } = {}) {
   const f = responseFilter(user, query);
-  const total = get(`SELECT COUNT(*) AS n FROM responses r ${f.sql}`, ...f.params).n;
+  const total = count ? get(`SELECT COUNT(*) AS n FROM responses r ${f.sql}`, ...f.params).n : null;
   const rows = all(`SELECT r.id, r.uuid, r.submitted_at, r.local_day, r.started_at, r.channel, r.lang, r.geo_lat, r.geo_lng, r.geo_city, r.geo_uf, r.geo_region, COALESCE(r.device_label, d.name) AS device_label, b.name AS branch, b.city AS branch_city, s.title AS survey, d.name AS device,
       b.id AS branch_id, b.timezone AS branch_tz, d.timezone AS device_tz
       FROM responses r JOIN branches b ON b.id = r.branch_id JOIN surveys s ON s.id = r.survey_id
@@ -559,12 +590,14 @@ function listResponses(user, query, limit, offset) {
     r.tz = tzMemo.get(k);
     delete r.branch_tz; delete r.device_tz;
   }
-  if (rows.length) {
-    const ans = all(`SELECT a.response_id, q.text, q.type, q.is_nps, a.value_num, a.value_text FROM answers a
-        JOIN questions q ON q.id = a.question_id WHERE a.response_id IN (${placeholders(rows)}) ORDER BY q.position`, ...rows.map((r) => r.id));
-    for (const r of rows) r.answers = ans.filter((a) => a.response_id === r.id).map((a) => ({
-      question: a.text, type: a.type, is_nps: !!a.is_nps, value: displayValue(a),
-    }));
+  // Respostas em blocos de 500 (limite de parâmetros do SQLite) e agrupadas uma vez só.
+  const byResponse = new Map(rows.map((r) => { r.answers = []; return [r.id, r]; }));
+  for (let i = 0; i < rows.length; i += 500) {
+    const ids = rows.slice(i, i + 500).map((r) => r.id);
+    for (const a of all(`SELECT a.response_id, q.text, q.type, q.is_nps, a.value_num, a.value_text FROM answers a
+        JOIN questions q ON q.id = a.question_id WHERE a.response_id IN (${placeholders(ids)}) ORDER BY q.position`, ...ids)) {
+      byResponse.get(a.response_id).answers.push({ question: a.text, type: a.type, is_nps: !!a.is_nps, value: displayValue(a) });
+    }
   }
   return { total, rows };
 }
@@ -610,20 +643,34 @@ function csvCell(v) {
   return '"' + s.replace(/"/g, '""') + '"';
 }
 
-router.get('/responses.csv', need('respostas', 'csv'), (req, res) => {
-  const { rows } = listResponses(req.user, req.query, 100000, 0);
-  const questions = [...new Set(rows.flatMap((r) => (r.answers || []).map((a) => a.question)))];
-  const lines = [['Data/hora', 'Filial', 'Pesquisa', 'Dispositivo', 'Canal', 'Cidade da loja', 'Cidade (cliente)', 'UF (cliente)', 'Região (cliente)', 'Latitude aprox.', 'Longitude aprox.', ...questions].map(csvCell).join(';')];
-  for (const r of rows) {
-    const map = Object.fromEntries((r.answers || []).map((a) => [a.question, a.value]));
-    lines.push([formatLocal(r.submitted_at, r.tz), r.branch, r.survey, r.device_label || r.device, r.channel === 'link' ? 'QR Code' : 'Tablet', r.branch_city,
-      r.geo_city, r.geo_uf, r.geo_region, r.geo_lat, r.geo_lng, ...questions.map((q) => map[q])]
-      .map(csvCell).join(';'));
-  }
-  audit(req.user.id, 'responses.export', { count: rows.length, filter: req.query }, req.ip);
+// CSV: até 100 mil linhas, montado em blocos e enviado aos poucos (o servidor continua atendendo tablets e painel
+// enquanto exporta). Limite de exportações por pessoa.
+const exportLimiter = rateLimiter({ windowMs: 10 * 60_000, max: 10, keyFn: (req) => 'export:' + req.user.id, message: 'Muitas exportações seguidas. Aguarde alguns minutos.' });
+const CSV_MAX = 100_000;
+const CSV_PAGE = 2_000;
+router.get('/responses.csv', need('respostas', 'csv'), exportLimiter, async (req, res) => {
+  const f = responseFilter(req.user, req.query);
+  // Colunas: todas as perguntas que aparecem nas respostas do filtro, na ordem das pesquisas.
+  const questions = all(`SELECT q.text FROM answers a JOIN questions q ON q.id = a.question_id
+      WHERE a.response_id IN (SELECT r.id FROM responses r ${f.sql}) GROUP BY q.text ORDER BY MIN(q.survey_id), MIN(q.position)`, ...f.params).map((q) => q.text);
   res.set('Content-Type', 'text/csv; charset=utf-8');
   res.set('Content-Disposition', 'attachment; filename="respostas.csv"');
-  res.send('﻿' + lines.join('\r\n'));
+  res.write('\uFEFF' + ['Data/hora', 'Filial', 'Pesquisa', 'Dispositivo', 'Canal', 'Cidade da loja', 'Cidade (cliente)', 'UF (cliente)', 'Região (cliente)', 'Latitude aprox.', 'Longitude aprox.', ...questions].map(csvCell).join(';'));
+  let count = 0;
+  for (let offset = 0; offset < CSV_MAX; offset += CSV_PAGE) {
+    const { rows } = listResponses(req.user, req.query, Math.min(CSV_PAGE, CSV_MAX - offset), offset, { count: false });
+    const lines = rows.map((r) => {
+      const map = Object.fromEntries(r.answers.map((a) => [a.question, a.value]));
+      return [formatLocal(r.submitted_at, r.tz), r.branch, r.survey, r.device_label || r.device, r.channel === 'link' ? 'QR Code' : 'Tablet', r.branch_city,
+        r.geo_city, r.geo_uf, r.geo_region, r.geo_lat, r.geo_lng, ...questions.map((q) => map[q])].map(csvCell).join(';');
+    });
+    if (lines.length) res.write('\r\n' + lines.join('\r\n'));
+    count += rows.length;
+    if (rows.length < CSV_PAGE || res.destroyed) break;
+    await new Promise((r) => setImmediate(r));
+  }
+  audit(req.user.id, 'responses.export', { count, filter: req.query }, req.ip);
+  res.end();
 });
 
 // ---------------------------------------------------------------- usuários
@@ -673,7 +720,10 @@ function assertCanManage(actor, u, existing) {
   const sc = scope(actor);
   if (sc) {
     if (!u.branches.every((b) => sc.includes(b))) throw new HttpError(403, 'Você só pode ligar a pessoa às filiais que você enxerga.');
-    if (existing && !all('SELECT branch_id FROM user_branches WHERE user_id = ?', existing.id).every((l) => sc.includes(l.branch_id))) {
+    // Quem só enxerga algumas filiais só altera pessoas ligadas a elas: alguém sem filial (que nem aparece na
+    // lista dessa pessoa) também fica de fora.
+    const links = existing ? all('SELECT branch_id FROM user_branches WHERE user_id = ?', existing.id) : [];
+    if (existing && (!links.length || !links.every((l) => sc.includes(l.branch_id)))) {
       throw new HttpError(403, 'Esta pessoa tem filiais que você não enxerga.');
     }
   }
@@ -709,6 +759,8 @@ router.put('/users/:id', need('usuarios', 'editar'), (req, res) => {
   if (uid === req.user.id) {
     if (u.roleRow.id !== before.id) throw bad('Você não pode mudar o seu próprio perfil.');
     if (!u.active) throw bad('Você não pode desativar a si mesmo.');
+    // A própria senha e o próprio e-mail só mudam em Minha conta (que pede a senha atual).
+    if (u.password || u.email !== existing.email) throw bad('Para trocar a sua senha ou o seu e-mail, use "Minha conta".');
   }
   assertCanManage(req.user, u, existing);
   if (existing.role === 'admin' && existing.active && (u.role !== 'admin' || !u.active) && activeAdmins(uid) === 0) {
@@ -724,9 +776,14 @@ router.put('/users/:id', need('usuarios', 'editar'), (req, res) => {
   tx(() => {
     run('UPDATE users SET name=?, email=?, role=?, role_id=?, active=?, locked_until = CASE WHEN ? THEN NULL ELSE locked_until END WHERE id=?',
       u.name, u.email, u.role, u.roleRow.id, u.active, req.body?.unlock ? 1 : 0, uid);
-    if (u.password) run('UPDATE users SET password_hash = ?, failed_logins = 0, locked_until = NULL WHERE id = ?', hashPassword(u.password), uid);
+    if (u.password) {
+      run('UPDATE users SET password_hash = ?, failed_logins = 0, locked_until = NULL WHERE id = ?', hashPassword(u.password), uid);
+      run('DELETE FROM password_resets WHERE user_id = ?', uid);
+    }
+    if (req.body?.unlock) run('UPDATE users SET failed_logins = 0 WHERE id = ?', uid);
     setUserBranches(uid, u.branches);
   });
+  if (req.body?.unlock || u.password) authRoutes.clearLoginFailures(uid);
   // Usuário desativado: a foto dele é apagada.
   if (!u.active) run('DELETE FROM user_photos WHERE user_id = ?', uid);
   // Mudança de perfil, desativação ou senha nova derrubam as sessões abertas do usuário.
@@ -745,9 +802,26 @@ function assertRoleName(name, exceptId = 0) {
   if (get('SELECT 1 FROM roles WHERE name = ? AND id <> ?', name, exceptId)) throw new HttpError(409, 'Já existe um perfil com esse nome.');
 }
 const WIDER = 'Você não pode criar ou alterar um perfil com mais acesso que o seu.';
+// Quem enxerga só algumas filiais pode criar perfis (menores que o seu), mas só altera ou exclui um perfil que não
+// seja padrão do sistema e cujas pessoas estejam todas nas suas filiais — senão mudaria o acesso de gente de fora.
+function assertRoleManageable(user, roleRow) {
+  const sc = scope(user);
+  if (!sc) return;
+  const deny = () => new HttpError(403, 'Este perfil é usado por pessoas de filiais que você não enxerga (ou é padrão do sistema): só quem tem acesso a todas as filiais pode alterá-lo.');
+  if (roleRow.builtin) throw deny();
+  for (const u of all('SELECT id FROM users WHERE role_id = ?', roleRow.id)) {
+    const links = all('SELECT branch_id FROM user_branches WHERE user_id = ?', u.id);
+    if (!links.length || !links.every((l) => sc.includes(l.branch_id))) throw deny();
+  }
+}
+// Pedidos de titulares (LGPD) alcançam dados de qualquer filial: a permissão exige escopo "todas as filiais".
+function assertRoleCoherent(r) {
+  if (r.scope !== 'all' && r.perms.includes('cfg_lgpd.titular')) throw bad('Atender pedidos de titulares (LGPD) exige o escopo "Todas as filiais".');
+}
 
 router.post('/roles', need('permissoes', 'incluir'), (req, res) => {
   const r = perm.roleInput(req.body);
+  assertRoleCoherent(r);
   if (!perm.roleWithin(req.user, r)) throw new HttpError(403, WIDER);
   assertRoleName(r.name);
   const now = Date.now();
@@ -762,7 +836,9 @@ router.put('/roles/:id', need('permissoes', 'editar'), (req, res) => {
   if (!cur) throw new HttpError(404, 'Perfil não encontrado.');
   if (cur.builtin === 'admin') throw bad('O perfil Administrador é fixo e não pode ser alterado.');
   if (!perm.roleWithin(req.user, cur)) throw new HttpError(403, WIDER);
+  assertRoleManageable(req.user, cur);
   const r = perm.roleInput(req.body);
+  assertRoleCoherent(r);
   if (!perm.roleWithin(req.user, r)) throw new HttpError(403, WIDER);
   assertRoleName(r.name, rid);
   const old = perm.parsePerms(cur.perms);
@@ -785,6 +861,7 @@ router.delete('/roles/:id', need('permissoes', 'excluir'), (req, res) => {
   if (!cur) throw new HttpError(404, 'Perfil não encontrado.');
   if (cur.builtin) throw bad('Os perfis padrão do sistema não podem ser excluídos.');
   if (!perm.roleWithin(req.user, cur)) throw new HttpError(403, WIDER);
+  assertRoleManageable(req.user, cur);
   const n = get("SELECT COUNT(*) AS n FROM users WHERE role_id = ? AND role <> 'admin'", rid).n;
   if (n) throw bad(`${n} usuário(s) usam este perfil. Troque o perfil deles antes de excluir.`);
   run('DELETE FROM roles WHERE id = ?', rid);
@@ -797,7 +874,15 @@ router.get('/settings', (req, res) => res.json(settingsFor(req.user)));
 
 router.get('/settings/notifications', needAny(['cfg_envios', 'ver'], ['cfg_alertas', 'ver']), (req, res) => {
   const recent = can(req.user, 'cfg_envios', 'ver') ? all("SELECT id, kind, channel, status, attempts, last_error, created_at, sent_at FROM outbox ORDER BY id DESC LIMIT 30") : [];
-  res.json({ ...outboxStatus(), webhookSecret: can(req.user, 'cfg_alertas', 'ver') ? webhookSecret() : null, recent });
+  res.json({ ...outboxStatus(), webhookSecret: can(req.user, 'cfg_alertas', 'editar') ? webhookSecret() : null, recent });
+});
+
+// Troca o segredo de assinatura do webhook (o sistema de destino precisa receber o novo).
+router.post('/settings/webhook-secret/rotate', need('cfg_alertas', 'editar'), (req, res) => {
+  if (!perm.accessFor(req.user).isAdmin) throw new HttpError(403, 'Só o administrador troca o segredo do webhook.');
+  const secret = rotateWebhookSecret();
+  audit(req.user.id, 'settings.webhook_secret_rotated', null, req.ip);
+  res.json({ webhookSecret: secret });
 });
 
 const testLimiter = rateLimiter({ windowMs: 60 * 60_000, max: 5, keyFn: (req) => 'test:' + req.user.id, message: 'Limite de testes atingido. Aguarde um pouco.' });
@@ -825,8 +910,23 @@ router.put('/settings', (req, res) => {
     if (sent.some((k) => keys.includes(k)) && !can(req.user, g, 'editar')) throw perm.deny();
   }
   if (!sent.some((k) => Object.values(SETTINGS_GROUPS).flat().includes(k))) throw bad('Nada para salvar.');
+  const cur = getSettings();
+  // E-mails extras do relatório semanal e o webhook recebem dados de TODAS as filiais: só o administrador muda.
+  const changedJson = (a, b) => JSON.stringify(a ?? null) !== JSON.stringify(b ?? null);
+  if (!perm.accessFor(req.user).isAdmin && ((req.body.weeklyReport?.extraEmails !== undefined && changedJson(req.body.weeklyReport.extraEmails, cur.weeklyReport?.extraEmails))
+    || (req.body.alerts?.webhookUrl !== undefined && changedJson(req.body.alerts.webhookUrl || null, cur.alerts?.webhookUrl || null)))) {
+    throw new HttpError(403, 'Destinatários extras do relatório e o webhook recebem dados de todas as filiais: só o administrador pode alterá-los.');
+  }
   const saved = saveSettings(req.body);
-  audit(req.user.id, 'settings.update', { companyName: saved.companyName }, req.ip);
+  // Auditoria com o antes e o depois de cada item alterado (o endereço do webhook aparece só como "alterado").
+  const changes = {};
+  for (const k of sent) {
+    if (!changedJson(cur[k], saved[k])) continue;
+    const show = (v) => { const t = JSON.stringify(v ?? null); return t.length > 300 ? t.slice(0, 297) + '…' : t; };
+    const hide = (v) => (v && typeof v === 'object' && 'webhookUrl' in v ? { ...v, webhookUrl: v.webhookUrl ? '(definido)' : null } : v);
+    changes[k] = { antes: show(hide(cur[k])), depois: show(hide(saved[k])) };
+  }
+  audit(req.user.id, 'settings.update', { changes }, req.ip);
   res.json(settingsFor(req.user));
 });
 
@@ -883,7 +983,7 @@ router.get('/templates/preview/:token', (req, res) => {
 });
 
 // Envia o modelo (salvo) com dados de exemplo para a própria pessoa.
-router.post('/templates/:kind/:channel/test', need('cfg_modelos', 'ver'), testLimiter, async (req, res) => {
+router.post('/templates/:kind/:channel/test', need('cfg_modelos', 'editar'), testLimiter, async (req, res) => {
   const { kind, channel } = templateParams(req);
   const vars = { ...templates.sampleVars(kind), destinatario: req.user.name };
   if (channel === 'email') {
@@ -921,7 +1021,7 @@ router.post('/whatsapp-qr/disconnect', need('cfg_envios', 'whatsapp'), async (re
 });
 
 // ---------------------------------------------------------------- relatório PowerPoint
-router.get('/report.pptx', need('dashboard', 'pptx'), async (req, res) => {
+router.get('/report.pptx', need('dashboard', 'pptx'), exportLimiter, async (req, res) => {
   const { buffer: buf } = await reportFor(req.user, req.query, req.user.name);
   audit(req.user.id, 'report.pptx', { filter: req.query }, req.ip);
   res.set('Content-Type', 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
@@ -930,6 +1030,8 @@ router.get('/report.pptx', need('dashboard', 'pptx'), async (req, res) => {
 });
 
 router.get('/audit', need('auditoria', 'ver'), (req, res) => {
+  // A auditoria mostra ações de todas as filiais (e-mails e IPs da equipe): só para quem enxerga todas.
+  if (!perm.accessFor(req.user).scopeAll) throw new HttpError(403, 'A auditoria mostra todas as filiais: exige acesso a todas.');
   const limit = int(req.query.limit || '300', { field: 'limite', min: 1, max: 1000 });
   res.json(all(`SELECT l.id, l.at, l.action, l.detail, l.ip, l.user_id, u.email, u.name FROM audit_log l LEFT JOIN users u ON u.id = l.user_id
     ORDER BY l.id DESC LIMIT ?`, limit));

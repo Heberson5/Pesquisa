@@ -8,7 +8,12 @@ const { sessionValid } = require('./auth');
 const clients = new Set();
 const HEARTBEAT_MS = Number(process.env.LIVE_HEARTBEAT_MS) || 25_000; // nos testes, menor
 
+const MAX_PER_USER = 5; // abas/aparelhos abertos ao mesmo tempo por pessoa
+
 function subscribe(req, res) {
+  if ([...clients].filter((c) => c.userId === req.user.id).length >= MAX_PER_USER) {
+    return res.status(429).json({ error: 'Muitas janelas do painel abertas ao mesmo tempo. Feche algumas.' });
+  }
   res.set({ 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-store', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
   res.flushHeaders?.();
   res.write('retry: 5000\n\n');

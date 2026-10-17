@@ -42,6 +42,7 @@ Gerado a partir de `public/admin/novidades.json` (o mesmo conteúdo do menu **No
 - **Cards de Promotores e Detratores abrem as respostas.** Na Visão geral, clique em Promotores ou Detratores para ver as respostas daquele grupo, com o mesmo período e filial.
 - **Seta discreta para recolher o menu.** A seta para recolher e expandir o menu lateral fica no alto, ao lado do nome, e só se destaca ao passar o mouse.
 - **Marca Sauberlich System © no tablet.** As telas do tablet e do QR Code mostram, discretamente, a marca do sistema.
+- **Segurança reforçada em todo o sistema.** Revisão completa de segurança. Senhas erradas bloqueiam só quem errou, não o dono da conta; 2FA mais rígido; QR Code protegido contra respostas falsas em massa; alertas com teto por filial e sem links de clientes; exportações que não travam o servidor; dados de clientes apagados também da fila de envios; e regras mais firmes para quem só enxerga algumas filiais.
 
 ### Correção
 - **Respostas depois das 23h apareciam no dia seguinte.** Cada resposta agora conta no dia do horário local do tablet (o fuso da filial), em filtros, gráficos, casos, relatórios e CSV, qualquer que seja o fuso do servidor.

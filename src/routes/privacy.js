@@ -5,14 +5,18 @@
 const express = require('express');
 const { all, run, tx, audit } = require('../db');
 const { requireUser } = require('../auth');
-const { need } = require('../permissions');
+const { need, accessFor } = require('../permissions');
 const { bad, str } = require('../validate');
 const { decrypt, lookup, normPhone, normEmail } = require('../vault');
 const { isEmail } = require('../notify');
 const { rateLimiter } = require('../security');
 
 const router = express.Router();
-router.use(requireUser, need('cfg_lgpd', 'titular'), rateLimiter({ windowMs: 60_000, max: 30 }));
+// O pedido do titular procura a pessoa em todas as filiais: exige acesso a todas (senão a busca revelaria dados,
+// ou permitiria apagar respostas, de filiais que a pessoa não enxerga).
+const allBranches = (req, res, next) => (accessFor(req.user).scopeAll ? next()
+  : res.status(403).json({ error: 'Pedidos de titulares exigem acesso a todas as filiais.' }));
+router.use(requireUser, need('cfg_lgpd', 'titular'), allBranches, rateLimiter({ windowMs: 60_000, max: 30 }));
 
 function matches(body) {
   const phone = body?.phone ? normPhone(str(body.phone, { field: 'telefone', max: 30 })) : null;
@@ -57,6 +61,8 @@ function anonymize(ids) {
       contact_email_lookup = NULL, geo_lat = NULL, geo_lng = NULL, anonymized_at = ? WHERE id IN (${ph})`, Date.now(), ...ids);
     run(`DELETE FROM answers WHERE response_id IN (${ph}) AND question_id IN (SELECT id FROM questions WHERE type = 'text')`, ...ids);
     run(`UPDATE case_notes SET text = '[removido a pedido do titular]' WHERE text IS NOT NULL AND case_id IN (SELECT id FROM cases WHERE response_id IN (${ph}))`, ...ids);
+    // Alertas na fila ou no histórico de envios com nome, contato ou comentário do titular.
+    run(`DELETE FROM outbox WHERE response_id IN (${ph})`, ...ids);
   });
 }
 

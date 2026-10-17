@@ -37,7 +37,9 @@ docker compose up -d --build          # o app fica em 127.0.0.1:3000 (inacessív
 e configure seu proxy apontando para `127.0.0.1:3000` (exemplo pronto para nginx em `deploy/nginx-exemplo.conf`;
 certificado com `sudo certbot --nginx -d pesquisa.sauberlich.com.br`).
 O proxy **precisa substituir** o cabeçalho `X-Forwarded-For` pelo IP real do cliente (o exemplo já faz isso);
-senão os limites de tentativas por IP podem ser burlados.
+senão os limites de tentativas por IP podem ser burlados. O app só aceita esse cabeçalho vindo da própria VPS ou
+da rede interna do Docker (`TRUST_PROXY: loopback,uniquelocal` no `docker-compose.yml`). Se rodar a imagem sem o
+compose, defina `TRUST_PROXY` do mesmo jeito; sem proxy na frente, deixe sem definir.
 
 Confira: `docker compose ps` (app **healthy**) e abra https://pesquisa.sauberlich.com.br/admin/
 

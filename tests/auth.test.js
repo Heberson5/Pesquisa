@@ -82,7 +82,10 @@ test('2FA: desafio expira após 5 tentativas (força bruta no código)', async (
   const c = new Client(); const r = await c.login('mfa@t.local', PW);
   for (let i = 0; i < 5; i++) await c.req('POST', '/api/admin/login/mfa', { body: { challenge: r.json.challenge, code: String(100000 + i) } });
   assert.notEqual((await c.req('POST', '/api/admin/login/mfa', { body: { challenge: r.json.challenge, code: now() } })).status, 200);
-  assert.ok(get('SELECT locked_until FROM users WHERE email = ?', 'mfa@t.local').locked_until > Date.now());
+  // Quem errou o código 5 vezes fica bloqueado nessa rede: nem com senha e código certos entra.
+  const again = await c.login('mfa@t.local', PW);
+  assert.notEqual(again.status, 200);
+  if (again.json?.challenge) assert.equal((await c.req('POST', '/api/admin/login/mfa', { body: { challenge: again.json.challenge, code: now() } })).status, 401);
   run('UPDATE users SET failed_logins = 0, locked_until = NULL WHERE email = ?', 'mfa@t.local');
 });
 

@@ -1,7 +1,7 @@
 'use strict';
 // Cliente insatisfeito (nota de NPS de 0 a 6): abre um caso para tratamento e avisa os responsáveis.
 // Webhook e WhatsApp recebem só o mínimo (filial, nota, link) — dados pessoais ficam no painel.
-const { get, all, run } = require('./db');
+const { get, all, run, audit } = require('./db');
 const { getSettings } = require('./settings');
 const { queueEmail, queueWebhook, queueWhatsApp } = require('./notify');
 const templates = require('./templates');
@@ -62,7 +62,26 @@ function onResponse(responseId) {
   return caseId;
 }
 
+// Teto de avisos por filial: respostas falsas em massa (o QR Code é público) não podem inundar a equipe nem
+// esgotar a cota de e-mail/WhatsApp da empresa. Os casos continuam sendo abertos; passado o teto, vai um único
+// aviso de que os alertas da filial foram pausados por uma hora.
+const ALERT_BURST = 10;
+function overBurst(r, caseId) {
+  const n = get('SELECT COUNT(*) AS n FROM cases WHERE branch_id = ? AND created_at > ? AND id <> ?', r.branch_id, Date.now() - 3_600_000, caseId).n;
+  if (n < ALERT_BURST) return false;
+  if (n === ALERT_BURST) {
+    audit(null, 'alerts.throttled', { branchId: r.branch_id }, null);
+    const brand = getSettings().companyName;
+    for (const to of branchRecipientList(r.branch_id, 'notify_detractors')) {
+      queueEmail({ to: to.email, kind: 'detractor_burst', subject: `${brand}: muitas notas baixas em ${r.branch_name}`,
+        text: `Chegaram mais de ${ALERT_BURST} notas baixas em ${r.branch_name} na última hora. Para não encher sua caixa, os avisos individuais desta filial ficam pausados por uma hora. Todos os casos estão no painel, em Casos: ${publicUrl}/admin/#/casos` });
+    }
+  }
+  return true;
+}
+
 function notifyDetractor(r, score, caseId) {
+  if (overBurst(r, caseId)) return;
   const s = getSettings();
   const url = `${publicUrl}/admin/#/casos/${caseId}`;
   const comments = all(`SELECT q.text, a.value_text FROM answers a JOIN questions q ON q.id = a.question_id
@@ -78,29 +97,30 @@ function notifyDetractor(r, score, caseId) {
   const varsFor = (to) => ({ ...vars, destinatario: to.name || 'equipe', ...(to.contact ? {} : { cliente: '', telefone_cliente: '' }) });
   if (s.alerts.detractorEmail) {
     const rows = [['Filial', r.branch_name], ['Nota', String(score)], ['Quando', when]];
-    for (const c of comments) rows.push([c.text, c.value_text]);
+    // Texto do cliente: uma linha, sem links clicáveis (ninguém forja uma linha "do sistema" nem manda link à equipe).
+    for (const c of comments) rows.push([c.text, templates.customerText(c.value_text)]);
     const contactRows = [];
     if (hasContact) {
-      contactRows.push(['Cliente pediu contato', contactName || '(sem nome)']);
+      contactRows.push(['Cliente pediu contato', templates.customerText(contactName) || '(sem nome)']);
       const mail = decrypt(r.contact_email_enc);
       if (contactPhone) contactRows.push(['Telefone', contactPhone]);
       if (mail) contactRows.push(['E-mail', mail]);
     }
     for (const to of branchRecipientList(r.branch_id, 'notify_detractors')) {
       const m = templates.emailFor('detractor', varsFor(to), { rows: to.contact ? [...rows, ...contactRows] : rows, buttonUrl: url });
-      queueEmail({ to: to.email, subject: m.subject, text: m.text, html: m.html, kind: 'detractor' });
+      queueEmail({ to: to.email, subject: m.subject, text: m.text, html: m.html, kind: 'detractor', responseId: r.id });
     }
   }
   if (s.alerts.webhookUrl) {
     queueWebhook(s.alerts.webhookUrl, { event: 'detractor', caseId, branch: r.branch_name, score, channel: r.channel,
-      contactRequested: hasContact, submittedAt: new Date(r.submitted_at).toISOString(), url }, 'detractor');
+      contactRequested: hasContact, submittedAt: new Date(r.submitted_at).toISOString(), url }, 'detractor', r.id);
   }
   const wa = whatsappRecipients(r.branch_id, 'notify_detractors');
   if (s.whatsapp.mode === 'qr') {
     // Número da empresa conectado por QR Code: texto do modelo, um envio por vez com intervalo.
-    for (const to of wa) whatsappQr.queue(to.phone, templates.whatsappFor('detractor', varsFor(to)), 'detractor', to.name);
+    for (const to of wa) whatsappQr.queue(to.phone, templates.whatsappFor('detractor', varsFor(to)), 'detractor', to.name, r.id);
   } else if (s.whatsapp.mode === 'meta' && s.alerts.whatsappTemplate) {
-    for (const to of wa) queueWhatsApp(to.phone, { template: s.alerts.whatsappTemplate, language: s.alerts.whatsappLanguage, params: [r.branch_name, String(score), url] }, 'detractor');
+    for (const to of wa) queueWhatsApp(to.phone, { template: s.alerts.whatsappTemplate, language: s.alerts.whatsappLanguage, params: [r.branch_name, String(score), url] }, 'detractor', r.id);
   }
 }
 

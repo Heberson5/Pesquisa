@@ -254,7 +254,7 @@
     ['usuarios', 'Usuários', pageUsers, () => can('usuarios'), 'Administração'],
     ['permissoes', 'Permissões', pagePermissions, () => can('permissoes'), 'Administração'],
     ['configuracoes', 'Configurações', pageSettings, () => CFG_GROUPS.some((g) => can(g)), 'Administração'],
-    ['auditoria', 'Auditoria', pageAudit, () => can('auditoria'), 'Administração'],
+    ['auditoria', 'Auditoria', pageAudit, () => can('auditoria') && me.access.scopeAll, 'Administração'],
     ['ajuda', 'Ajuda', pageHelp, null, 'Suporte'],
     ['novidades', 'Novidades', pageNews, null, 'Suporte'],
     ['conta', 'Minha conta', pageAccount, null, 'Suporte'],
@@ -1298,7 +1298,7 @@
 
     const drawEditor = () => {
       const locked = draft.builtin === 'admin';
-      const editable = !locked && (draft.id ? can('permissoes', 'editar') && fits(roles.find((r) => r.id === draft.id)) : can('permissoes', 'incluir'));
+      const editable = !locked && (draft.id ? can('permissoes', 'editar') && fits(roles.find((r) => r.id === draft.id)) && (me.access.scopeAll || !draft.builtin) : can('permissoes', 'incluir'));
       const name = h('input', { value: draft.name, maxlength: '60', disabled: !editable, oninput: (e) => { draft.name = e.target.value; } });
       const desc = h('input', { value: draft.description || '', maxlength: '200', disabled: !editable, placeholder: 'Ex.: Diretoria que só acompanha os números', oninput: (e) => { draft.description = e.target.value; } });
       const scopeOpt = (v, label, hint) => h('label', { class: 'radio-card' + (draft.scope === v ? ' active' : '') },
@@ -1532,13 +1532,15 @@
   async function alertsTab(st) {
     const n = await api('/settings/notifications');
     const status = (ok, yes, no) => h('span', { class: 'badge ' + (ok ? 'ok' : 'warn') }, ok ? yes : no);
-    const webhook = h('input', { value: st.alerts.webhookUrl || '', placeholder: 'https://hooks.exemplo.com/...', oninput: (e) => { st.alerts.webhookUrl = e.target.value.trim() || null; } });
+    // Webhook e destinatários extras recebem dados de todas as filiais: só o administrador altera (o servidor confere).
+    const onlyAdmin = !me.access.isAdmin;
+    const webhook = h('input', { value: st.alerts.webhookUrl || '', placeholder: 'https://hooks.exemplo.com/...', disabled: onlyAdmin, title: onlyAdmin ? 'Só o administrador altera' : null, oninput: (e) => { st.alerts.webhookUrl = e.target.value.trim() || null; } });
     const waTpl = h('input', { value: st.alerts.whatsappTemplate || '', placeholder: 'ex.: alerta_detrator', oninput: (e) => { st.alerts.whatsappTemplate = e.target.value.trim() || null; } });
     const waLang = h('input', { value: st.alerts.whatsappLanguage, oninput: (e) => { st.alerts.whatsappLanguage = e.target.value.trim(); } });
     const day = h('select', { onchange: (e) => { st.weeklyReport.weekday = Number(e.target.value); } }, DOW.map((d, i) => h('option', { value: String(i) }, d)));
     day.value = String(st.weeklyReport.weekday);
     const hour = h('input', { type: 'number', min: '0', max: '23', value: st.weeklyReport.hour, oninput: (e) => { st.weeklyReport.hour = Number(e.target.value); } });
-    const extra = h('textarea', { rows: '2', placeholder: 'diretoria@empresa.com (um por linha)', value: st.weeklyReport.extraEmails.join('\n'), oninput: (e) => { st.weeklyReport.extraEmails = lines(e.target); } });
+    const extra = h('textarea', { rows: '2', placeholder: 'diretoria@empresa.com (um por linha)', disabled: onlyAdmin, title: onlyAdmin ? 'Só o administrador altera' : null, value: st.weeklyReport.extraEmails.join('\n'), oninput: (e) => { st.weeklyReport.extraEmails = lines(e.target); } });
     const goal = h('input', { type: 'number', min: '0', max: '100', value: st.defaultNpsGoal ?? '', oninput: (e) => { st.defaultNpsGoal = e.target.value === '' ? null : Number(e.target.value); } });
     const offMin = h('input', { type: 'number', min: '10', max: '1440', value: st.offlineAlert.minutes, oninput: (e) => { st.offlineAlert.minutes = Number(e.target.value); } });
     const dimAfter = h('input', { type: 'number', min: '5', max: '3600', value: st.screen.dimAfterSeconds, oninput: (e) => { st.screen.dimAfterSeconds = Number(e.target.value); } });
@@ -1551,7 +1553,12 @@
           h('p', { class: 'small muted' }, 'Cada nota baixa abre um caso em "Casos" e avisa a filial. Os destinatários de cada filial ficam no cadastro da filial; usuários escolhem em Minha conta.'),
           chk(st.alerts.detractorEmail, (v) => { st.alerts.detractorEmail = v; }, 'Enviar e-mail na hora'),
           h('label', { class: 'f mt' }, 'Webhook (opcional — integra com n8n, Zapier, Make, Slack…)', webhook),
-          h('p', { class: 'small muted' }, 'Envia filial, nota e link do caso (sem dados pessoais), assinado com HMAC-SHA256 no cabeçalho X-Pesquisa-Signature. Segredo: ', h('code', { class: 'secret' }, n.webhookSecret)),
+          h('p', { class: 'small muted' }, 'Envia filial, nota e link do caso (sem dados pessoais), assinado com HMAC-SHA256 no cabeçalho X-Pesquisa-Signature.',
+            n.webhookSecret ? [' Segredo: ', h('code', { class: 'secret' }, n.webhookSecret)] : null,
+            me.access.isAdmin ? [' ', h('button', { class: 'btn secondary sm', onclick: async (e) => {
+              if (!confirm('Gerar um novo segredo? O sistema que recebe o webhook precisará do novo valor.')) return;
+              try { const r = await api('/settings/webhook-secret/rotate', { method: 'POST' }); e.target.previousElementSibling?.replaceChildren(r.webhookSecret); toast('Novo segredo gerado.'); } catch (ex) { toast(ex.message, true); }
+            } }, 'Trocar segredo')] : null),
           h('div', { class: 'form-grid mt' }, h('label', { class: 'f' }, 'Modelo aprovado do WhatsApp (Meta)', waTpl), h('label', { class: 'f' }, 'Idioma do modelo', waLang)),
           h('p', { class: 'small muted' }, 'WhatsApp: ', status(n.whatsappConfigured, 'configurado', 'não configurado — veja a aba "E-mail e WhatsApp"'), ' · parâmetros do modelo: {{1}} filial, {{2}} nota, {{3}} link.')),
         h('div', { class: 'card' }, h('h2', {}, 'Relatório semanal por e-mail'),
@@ -1933,7 +1940,7 @@
           h('p', { class: 'small muted' }, 'Recomendado. Com isso ligado, quem tem esses perfis e ainda não usa 2FA é obrigado a configurá-lo no próximo login.')),
         retentionCard(st)),
       h('div', { class: 'card' }, h('h2', {}, 'Aviso de privacidade exibido no tablet e no QR Code'), privacy),
-      !can('cfg_lgpd', 'titular') ? null : h('div', { class: 'card' }, h('h2', {}, 'Pedido do titular (LGPD)'),
+      !can('cfg_lgpd', 'titular') || !me.access.scopeAll ? null : h('div', { class: 'card' }, h('h2', {}, 'Pedido do titular (LGPD)'),
         h('p', { class: 'small muted' }, 'Quando um cliente pedir acesso ou exclusão dos dados dele, localize pelo telefone ou e-mail informado.'),
         h('div', { class: 'row' }, phone, mail, h('button', { class: 'btn secondary', onclick: search }, 'Localizar')), results));
   }
@@ -2014,7 +2021,9 @@
       case 'survey.update': return E('cadastros', '', `Alterou a pesquisa "${d.title || sv(d.id)}"`);
       case 'survey.duplicate': return E('cadastros', '', `Duplicou a pesquisa "${sv(d.from)}"`, 'Criou uma cópia para editar.');
       case 'media.upload': return E('cadastros', '', `Enviou ${String(d.mime || '').startsWith('video/') ? 'um vídeo' : 'uma imagem'}`, d.size ? `Tamanho: ${d.size > 1048576 ? (d.size / 1048576).toFixed(1) + ' MB' : Math.round(d.size / 1024) + ' KB'}.` : '');
-      case 'settings.update': return E('cadastros', '', 'Alterou as configurações do sistema', d.companyName ? `Empresa: ${d.companyName}.` : '');
+      case 'settings.update': return E('cadastros', '', 'Alterou as configurações do sistema', d.changes
+        ? Object.entries(d.changes).map(([k, v]) => `${k}: ${v.antes} → ${v.depois}`).join(' · ')
+        : (d.companyName ? `Empresa: ${d.companyName}.` : ''));
       case 'settings.delivery': return E('cadastros', 'warn', 'Alterou a configuração de e-mail/WhatsApp', [d.smtp && `E-mail: ${d.smtp}`, d.whatsapp && `WhatsApp: ${d.whatsapp}`].filter(Boolean).join(' · ') + '. (senhas e tokens não são registrados)');
       case 'device.create': return E('tablets', '', `Cadastrou o tablet "${d.name || '#' + d.id}"`, d.branchId ? `Filial: ${brName(d.branchId)}.` : '');
       case 'device.new_code': return E('tablets', 'warn', `Gerou um novo código de pareamento para o tablet "${ctx.devices.get(Number(d.id)) || '#' + d.id}"`, 'O tablet atual perdeu o acesso até ser pareado de novo.');
@@ -2310,8 +2319,8 @@
           h('p', { class: 'small muted' }, 'Além da senha, o login pede um código que muda a cada 30 segundos no seu celular.'),
           h('div', { class: 'row' },
             !mfa.enabled ? h('button', { class: 'btn', onclick: () => showMfaSetup(false) }, 'Ativar 2FA') : null,
-            mfa.enabled ? h('button', { class: 'btn secondary', onclick: () => askPw('Gerar novos códigos de recuperação', false, async (p, _c, close) => {
-              const r = await api('/mfa/recovery-codes', { method: 'POST', body: { password: p } }); close(); showRecoveryCodes(r.recoveryCodes, false);
+            mfa.enabled ? h('button', { class: 'btn secondary', onclick: () => askPw('Gerar novos códigos de recuperação', true, async (p, c, close) => {
+              const r = await api('/mfa/recovery-codes', { method: 'POST', body: { password: p, code: c } }); close(); showRecoveryCodes(r.recoveryCodes, false);
             }) }, 'Novos códigos de recuperação') : null,
             mfa.enabled && !mfa.required ? h('button', { class: 'btn danger', onclick: () => askPw('Desativar 2FA', true, async (p, c, close) => {
               await api('/mfa/disable', { method: 'POST', body: { password: p, code: c } }); close(); toast('2FA desativado.'); route();

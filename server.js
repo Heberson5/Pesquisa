@@ -9,7 +9,8 @@ const { getSettings, publicBranding } = require('./src/settings');
 const app = express();
 app.disable('x-powered-by');
 app.set('etag', false);
-// Atrás de um proxy reverso (nginx, Cloudflare), defina TRUST_PROXY=1 para req.ip/req.secure corretos.
+// Atrás de um proxy reverso, defina TRUST_PROXY com quem pode informar o IP do cliente: um número de saltos (1) ou
+// redes confiáveis (ex.: "loopback,uniquelocal", o padrão do docker-compose). Sem proxy, deixe sem definir.
 app.set('trust proxy', process.env.TRUST_PROXY ? Number(process.env.TRUST_PROXY) || process.env.TRUST_PROXY : false);
 
 app.use(securityHeaders);
