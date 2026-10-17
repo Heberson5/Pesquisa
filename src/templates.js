@@ -53,7 +53,9 @@ const KINDS = {
   reset: {
     label: 'Redefinição de senha', description: 'Enviado quando alguém clica em "Esqueci minha senha". O link vale por 30 minutos.',
     channels: ['email'],
-    vars: [...COMMON, V('link_redefinir', 'Link para criar a nova senha', 'https://pesquisa.suaempresa.com.br/admin/#/redefinir/…'), V('ip', 'IP de onde veio o pedido', '200.150.10.20')],
+    // O link de redefinição só vai no botão (montado pelo sistema): não pode ser colocado no texto, onde alguém
+    // com acesso aos modelos poderia embrulhá-lo num endereço próprio.
+    vars: [...COMMON, V('ip', 'IP de onde veio o pedido', '200.150.10.20')],
     email: {
       subject: '{empresa}: redefinição de senha', title: 'Redefinição de senha',
       intro: 'Olá, {destinatario}. Recebemos um pedido para redefinir sua senha do painel. O link vale por 30 minutos e só pode ser usado uma vez. Se não foi você, ignore este e-mail — sua senha continua a mesma.',
@@ -129,6 +131,18 @@ function restore(kind, channel) {
   return current(kind, channel);
 }
 
+// Textos digitados pelo cliente (anônimo no QR Code) entram nas mensagens à equipe: viram uma linha só, sem
+// formatação do WhatsApp e com links desativados — ninguém consegue forjar uma linha "do sistema" nem um link
+// clicável enviado pelo número da empresa.
+const CUSTOMER_VARS = ['comentario', 'cliente', 'telefone_cliente'];
+const customerText = (v) => String(v ?? '').replace(/\s+/g, ' ').replace(/[*_~`]/g, '').replace(/(\w)\.(?=\w)/g, '$1\u2024').replace(/:\/\//g, ': //').trim();
+const cleanVars = (vars) => {
+  const out = { ...vars };
+  for (const k of CUSTOMER_VARS) if (Object.hasOwn(out, k)) out[k] = customerText(out[k]);
+  delete out.link_redefinir;
+  return out;
+};
+
 // Troca {variavel} pelo valor. Valores vazios somem; "{x}" de quem digitou no comentário não é reprocessado.
 const fill = (tpl, vars) => String(tpl || '').replace(VAR_RE, (m, key) => (Object.hasOwn(vars, key) ? String(vars[key] ?? '') : m));
 const sampleVars = (kind) => Object.fromEntries(KINDS[kind].vars.map((v) => [v.key, v.sample]));
@@ -137,7 +151,7 @@ const sampleVars = (kind) => Object.fromEntries(KINDS[kind].vars.map((v) => [v.k
 function emailFor(kind, vars, { rows = [], buttonUrl = null, override = null } = {}) {
   const t = override ? { ...current(kind, 'email'), ...validate(kind, 'email', override) } : current(kind, 'email');
   const brand = getSettings();
-  const v = { empresa: brand.companyName, destinatario: 'equipe', ...vars };
+  const v = { empresa: brand.companyName, destinatario: 'equipe', ...cleanVars(vars) };
   const { html, text } = renderEmail({
     brand, title: fill(t.title, v), intro: fill(t.intro, v), rows,
     button: t.button && buttonUrl ? { label: fill(t.button, v), url: buttonUrl } : null, footer: fill(t.footer, v),
@@ -147,7 +161,7 @@ function emailFor(kind, vars, { rows = [], buttonUrl = null, override = null } =
 
 function whatsappFor(kind, vars, { override = null } = {}) {
   const t = override ? { ...current(kind, 'whatsapp'), ...validate(kind, 'whatsapp', override) } : current(kind, 'whatsapp');
-  const v = { empresa: getSettings().companyName, destinatario: 'equipe', ...vars };
+  const v = { empresa: getSettings().companyName, destinatario: 'equipe', ...cleanVars(vars) };
   // Linhas cujas variáveis ficaram todas sem valor (ex.: "💬 _{comentario}_" sem comentário) são retiradas,
   // junto com a formatação em volta; depois, linhas em branco repetidas viram uma só.
   const lines = String(t.text || '').split('\n').filter((line) => {
@@ -166,4 +180,4 @@ function overview() {
   }));
 }
 
-module.exports = { KINDS, FIELDS, current, validate, save, restore, fill, sampleVars, emailFor, whatsappFor, overview };
+module.exports = { KINDS, FIELDS, current, validate, save, restore, fill, sampleVars, emailFor, whatsappFor, overview, customerText };

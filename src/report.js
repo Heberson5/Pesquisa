@@ -90,7 +90,8 @@ async function buildReport({ settings, stats, surveys, filters, mediaDir, genera
   pres.theme = { headFontFace: FONT, bodyFontFace: FONT };
   pres.title = `Relatório de satisfação — ${settings.companyName}`;
   pres.author = generatedBy || settings.companyName;
-  pres.company = settings.companyName.replace(/&/g, '&amp;');
+  // A biblioteca não escapa este campo (docProps/app.xml): escapado aqui por inteiro.
+  pres.company = settings.companyName.replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' })[ch]);
 
   const primary = hex(settings.primaryColor);
   const accent = hex(settings.accentColor);
@@ -277,7 +278,9 @@ async function buildReport({ settings, stats, surveys, filters, mediaDir, genera
       card(cm, x, y, cw, 1.15, `Comentário ${i + 1}`);
       cm.addShape(pres.shapes.OVAL, { x: x + 0.25, y: y + 0.3, w: 0.5, h: 0.5, fill: { color: accent }, line: { color: accent }, objectName: `Aspas ${i + 1}` });
       cm.addText('“', { x: x + 0.25, y: y + 0.3, w: 0.5, h: 0.5, fontSize: 24, bold: true, align: 'center', valign: 'middle', color: isDark(accent) ? 'FFFFFF' : INK, isTextBox: true, margin: 0 });
-      const text = c.comment.length > 140 ? c.comment.slice(0, 137) + '…' : c.comment;
+      // Comentários gravados antes da limpeza de caracteres inválidos em XML também não corrompem o arquivo.
+      const clean = c.comment.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]|\p{Cs}/gu, '');
+      const text = clean.length > 140 ? clean.slice(0, 137) + '…' : clean;
       cm.addText([{ text, options: { fontSize: 14, color: INK, breakLine: true } },
         { text: `${c.branch} · ${c.day ? c.day.split('-').reverse().join('/') : formatLocal(c.submitted_at, c.tz).slice(0, 10)}`, options: { fontSize: 11, color: MUTED } }],
       { x: x + 0.95, y: y + 0.1, w: cw - 1.2, h: 0.95, valign: 'middle', isTextBox: true, margin: 0 });

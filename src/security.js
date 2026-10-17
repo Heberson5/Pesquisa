@@ -48,26 +48,48 @@ function passwordPolicyError(pw) {
   return null;
 }
 
-// Rate limiter em memória (janela deslizante simples). Para várias instâncias
-// do servidor, trocar por Redis — ver docs/PLANEJAMENTO.md.
+// Chave do cliente para limites por IP. IPv6: um único aparelho costuma ter um bloco /64 inteiro (e pode trocar
+// de endereço à vontade dentro dele), então conta o bloco; IPv4 mapeado em IPv6 vira o IPv4.
+function clientKey(req) {
+  const ip = String(req.ip || '');
+  const v4 = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(ip);
+  if (v4) return v4[1];
+  if (!ip.includes(':')) return ip;
+  const [head, tail = ''] = ip.split('%')[0].split('::');
+  const h = head ? head.split(':') : [];
+  const t = tail ? tail.split(':') : [];
+  const groups = ip.includes('::') ? [...h, ...Array(Math.max(0, 8 - h.length - t.length)).fill('0'), ...t] : h;
+  return groups.slice(0, 4).map((g) => (parseInt(g, 16) || 0).toString(16)).join(':') + '::/64';
+}
+
+// Rate limiter em memória (janela fixa simples). Para várias instâncias do servidor, trocar por Redis.
+// Tem teto de chaves: muitos endereços diferentes não esgotam a memória (cheio, recusa até a limpeza).
+const MAX_KEYS = 50_000;
 function rateLimiter({ windowMs, max, keyFn, message = 'Muitas requisições. Tente novamente em instantes.' }) {
   const hits = new Map();
-  setInterval(() => {
-    const now = Date.now();
-    for (const [k, v] of hits) if (v.reset <= now) hits.delete(k);
-  }, Math.min(windowMs, 60_000)).unref();
-  const limiter = (req, res, next) => {
-    const key = keyFn ? keyFn(req) : req.ip;
+  const sweep = (now) => { for (const [k, v] of hits) if (v.reset <= now) hits.delete(k); };
+  setInterval(() => sweep(Date.now()), Math.min(windowMs, 60_000)).unref();
+  // Conta um acesso para a chave. ok = dentro do limite; retryAfter em segundos.
+  function hit(key) {
     const now = Date.now();
     let e = hits.get(key);
-    if (!e || e.reset <= now) { e = { count: 0, reset: now + windowMs }; hits.set(key, e); }
+    if (!e || e.reset <= now) {
+      if (!e && hits.size >= MAX_KEYS) { sweep(now); if (hits.size >= MAX_KEYS) return { ok: false, retryAfter: Math.ceil(Math.min(windowMs, 60_000) / 1000) }; }
+      e = { count: 0, reset: now + windowMs }; hits.set(key, e);
+    }
     e.count++;
-    if (e.count > max) {
-      res.set('Retry-After', String(Math.ceil((e.reset - now) / 1000)));
+    return { ok: e.count <= max, retryAfter: Math.ceil((e.reset - now) / 1000) };
+  }
+  const limiter = (req, res, next) => {
+    const r = hit(String(keyFn ? keyFn(req) : clientKey(req)).slice(0, 200));
+    if (!r.ok) {
+      res.set('Retry-After', String(r.retryAfter));
       return res.status(429).json({ error: message });
     }
     next();
   };
+  limiter.hit = hit;
+  limiter.message = message;
   limiter.reset = () => hits.clear();
   return limiter;
 }
@@ -104,5 +126,5 @@ function securityHeaders(req, res, next) {
 
 module.exports = {
   hashPassword, verifyPassword, DUMMY_HASH, randomToken, sha256, safeEqual,
-  pairingCode, passwordPolicyError, rateLimiter, securityHeaders,
+  pairingCode, passwordPolicyError, rateLimiter, clientKey, securityHeaders,
 };

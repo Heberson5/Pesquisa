@@ -13,8 +13,9 @@ function str(v, { field, min = 0, max = 500, optional = false } = {}) {
     return '';
   }
   if (typeof v !== 'string') throw bad(`Campo "${field}" inválido.`);
-  // remove caracteres de controle (exceto \n e \t) e normaliza
-  const s = v.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '').normalize('NFC').trim();
+  // remove caracteres de controle (exceto \n e \t), não-caracteres e surrogates soltos (inválidos em XML:
+  // um só deles num comentário corromperia o PowerPoint do relatório) e normaliza
+  const s = v.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F\uFFFE\uFFFF]|\p{Cs}/gu, '').normalize('NFC').trim();
   if (s.length < min) throw bad(`Campo "${field}" muito curto.`);
   if (s.length > max) throw bad(`Campo "${field}" excede ${max} caracteres.`);
   return s;

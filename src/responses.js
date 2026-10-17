@@ -64,7 +64,7 @@ function surveyPayload(survey) {
     idleSeconds: survey.idle_seconds,
     contactMode: survey.contact_mode,
     questions: survey.questions.map((q) => ({
-      id: q.id, text: q.text, helpText: q.help_text, type: q.type, required: q.required, options: q.options,
+      id: q.id, text: q.text, helpText: q.help_text, type: q.type, required: q.required, isNps: q.is_nps, options: q.options,
       display: q.display, icon: q.icon, showIf: q.show_if, jumps: q.jumps, i18n: q.i18n,
     })),
   };
@@ -104,8 +104,10 @@ function buildConfig(branch, extra = {}, tz = timezone) {
 function parseContact(raw, survey, minNps) {
   if (raw === undefined || raw === null) return null;
   if (typeof raw !== 'object' || Array.isArray(raw)) throw bad('Contato inválido.');
-  if (survey.contact_mode === 'never') throw bad('Esta pesquisa não coleta contato.');
-  if (survey.contact_mode === 'detractors' && !(minNps !== null && minNps <= alerts.DETRACTOR_MAX)) throw bad('Contato não disponível para esta resposta.');
+  // Contato que a pesquisa não pede (desligado, ou cliente que não é detrator): é descartado — nunca gravado —,
+  // mas a resposta é aceita (recusar faria o tablet perder as notas do cliente).
+  if (survey.contact_mode === 'never') return null;
+  if (survey.contact_mode === 'detractors' && !(minNps !== null && minNps <= alerts.DETRACTOR_MAX)) return null;
   if (raw.consent !== true) throw bad('É preciso autorizar o uso dos dados de contato.');
   const name = str(raw.name, { field: 'nome', max: 100, optional: true });
   const phone = raw.phone ? normPhone(str(raw.phone, { field: 'telefone', max: 30 })) : null;
@@ -117,7 +119,10 @@ function parseContact(raw, survey, minNps) {
 }
 
 // ---------------------------------------------------------------- gravação
-function saveResponse({ branch, deviceId = null, deviceLabel = null, channel, body }) {
+// claim: função chamada dentro da transação, antes de gravar (ex.: marcar o bilhete do QR Code como usado);
+// se devolver false, nada é gravado. startedVersionAt: quando o cliente abriu a pesquisa, por fonte confiável
+// (o bilhete assinado do QR Code) — vale mais que o que o aparelho informa.
+function saveResponse({ branch, deviceId = null, deviceLabel = null, channel, body, claim = null, startedVersionAt = null }) {
   if (!body || typeof body !== 'object') throw bad('Resposta inválida.');
   if (typeof body.uuid !== 'string' || !UUID_RE.test(body.uuid)) throw bad('Identificador inválido.');
   const surveyId = int(body.surveyId, { field: 'pesquisa', min: 1 });
@@ -152,8 +157,11 @@ function saveResponse({ branch, deviceId = null, deviceLabel = null, channel, bo
   // A versão que o cliente exibiu (config.survey.version) é a referência: um tablet offline pode continuar com a
   // versão antiga por horas e o cliente começar DEPOIS da alteração. Sem versão (clientes antigos), vale o horário.
   // (Valor estranho é ignorado em vez de recusar: recusar descartaria a resposta guardada no tablet.)
+  // No QR Code (aberto a qualquer pessoa) vale só o horário do bilhete assinado pelo servidor; no tablet (aparelho
+  // pareado), a versão exibida — só versão ANTERIOR à atual dispensa as obrigatórias.
   const clientVersion = Number.isSafeInteger(body.surveyVersion) ? body.surveyVersion : null;
-  const changedSince = clientVersion !== null ? clientVersion !== survey.updated_at : (startedAt ?? submittedAt) < survey.updated_at;
+  const changedSince = startedVersionAt !== null ? startedVersionAt < survey.updated_at
+    : clientVersion !== null ? clientVersion < survey.updated_at : (startedAt ?? submittedAt) < survey.updated_at;
   const raw = new Map();
   const normalized = [];
   let next = 0;
@@ -181,6 +189,7 @@ function saveResponse({ branch, deviceId = null, deviceLabel = null, channel, bo
   const lang = typeof body.lang === 'string' && survey.languages.includes(body.lang) && LANGS.includes(body.lang) ? body.lang : null;
 
   const result = tx(() => {
+    if (claim && !claim()) throw new HttpError(409, 'Esta avaliação já foi enviada. Obrigado!');
     if (get('SELECT 1 FROM responses WHERE uuid = ?', body.uuid.toLowerCase())) return { created: false };
     // Dia no calendário do tablet (ou da filial, no QR Code): é o que vale nos filtros e gráficos.
     const tz = zones.forBranch(branch, deviceId ? get('SELECT timezone FROM devices WHERE id = ?', deviceId) : null);

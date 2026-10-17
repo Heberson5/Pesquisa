@@ -33,7 +33,7 @@
       scale5: ['Péssimo', 'Ruim', 'Regular', 'Bom', 'Ótimo'], yes: 'Sim', no: 'Não', write: 'Escreva aqui (opcional)…', privacy: 'Privacidade',
       contactAsk: 'Gostaria que entrássemos em contato com você?', contactWhy: 'Queremos entender melhor e resolver o que aconteceu.',
       contactYes: 'Sim, quero contato', contactNo: 'Não, obrigado', name: 'Nome (opcional)', phone: 'Telefone / WhatsApp', email: 'E-mail',
-      consent: 'Autorizo o uso destes dados somente para contato sobre esta avaliação.', needOne: 'Informe telefone ou e-mail.', needConsent: 'Marque a autorização para continuar.',
+      consent: 'Autorizo o uso destes dados somente para contato sobre esta avaliação.', needOne: 'Informe telefone ou e-mail.', badPhone: 'Telefone inválido: informe DDD e número.', badEmail: 'E-mail inválido.', needConsent: 'Marque a autorização para continuar.',
       geoAsk: 'Compartilhar minha localização aproximada (opcional)', geoOn: 'Localização compartilhada ✓ — toque para remover', geoDenied: 'Localização não autorizada neste aparelho', geoWhy: 'Usada só para saber de qual região veio a avaliação. Guardamos apenas cidade e estado.',
       close: 'Fechar', closed: 'Estamos fechados no momento', unavailable: 'Pesquisa indisponível no momento', noSurvey: 'Nenhuma pesquisa ativa para esta filial.',
       once: 'Esta avaliação já foi enviada. Obrigado!', error: 'Não foi possível enviar. Verifique a internet e tente de novo.', retry: 'Tentar de novo' },
@@ -41,7 +41,7 @@
       scale5: ['Very bad', 'Bad', 'Fair', 'Good', 'Excellent'], yes: 'Yes', no: 'No', write: 'Write here (optional)…', privacy: 'Privacy',
       contactAsk: 'Would you like us to contact you?', contactWhy: 'We want to understand and fix what happened.',
       contactYes: 'Yes, contact me', contactNo: 'No, thanks', name: 'Name (optional)', phone: 'Phone / WhatsApp', email: 'E-mail',
-      consent: 'I authorize the use of this data only to contact me about this feedback.', needOne: 'Enter a phone or e-mail.', needConsent: 'Please check the authorization to continue.',
+      consent: 'I authorize the use of this data only to contact me about this feedback.', needOne: 'Enter a phone or e-mail.', badPhone: 'Invalid phone: include area code and number.', badEmail: 'Invalid e-mail.', needConsent: 'Please check the authorization to continue.',
       geoAsk: 'Share my approximate location (optional)', geoOn: 'Location shared ✓ — tap to remove', geoDenied: 'Location not allowed on this device', geoWhy: 'Used only to know which region the feedback came from. We keep only city and state.',
       close: 'Close', closed: 'We are closed right now', unavailable: 'Survey unavailable right now', noSurvey: 'No active survey for this location.',
       once: 'This feedback was already sent. Thank you!', error: 'Could not send. Check your connection and try again.', retry: 'Try again' },
@@ -49,7 +49,7 @@
       scale5: ['Pésimo', 'Malo', 'Regular', 'Bueno', 'Excelente'], yes: 'Sí', no: 'No', write: 'Escriba aquí (opcional)…', privacy: 'Privacidad',
       contactAsk: '¿Desea que nos pongamos en contacto?', contactWhy: 'Queremos entender y resolver lo que pasó.',
       contactYes: 'Sí, quiero contacto', contactNo: 'No, gracias', name: 'Nombre (opcional)', phone: 'Teléfono / WhatsApp', email: 'Correo',
-      consent: 'Autorizo el uso de estos datos solo para contactarme sobre esta evaluación.', needOne: 'Ingrese teléfono o correo.', needConsent: 'Marque la autorización para continuar.',
+      consent: 'Autorizo el uso de estos datos solo para contactarme sobre esta evaluación.', needOne: 'Ingrese teléfono o correo.', badPhone: 'Teléfono inválido: incluya código de área y número.', badEmail: 'Correo inválido.', needConsent: 'Marque la autorización para continuar.',
       geoAsk: 'Compartir mi ubicación aproximada (opcional)', geoOn: 'Ubicación compartida ✓ — toque para quitar', geoDenied: 'Ubicación no autorizada en este dispositivo', geoWhy: 'Solo para saber de qué región viene la evaluación. Guardamos solo ciudad y estado.',
       close: 'Cerrar', closed: 'Estamos cerrados en este momento', unavailable: 'Encuesta no disponible', noSurvey: 'No hay encuesta activa para esta tienda.',
       once: 'Esta evaluación ya fue enviada. ¡Gracias!', error: 'No se pudo enviar. Verifique la conexión e intente de nuevo.', retry: 'Intentar de nuevo' },
@@ -198,6 +198,8 @@
 
   function unpair(message) {
     store.del(TOKEN_KEY); store.del(CONFIG_KEY);
+    // Tablet desativado (pode ter sido perdido): contato e localização dos clientes não ficam guardados nele.
+    store.set(QUEUE_KEY, store.get(QUEUE_KEY, []).map(({ contact, geo: g, ...rest }) => rest));
     config = null; state = null;
     showPairing(message);
   }
@@ -393,7 +395,7 @@
   // ------------------------------------------------------------ contato (com consentimento — LGPD)
   function minNps() {
     const onPath = new Set(path());
-    const scores = state.survey.questions.filter((q, i) => q.type === 'nps' && onPath.has(i) && Number.isInteger(state.answers[q.id])).map((q) => state.answers[q.id]);
+    const scores = state.survey.questions.filter((q, i) => (q.isNps ?? q.type === 'nps') && onPath.has(i) && Number.isInteger(state.answers[q.id])).map((q) => state.answers[q.id]);
     return scores.length ? Math.min(...scores) : null;
   }
   function needsContact() {
@@ -435,6 +437,10 @@
         h('button', { class: 'btn btn-ghost btn-lg', onclick: showContactAsk }, t('back')),
         h('button', { class: 'btn btn-primary btn-lg', onclick: () => {
           if (!phone.value.trim() && !email.value.trim()) { err.textContent = t('needOne'); return; }
+          // Mesmas regras do servidor: um contato digitado errado não pode fazer a resposta inteira ser recusada.
+          const digits = phone.value.replace(/\D/g, '').replace(/^55(?=\d{10,11}$)/, '');
+          if (phone.value.trim() && !/^\d{10,13}$/.test(digits)) { err.textContent = t('badPhone'); phone.focus(); return; }
+          if (email.value.trim() && !/^[^\s@<>"',;:\\]+@[^\s@<>"',;:\\]+\.[^\s@<>"',;:\\]+$/.test(email.value.trim())) { err.textContent = t('badEmail'); email.focus(); return; }
           if (!consent.checked) { err.textContent = t('needConsent'); return; }
           state.contact = { name: name.value.trim(), phone: phone.value.trim(), email: email.value.trim(), consent: true };
           submit();
@@ -475,6 +481,7 @@
       return;
     }
     const queue = store.get(QUEUE_KEY, []);
+    payload.branchTag = config?.branch?.name || null; // só é enviada enquanto o tablet estiver nesta filial
     queue.push(payload);
     store.set(QUEUE_KEY, queue.slice(-500));
     showThanks();
@@ -509,7 +516,10 @@
       while (queue.length) {
         const item = queue[0];
         try {
-          await api('/responses', { method: 'POST', body: item });
+          // Tablet pareado de novo em outra filial: respostas da filial anterior não vão para a nova.
+          if (item.branchTag && config?.branch?.name && item.branchTag !== config.branch.name) throw Object.assign(new Error('outra filial'), { status: 409 });
+          const { branchTag, ...body } = item;
+          await api('/responses', { method: 'POST', body });
         } catch (e) {
           if (e.status === 401) { setOnline(true); break; }
           if (!e.status || e.status === 429 || e.status >= 500) { setOnline(!!e.status); break; } // tenta depois
