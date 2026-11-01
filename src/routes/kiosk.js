@@ -6,7 +6,7 @@ const { get, run, audit } = require('../db');
 const { randomToken, sha256, rateLimiter } = require('../security');
 const { requireDevice } = require('../auth');
 const { HttpError, str } = require('../validate');
-const { buildConfig, saveResponse } = require('../responses');
+const { buildConfig, saveResponse, surveyPlan } = require('../responses');
 const zones = require('../zones');
 
 const router = express.Router();
@@ -40,7 +40,7 @@ router.get('/config', configLimiter, requireDevice, (req, res) => {
   if (reported && reported !== d.timezone) run('UPDATE devices SET timezone = ?, timezone_at = ? WHERE id = ?', reported, Date.now(), d.id);
   else if (reported) run('UPDATE devices SET timezone_at = ? WHERE id = ?', Date.now(), d.id);
   const branch = branchOf(d);
-  res.json(buildConfig(branch, { device: { name: d.name } }, zones.forBranch(branch, { timezone: reported || d.timezone })));
+  res.json(buildConfig(branch, { device: { name: d.name }, plan: surveyPlan(branch) }, zones.forBranch(branch, { timezone: reported || d.timezone })));
 });
 
 const branchOf = (d) => get('SELECT * FROM branches WHERE id = ?', d.branch_id);

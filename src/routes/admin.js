@@ -20,6 +20,7 @@ const QRCode = require('qrcode');
 const { encrypt, decrypt, lookup } = require('../vault');
 const { publicUrl, timezone: companyTz } = require('../config');
 const { parseLocal } = require('../time');
+const { branchAgenda } = require('../responses');
 
 const router = express.Router();
 const { MEDIA_DIR } = require('../db');
@@ -95,7 +96,7 @@ router.get('/branches', (req, res) => {
       (SELECT COUNT(*) FROM devices d WHERE d.branch_id = b.id AND d.active = 1) AS devices
     FROM branches b LEFT JOIN surveys s ON s.id = b.survey_id ${where} ORDER BY b.name`, ...(s || []));
   // Fuso em uso agora (escolhido ou informado pelo tablet) e as opções do cadastro.
-  res.json(rows.map((b) => ({ ...b, effective_tz: zones.forBranch(b) })));
+  res.json(rows.map((b) => ({ ...b, effective_tz: zones.forBranch(b), ...branchAgenda(b) })));
 });
 router.get('/timezones', (req, res) => res.json({ company: companyTz, choices: zones.ZONE_CHOICES }));
 
@@ -209,10 +210,12 @@ router.post('/branches/:id/public-link', requireAdmin, async (req, res) => {
 // ---------------------------------------------------------------- campanhas agendadas
 router.get('/schedules', (req, res) => {
   const s = scope(req.user);
-  const where = s ? `WHERE (c.branch_id IS NULL OR c.branch_id IN (${placeholders(s)}))` : '';
+  const conds = s ? [`(c.branch_id IS NULL OR c.branch_id IN (${placeholders(s)}))`] : [];
+  const params = [...(s || [])];
+  if (req.query.surveyId) { conds.push('c.survey_id = ?'); params.push(id(req.query.surveyId, 'pesquisa')); }
   const rows = all(`SELECT c.id, c.survey_id, v.title AS survey, c.branch_id, b.name AS branch, c.starts_at, c.ends_at
-    FROM schedules c JOIN surveys v ON v.id = c.survey_id LEFT JOIN branches b ON b.id = c.branch_id ${where}
-    ORDER BY c.starts_at DESC LIMIT 200`, ...(s || []));
+    FROM schedules c JOIN surveys v ON v.id = c.survey_id LEFT JOIN branches b ON b.id = c.branch_id ${conds.length ? 'WHERE ' + conds.join(' AND ') : ''}
+    ORDER BY c.starts_at DESC LIMIT 200`, ...params);
   // Cada campanha é mostrada no fuso da filial dela (ou da empresa, quando vale para todas).
   res.json(rows.map((c) => ({ ...c, tz: c.branch_id ? zones.forBranch(get('SELECT id, timezone FROM branches WHERE id = ?', c.branch_id)) : companyTz })));
 });
@@ -230,6 +233,10 @@ router.post('/schedules', requireAdmin, (req, res) => {
   if (endsAt <= startsAt) throw bad('O fim precisa ser depois do início.');
   if (endsAt - startsAt > 366 * 86_400_000) throw bad('Campanha de no máximo 1 ano.');
   if (endsAt < Date.now()) throw bad('Essa campanha já terminou.');
+  // Dois agendamentos no mesmo horário deixariam dúvida sobre qual pesquisa aparece.
+  const clash = get(`SELECT v.title FROM schedules c JOIN surveys v ON v.id = c.survey_id
+    WHERE c.branch_id IS ? AND c.starts_at < ? AND c.ends_at > ? LIMIT 1`, branchId, endsAt, startsAt);
+  if (clash) throw new HttpError(409, `Já existe um agendamento nesse horário: "${clash.title}". Ajuste o período ou exclua o outro.`);
   const r = run('INSERT INTO schedules (survey_id, branch_id, starts_at, ends_at, created_by, created_at) VALUES (?,?,?,?,?,?)',
     surveyId, branchId, startsAt, endsAt, req.user.id, Date.now());
   audit(req.user.id, 'schedule.create', { id: r.lastInsertRowid, surveyId, branchId, startsAt, endsAt }, req.ip);
@@ -249,8 +256,10 @@ router.get('/surveys', (req, res) => {
   res.json(all(`SELECT s.id, s.title, s.active, s.updated_at,
       (SELECT COUNT(*) FROM questions q WHERE q.survey_id = s.id) AS questions,
       (SELECT COUNT(*) FROM questions q WHERE q.survey_id = s.id AND q.is_nps = 1) AS nps_questions,
-      (SELECT COUNT(*) FROM responses r WHERE r.survey_id = s.id) AS responses
-    FROM surveys s ORDER BY s.active DESC, s.updated_at DESC`));
+      (SELECT COUNT(*) FROM responses r WHERE r.survey_id = s.id) AS responses,
+      (SELECT MIN(c.ends_at) FROM schedules c WHERE c.survey_id = s.id AND c.starts_at <= :now AND c.ends_at > :now) AS on_air_until,
+      (SELECT MIN(c.starts_at) FROM schedules c WHERE c.survey_id = s.id AND c.starts_at > :now) AS next_start
+    FROM surveys s ORDER BY s.active DESC, s.updated_at DESC`.replaceAll(':now', String(Date.now()))));
 });
 
 router.get('/surveys/:id', (req, res) => {
@@ -330,6 +339,10 @@ router.put('/surveys/:id', requireAdmin, (req, res) => {
   const current = loadSurvey(sid);
   if (!current) throw new HttpError(404, 'Pesquisa não encontrada.');
   const s = surveyInput(req.body);
+  // Pesquisa inativa não entra no ar: desativar sem aviso faria um agendamento falhar em silêncio.
+  if (!s.active && get('SELECT 1 FROM schedules WHERE survey_id = ? AND ends_at > ? LIMIT 1', sid, Date.now())) {
+    throw new HttpError(409, 'Esta pesquisa tem agendamentos pendentes. Exclua os agendamentos antes de desativá-la.');
+  }
   const hasResponses = !!get('SELECT 1 FROM responses WHERE survey_id = ? LIMIT 1', sid);
   // Texto e marcação de NPS mudam como as respostas antigas são lidas e calculadas: exige confirmação e fica na auditoria.
   const historyChanges = !hasResponses ? [] : s.questions.flatMap((q, i) => {

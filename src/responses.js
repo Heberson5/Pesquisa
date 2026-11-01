@@ -1,7 +1,7 @@
 'use strict';
 // Gravação de respostas (tablet e link/QR Code) e montagem da configuração enviada ao aparelho.
 // Toda regra de validação fica aqui, para os dois canais serem igualmente rígidos.
-const { get, run, tx } = require('./db');
+const { get, all, run, tx } = require('./db');
 const geoLib = require('./geo');
 const { HttpError, bad, int, str, UUID_RE } = require('./validate');
 const { loadSurvey, normalizeAnswer, isVisible, LANGS } = require('./surveys');
@@ -21,8 +21,42 @@ function effectiveSurveyId(branch, at = Date.now()) {
 }
 
 // Aceita a pesquisa vigente agora OU no momento em que o cliente respondeu (fila offline / troca de campanha).
+// Sem internet o tablet pode seguir com a pesquisa de um agendamento já encerrado: a resposta do cliente não se perde.
 function surveyAllowed(branch, surveyId, submittedAt) {
-  return [Date.now(), submittedAt, submittedAt - 60 * 60_000].some((t) => effectiveSurveyId(branch, t) === surveyId);
+  if ([Date.now(), submittedAt, submittedAt - 60 * 60_000].some((t) => effectiveSurveyId(branch, t) === surveyId)) return true;
+  if (branch.survey_id === surveyId) return true;
+  return !!get('SELECT 1 FROM schedules WHERE survey_id = ? AND (branch_id = ? OR branch_id IS NULL) AND starts_at <= ? AND ends_at > ? LIMIT 1',
+    surveyId, branch.id, submittedAt, submittedAt - 86_400_000);
+}
+
+// Momentos em que a pesquisa da filial muda (início e fim dos agendamentos), do mais próximo ao mais distante.
+function surveyChanges(branch, now, until) {
+  const times = all(`SELECT s.starts_at AS a, s.ends_at AS b FROM schedules s JOIN surveys v ON v.id = s.survey_id AND v.active = 1
+      WHERE (s.branch_id = ? OR s.branch_id IS NULL) AND s.ends_at > ? AND s.starts_at <= ?`, branch.id, now, until)
+    .flatMap((r) => [r.a, r.b]).filter((t) => t > now && t <= until);
+  let current = effectiveSurveyId(branch, now);
+  const changes = [];
+  for (const at of [...new Set(times)].sort((x, y) => x - y)) {
+    const surveyId = effectiveSurveyId(branch, at);
+    if (surveyId !== current) { changes.push({ at, surveyId }); current = surveyId; }
+  }
+  return changes;
+}
+
+// Roteiro enviado ao tablet: com ele a troca acontece na hora certa, mesmo se a internet cair.
+function surveyPlan(branch, now = Date.now()) {
+  const changes = surveyChanges(branch, now, now + 36 * 3_600_000);
+  const surveys = {};
+  for (const { surveyId } of changes) if (surveyId && !surveys[surveyId]) surveys[surveyId] = surveyPayload(loadSurvey(surveyId));
+  return { serverNow: now, changes, surveys };
+}
+
+// O que o painel mostra da filial: a pesquisa no ar agora e a próxima troca automática.
+function branchAgenda(branch, now = Date.now()) {
+  const title = (sid) => (sid ? get('SELECT title FROM surveys WHERE id = ?', sid)?.title ?? null : null);
+  const surveyId = effectiveSurveyId(branch, now);
+  const next = surveyChanges(branch, now, now + 366 * 86_400_000)[0] || null;
+  return { current_survey: title(surveyId), scheduled: surveyId !== branch.survey_id, next_change_at: next?.at ?? null, next_survey: next ? title(next.surveyId) : null };
 }
 
 function mediaInfo(id) {
@@ -172,4 +206,4 @@ function saveResponse({ branch, deviceId = null, deviceLabel = null, channel, bo
   return result;
 }
 
-module.exports = { effectiveSurveyId, surveyAllowed, buildConfig, surveyPayload, saveResponse, mediaInfo, hoursStatus };
+module.exports = { effectiveSurveyId, surveyAllowed, surveyPlan, branchAgenda, buildConfig, surveyPayload, saveResponse, mediaInfo, hoursStatus };

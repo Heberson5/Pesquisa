@@ -11,6 +11,7 @@
   const QUEUE_KEY = 'kiosk.queue';
   const CONFIG_REFRESH_MS = 60_000;
   const FLUSH_MS = 30_000;
+  const PLAN_CHECK_MS = 5_000;
 
   const app = document.getElementById('app');
   const offlineBar = document.getElementById('offline');
@@ -177,8 +178,9 @@
   // ------------------------------------------------------------ configuração
   async function loadConfig() {
     const c = await api('/config');
-    const comparable = (x) => JSON.stringify({ ...x, ticket: undefined });
+    const comparable = (x) => JSON.stringify({ ...x, ticket: undefined, plan: undefined, clockSkew: undefined });
     const changed = comparable(c) !== comparable(config);
+    if (c.plan) c.clockSkew = c.plan.serverNow - Date.now(); // o relógio que vale é o do servidor, não o do tablet
     config = c;
     if (MODE === 'tablet') store.set(CONFIG_KEY, c);
     applyBranding();
@@ -194,6 +196,21 @@
       if (e.status === 401 && MODE === 'tablet') return unpair('Este tablet foi desativado no painel. Gere um novo código para reativá-lo.');
       setOnline(false);
     }
+  }
+
+  // Troca automática: chegou a hora de um agendamento, muda a pesquisa sem depender da internet.
+  // Quem está respondendo termina a pesquisa que começou; o próximo cliente já vê a nova.
+  function applyPlan() {
+    const plan = config?.plan;
+    if (!plan?.changes?.length) return;
+    const now = Date.now() + (config.clockSkew || 0);
+    const due = plan.changes.filter((c) => c.at <= now).pop();
+    if (!due) return;
+    plan.changes = plan.changes.filter((c) => c.at > now);
+    config.survey = due.surveyId ? plan.surveys?.[due.surveyId] || null : null;
+    store.set(CONFIG_KEY, config);
+    if (['welcome', 'unavailable', 'offline', 'closed'].includes(screen)) showWelcome();
+    refreshConfig();
   }
 
   function unpair(message) {
@@ -626,6 +643,7 @@
     setInterval(() => {
       if (store.get(TOKEN_KEY) && ['welcome', 'unavailable', 'offline', 'closed'].includes(screen)) refreshConfig();
     }, CONFIG_REFRESH_MS);
+    setInterval(() => { if (store.get(TOKEN_KEY)) applyPlan(); }, PLAN_CHECK_MS);
     setInterval(() => { if (store.get(TOKEN_KEY)) flushQueue(); }, FLUSH_MS);
     window.addEventListener('online', () => { if (store.get(TOKEN_KEY)) flushQueue(); });
   }

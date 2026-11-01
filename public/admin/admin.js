@@ -638,46 +638,58 @@
       pageHead('Pesquisas', 'Perguntas exibidas nos tablets e marcação do NPS',
         me.role === 'admin' ? h('a', { class: 'btn', href: '#/pesquisas/nova' }, icon('plus', 18), 'Nova pesquisa') : null),
       h('div', { class: 'card table-wrap' }, h('table', {},
-        h('thead', {}, h('tr', {}, h('th', {}, 'Título'), h('th', {}, 'Perguntas'), h('th', {}, 'NPS'), h('th', {}, 'Respostas'), h('th', {}, 'Status'), h('th', {}))),
+        h('thead', {}, h('tr', {}, h('th', {}, 'Título'), h('th', {}, 'Perguntas'), h('th', {}, 'NPS'), h('th', {}, 'Respostas'), h('th', {}, 'Status'), h('th', {}, 'Agendamento'), h('th', {}))),
         h('tbody', {}, list.length ? list.map((s) => h('tr', {},
           h('td', {}, h('b', {}, s.title), h('div', { class: 'small muted' }, 'Atualizada ' + fmtDate(s.updated_at))),
           h('td', {}, s.questions), h('td', {}, s.nps_questions ? h('span', { class: 'badge nps' }, `${s.nps_questions} marcada(s)`) : h('span', { class: 'badge warn' }, 'nenhuma')),
           h('td', {}, s.responses), h('td', {}, h('span', { class: 'badge ' + (s.active ? 'ok' : 'off') }, s.active ? 'Ativa' : 'Inativa')),
+          h('td', { class: 'small' }, s.on_air_until ? h('span', { class: 'badge ok' }, `No ar até ${fmtDate(s.on_air_until)}`) : s.next_start ? h('span', { class: 'badge warn' }, `Entra em ${fmtDate(s.next_start)}`) : h('span', { class: 'muted' }, '—')),
           h('td', {}, h('div', { class: 'row' },
             h('a', { class: 'btn secondary sm', href: '#/pesquisas/' + s.id }, me.role === 'admin' ? 'Editar' : 'Ver'),
             me.role === 'admin' ? h('button', { class: 'btn secondary sm', onclick: async () => {
               const r = await api(`/surveys/${s.id}/duplicate`, { method: 'POST' }); toast('Pesquisa duplicada.'); location.hash = '#/pesquisas/' + r.id;
             } }, 'Duplicar') : null))))
-          : h('tr', {}, h('td', { colspan: '6', class: 'empty' }, 'Nenhuma pesquisa criada.'))))),
-      await campaignsCard(list));
+          : h('tr', {}, h('td', { colspan: '7', class: 'empty' }, 'Nenhuma pesquisa criada.'))))),
+      await scheduleCard(list));
   }
 
-  // Campanhas: trocam a pesquisa de uma filial (ou de todas) por um período, e voltam sozinhas à padrão.
-  async function campaignsCard(svs) {
-    const [rows, brs] = await Promise.all([api('/schedules'), branches()]);
-    const now = Date.now();
-    const status = (c) => (c.ends_at <= now ? h('span', { class: 'badge' }, 'Encerrada') : c.starts_at <= now ? h('span', { class: 'badge ok' }, 'No ar') : h('span', { class: 'badge warn' }, 'Agendada'));
-    const add = () => {
-      const sv = h('select', {}, svs.filter((s) => s.active).map((s) => h('option', { value: String(s.id) }, s.title)));
-      const br = h('select', {}, h('option', { value: '' }, 'Todas as filiais'), brs.map((b) => h('option', { value: String(b.id) }, b.name)));
-      const st = h('input', { type: 'datetime-local' }); const en = h('input', { type: 'datetime-local' });
-      modal('Agendar campanha', h('div', { class: 'form-grid' }, h('label', { class: 'f' }, 'Pesquisa', sv), h('label', { class: 'f' }, 'Filial', br),
-        h('label', { class: 'f' }, 'Início', st), h('label', { class: 'f' }, 'Fim', en),
-        h('p', { class: 'small muted' }, 'O dia e a hora valem no fuso da filial escolhida (ou no da empresa, quando for "Todas as filiais").')),
-      [{ label: 'Agendar', onClick: async (close) => {
-        try { await api('/schedules', { method: 'POST', body: { surveyId: Number(sv.value), branchId: br.value ? Number(br.value) : null, startsAt: st.value, endsAt: en.value } }); close(); toast('Campanha agendada.'); route(); } catch (ex) { toast(ex.message, true); }
-      } }]);
+  // Agendamentos: colocam uma pesquisa no ar em uma filial (ou em todas) por um período, e tudo volta sozinho à padrão.
+  // Com "fixed", o quadro fica dentro da pesquisa e lista só os agendamentos dela (sem recarregar a página, para não perder edições).
+  async function scheduleCard(svs, fixed = null) {
+    const brs = await branches();
+    const card = h('div', { class: 'card' });
+    const draw = async () => {
+      const rows = await api('/schedules' + (fixed ? `?surveyId=${fixed.id}` : ''));
+      const now = Date.now();
+      const status = (c) => (c.ends_at <= now ? h('span', { class: 'badge' }, 'Encerrado') : c.starts_at <= now ? h('span', { class: 'badge ok' }, 'No ar') : h('span', { class: 'badge warn' }, 'Agendado'));
+      const add = () => {
+        const sv = fixed ? null : h('select', {}, svs.filter((s) => s.active).map((s) => h('option', { value: String(s.id) }, s.title)));
+        const br = h('select', {}, h('option', { value: '' }, 'Todas as filiais'), brs.map((b) => h('option', { value: String(b.id) }, b.name)));
+        const st = h('input', { type: 'datetime-local' }); const en = h('input', { type: 'datetime-local' });
+        modal(fixed ? `Agendar "${fixed.title}"` : 'Agendar pesquisa', h('div', { class: 'form-grid' }, sv ? h('label', { class: 'f' }, 'Pesquisa', sv) : null, h('label', { class: 'f' }, 'Filial', br),
+          h('label', { class: 'f' }, 'Entra no ar', st), h('label', { class: 'f' }, 'Sai do ar', en),
+          h('p', { class: 'small muted' }, 'O dia e a hora valem no fuso da filial escolhida (ou no da empresa, quando for "Todas as filiais"). A troca é automática nos tablets e no QR Code.')),
+        [{ label: 'Agendar', onClick: async (close) => {
+          try {
+            await api('/schedules', { method: 'POST', body: { surveyId: fixed ? fixed.id : Number(sv.value), branchId: br.value ? Number(br.value) : null, startsAt: st.value, endsAt: en.value } });
+            close(); toast('Agendamento criado.'); cache.branches = null; await draw();
+          } catch (ex) { toast(ex.message, true); }
+        } }]);
+      };
+      card.replaceChildren(
+        h('div', { class: 'topbar' }, h('div', {}, h('h2', {}, fixed ? 'Agendamentos desta pesquisa' : 'Agendamentos'),
+          h('div', { class: 'small muted' }, 'A pesquisa entra e sai do ar sozinha nos horários definidos, sem ninguém precisar trocar. Quem já está respondendo termina a pesquisa que começou.')),
+        me.role === 'admin' && (!fixed || fixed.active) ? h('button', { class: 'btn secondary', onclick: add }, icon('calendar', 16), 'Agendar') : null),
+        rows.length ? h('div', { class: 'table-wrap' }, h('table', {}, h('thead', {}, h('tr', {}, fixed ? null : h('th', {}, 'Pesquisa'), h('th', {}, 'Filial'), h('th', {}, 'Período'), h('th', {}, 'Situação'), h('th', {}))),
+          h('tbody', {}, rows.map((c) => h('tr', {}, fixed ? null : h('td', {}, c.survey), h('td', {}, c.branch || 'Todas'), h('td', { class: 'small' }, `${fmtDateTz(c.starts_at, c.tz)} → ${fmtDateTz(c.ends_at, c.tz)}`),
+            h('td', {}, status(c)), h('td', {}, me.role === 'admin' ? h('button', { class: 'btn secondary sm', onclick: async () => {
+              if (!confirm('Excluir este agendamento?')) return;
+              try { await api('/schedules/' + c.id, { method: 'DELETE' }); cache.branches = null; await draw(); } catch (ex) { toast(ex.message, true); }
+            } }, 'Excluir') : null))))))
+          : h('p', { class: 'muted small' }, fixed && !fixed.active ? 'Ative a pesquisa para poder agendá-la.' : 'Nenhum agendamento.'));
     };
-    return h('div', { class: 'card' },
-      h('div', { class: 'topbar' }, h('div', {}, h('h2', {}, 'Campanhas agendadas'), h('div', { class: 'small muted' }, 'Durante o período, a pesquisa da campanha substitui a padrão; depois, tudo volta sozinho.')),
-        me.role === 'admin' ? h('button', { class: 'btn secondary', onclick: add }, icon('calendar', 16), 'Agendar campanha') : null),
-      rows.length ? h('div', { class: 'table-wrap' }, h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, 'Pesquisa'), h('th', {}, 'Filial'), h('th', {}, 'Período'), h('th', {}, 'Situação'), h('th', {}))),
-        h('tbody', {}, rows.map((c) => h('tr', {}, h('td', {}, c.survey), h('td', {}, c.branch || 'Todas'), h('td', { class: 'small' }, `${fmtDateTz(c.starts_at, c.tz)} → ${fmtDateTz(c.ends_at, c.tz)}`),
-          h('td', {}, status(c)), h('td', {}, me.role === 'admin' ? h('button', { class: 'btn secondary sm', onclick: async () => {
-            if (!confirm('Excluir esta campanha?')) return;
-            try { await api('/schedules/' + c.id, { method: 'DELETE' }); route(); } catch (ex) { toast(ex.message, true); }
-          } }, 'Excluir') : null))))))
-        : h('p', { class: 'muted small' }, 'Nenhuma campanha agendada.'));
+    await draw();
+    return card;
   }
 
   const NEW_SURVEY = {
@@ -873,6 +885,7 @@
       h('div', { class: 'card' }, h('h2', {}, 'Dados gerais'), h('div', { class: 'form-grid' },
         field('title', 'Título interno', 'text', { maxlength: '120' }),
         h('label', { class: 'chk' }, activeChk, 'Pesquisa ativa'))),
+      sid ? await scheduleCard([], { id: sid, title: s.title, active: !!s.active }) : h('div', { class: 'card small muted' }, 'Depois de salvar a pesquisa, você poderá agendar aqui os horários em que ela entra no ar.'),
       h('div', { class: 'card' }, h('h2', {}, 'Contato e idiomas'),
         h('div', { class: 'form-grid' },
           h('label', { class: 'f' }, 'Perguntar ao cliente se quer ser contatado', contactSel),
@@ -954,7 +967,9 @@
           } }, h('option', { value: '' }, '— nenhuma —'), svs.filter((s) => s.active).map((s) => h('option', { value: String(s.id) }, s.title)));
           sel.value = b.survey_id ? String(b.survey_id) : '';
           return h('tr', {}, h('td', {}, h('code', {}, b.code)), h('td', {}, h('b', {}, b.name), h('div', { class: 'small muted' }, b.city || ''), h('div', { class: 'small muted' }, `Fuso: ${tzName(b.effective_tz)}`)),
-            h('td', {}, sel), h('td', {}, b.nps_goal ?? h('span', { class: 'muted small' }, 'padrão')), h('td', {}, b.devices),
+            h('td', {}, sel, h('div', { class: 'small muted' }, `No ar agora: ${b.current_survey || 'nenhuma'}${b.scheduled ? ' (agendada)' : ''}`),
+              b.next_change_at ? h('div', { class: 'small muted' }, `Troca automática em ${fmtDateTz(b.next_change_at, b.effective_tz)}: ${b.next_survey || 'nenhuma'}`) : null),
+            h('td', {}, b.nps_goal ?? h('span', { class: 'muted small' }, 'padrão')), h('td', {}, b.devices),
             h('td', {}, h('span', { class: 'badge ' + (b.active ? 'ok' : 'off') }, b.active ? 'Ativa' : 'Inativa'), b.public_enabled ? h('span', { class: 'badge ok' }, 'QR ativo') : null),
             h('td', {}, h('div', { class: 'row' },
               h('button', { class: 'btn secondary sm', onclick: () => openLink(b) }, 'QR Code'),
@@ -1445,8 +1460,8 @@
       case 'branch.update': return E('cadastros', '', `Alterou a filial "${d.name || brName(d.id)}"`, d.active === 0 || d.active === false ? 'Filial DESATIVADA.' : '');
       case 'branch.set_survey': return E('cadastros', '', `Definiu a pesquisa padrão da filial "${brName(d.branchId)}"`, d.surveyId ? `Pesquisa: ${sv(d.surveyId)}.` : 'Sem pesquisa padrão.');
       case 'branch.public_link': return E('cadastros', d.regenerated ? 'warn' : '', `${d.regenerated ? 'Gerou um novo QR Code/link' : d.enabled ? 'Ativou o QR Code/link' : 'Desativou o QR Code/link'} da filial "${brName(d.branchId)}"`, d.regenerated ? 'O QR Code antigo parou de funcionar.' : '');
-      case 'schedule.create': return E('cadastros', '', `Agendou uma campanha${d.branchId ? ' na filial "' + brName(d.branchId) + '"' : ' em todas as filiais'}`, `Pesquisa: ${sv(d.surveyId)} · de ${d.startsAt ? new Date(d.startsAt).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : '…'} a ${d.endsAt ? new Date(d.endsAt).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : '…'}.`);
-      case 'schedule.delete': return E('cadastros', '', 'Excluiu uma campanha agendada');
+      case 'schedule.create': return E('cadastros', '', `Agendou uma pesquisa${d.branchId ? ' na filial "' + brName(d.branchId) + '"' : ' em todas as filiais'}`, `Pesquisa: ${sv(d.surveyId)} · de ${d.startsAt ? new Date(d.startsAt).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : '…'} a ${d.endsAt ? new Date(d.endsAt).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : '…'}.`);
+      case 'schedule.delete': return E('cadastros', '', 'Excluiu um agendamento de pesquisa');
       case 'survey.create': return E('cadastros', '', `Criou a pesquisa "${d.title || sv(d.id)}"`);
       case 'survey.update': return E('cadastros', d.historyChanges?.length ? 'warn' : '', `Alterou a pesquisa "${d.title || sv(d.id)}"`,
         (d.historyChanges || []).map((c) => `Pergunta ${c.question}: ${c.text ? `texto de "${c.text[0]}" para "${c.text[1]}"` : ''}${c.text && c.is_nps ? '; ' : ''}${c.is_nps ? (c.is_nps[1] ? 'passou a entrar no NPS' : 'deixou de entrar no NPS') : ''}.`).join(' '));
