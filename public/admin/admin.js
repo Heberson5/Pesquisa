@@ -49,7 +49,7 @@
     }
     const data = await res.json().catch(() => ({}));
     if (res.status === 403 && data.code === 'MFA_SETUP_REQUIRED') { showMfaSetup(true); throw new Error('401'); }
-    if (!res.ok) { const e = new Error(data.error || 'Erro ' + res.status); e.status = res.status; throw e; }
+    if (!res.ok) { const e = new Error(data.error || 'Erro ' + res.status); e.status = res.status; e.code = data.code; throw e; }
     return data;
   }
 
@@ -215,9 +215,17 @@
 
   let displays = {};
   let contactModes = {};
+  let lastUserId = null;
   async function loadMe() {
     const r = await api('/me');
     if (r.mfaSetupRequired) { csrf = r.csrf; showMfaSetup(true); throw new Error('401'); }
+    // Outra pessoa entrou na mesma aba: nada do que a anterior carregou ou filtrou pode continuar na tela.
+    if (lastUserId !== null && lastUserId !== r.user.id) {
+      Object.keys(cache).forEach((k) => delete cache[k]);
+      Object.assign(filterState, { branchId: '', surveyId: '', channel: '', uf: '' });
+      Object.assign(caseState, { status: 'pendentes', branchId: '', mine: '' });
+    }
+    lastUserId = r.user.id;
     me = r.user; csrf = r.csrf; questionTypes = r.questionTypes; displays = r.displays; settings = r.settings; contactModes = r.contactModes;
     applyBranding({ companyName: settings.companyName, primaryColor: settings.primaryColor, accentColor: settings.accentColor,
       logoUrl: settings.logoMediaId ? '/media/' + settings.logoMediaId : null });
@@ -438,7 +446,7 @@
           h('td', {}, b.name),
           h('td', { class: npsClass(b.nps) }, h('b', {}, fmtNps(b.nps))),
           h('td', {}, b.goal === null ? '—' : fmtNps(b.goal)),
-          h('td', {}, b.goalMet === null ? h('span', { class: 'muted small' }, 'sem meta') : b.goalMet
+          h('td', {}, b.goal === null ? h('span', { class: 'muted small' }, 'sem meta') : b.nps === null ? h('span', { class: 'muted small' }, 'sem notas no período') : b.goalMet
             ? h('span', { class: 'badge ok' }, icon('check', 12), 'Meta atingida') : h('span', { class: 'badge off' }, `Faltam ${(b.goal - b.nps).toLocaleString('pt-BR', { maximumFractionDigits: 1 })} pts`)),
           h('td', {}, b.responses)))))));
   }
@@ -823,8 +831,9 @@
       }));
     }
     renderSurveyTr();
-    const save = async () => {
+    const save = async (confirmHistory = false) => {
       const body = {
+        confirmHistory,
         title: f.title.value, welcome_title: f.welcome_title.value, welcome_text: f.welcome_text.value,
         thanks_title: f.thanks_title.value, thanks_text: f.thanks_text.value, thanks_media_id: mediaId,
         thanks_seconds: Number(f.thanks_seconds.value), idle_seconds: Number(f.idle_seconds.value), active: activeChk.checked,
@@ -843,13 +852,16 @@
         if (sid) await api('/surveys/' + sid, { method: 'PUT', body });
         else { const r = await api('/surveys', { method: 'POST', body }); location.hash = '#/pesquisas/' + r.id; }
         toast('Pesquisa salva.'); cache.surveys = null;
-      } catch (ex) { toast(ex.message, true); }
+      } catch (ex) {
+        if (ex.code === 'HISTORY_CHANGE') { if (confirm(ex.message)) save(true); return; }
+        toast(ex.message, true);
+      }
     };
 
     return h('div', {},
       pageHead(sid ? 'Editar pesquisa' : 'Nova pesquisa', s.title || null,
-        h('a', { class: 'btn secondary', href: '#/pesquisas' }, 'Voltar'), ro ? null : h('button', { class: 'btn', onclick: save }, 'Salvar pesquisa')),
-      locked ? h('div', { class: 'card small' }, '🔒 Esta pesquisa já possui respostas: é possível corrigir textos e a marcação de NPS, mas não adicionar/remover perguntas ou mudar tipos. Para mudanças estruturais, use "Duplicar".') : null,
+        h('a', { class: 'btn secondary', href: '#/pesquisas' }, 'Voltar'), ro ? null : h('button', { class: 'btn', onclick: () => save() }, 'Salvar pesquisa')),
+      locked ? h('div', { class: 'card small' }, '🔒 Esta pesquisa já possui respostas: mudar o texto de uma pergunta ou a marcação de NPS também afeta as respostas já recebidas e pede confirmação. Não é possível adicionar/remover perguntas ou mudar tipos. Para perguntas novas ou com outro sentido, use "Duplicar".') : null,
       h('div', { class: 'card' }, h('h2', {}, 'Dados gerais'), h('div', { class: 'form-grid' },
         field('title', 'Título interno', 'text', { maxlength: '120' }),
         h('label', { class: 'chk' }, activeChk, 'Pesquisa ativa'))),
@@ -1428,7 +1440,8 @@
       case 'schedule.create': return E('cadastros', '', `Agendou uma campanha${d.branchId ? ' na filial "' + brName(d.branchId) + '"' : ' em todas as filiais'}`, `Pesquisa: ${sv(d.surveyId)} · de ${d.startsAt ? new Date(d.startsAt).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : '…'} a ${d.endsAt ? new Date(d.endsAt).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : '…'}.`);
       case 'schedule.delete': return E('cadastros', '', 'Excluiu uma campanha agendada');
       case 'survey.create': return E('cadastros', '', `Criou a pesquisa "${d.title || sv(d.id)}"`);
-      case 'survey.update': return E('cadastros', '', `Alterou a pesquisa "${d.title || sv(d.id)}"`);
+      case 'survey.update': return E('cadastros', d.historyChanges?.length ? 'warn' : '', `Alterou a pesquisa "${d.title || sv(d.id)}"`,
+        (d.historyChanges || []).map((c) => `Pergunta ${c.question}: ${c.text ? `texto de "${c.text[0]}" para "${c.text[1]}"` : ''}${c.text && c.is_nps ? '; ' : ''}${c.is_nps ? (c.is_nps[1] ? 'passou a entrar no NPS' : 'deixou de entrar no NPS') : ''}.`).join(' '));
       case 'survey.duplicate': return E('cadastros', '', `Duplicou a pesquisa "${sv(d.from)}"`, 'Criou uma cópia para editar.');
       case 'media.upload': return E('cadastros', '', `Enviou ${String(d.mime || '').startsWith('video/') ? 'um vídeo' : 'uma imagem'}`, d.size ? `Tamanho: ${d.size > 1048576 ? (d.size / 1048576).toFixed(1) + ' MB' : Math.round(d.size / 1024) + ' KB'}.` : '');
       case 'settings.update': return E('cadastros', '', 'Alterou as configurações do sistema', d.companyName ? `Empresa: ${d.companyName}.` : '');

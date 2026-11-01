@@ -29,4 +29,8 @@ function localNow(at = Date.now(), tz = timezone) {
   return { weekday: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(p.weekday), hour: +p.hour, date: `${p.year}-${p.month}-${p.day}` };
 }
 
-module.exports = { parseLocal, formatLocal, localNow, offsetMs };
+// Timestamp → 'YYYY-MM-DD' no fuso da empresa.
+const dayFormat = new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' });
+const localDay = (at) => dayFormat.format(new Date(at));
+
+module.exports = { parseLocal, formatLocal, localNow, localDay, offsetMs };

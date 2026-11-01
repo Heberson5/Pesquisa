@@ -1,5 +1,6 @@
 'use strict';
 // Validação de entrada. Tudo que vem do cliente passa por aqui antes do banco.
+const { parseLocal } = require('./time');
 
 class HttpError extends Error {
   constructor(status, message) { super(message); this.status = status; }
@@ -42,8 +43,8 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-
 function dateParam(v, field) {
   if (v === undefined || v === '') return null;
   if (typeof v !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(v)) throw bad(`Data "${field}" inválida.`);
-  const t = Date.parse(v + 'T00:00:00');
-  if (Number.isNaN(t)) throw bad(`Data "${field}" inválida.`);
+  const t = parseLocal(v + 'T00:00'); // meia-noite no fuso da empresa, não no do servidor
+  if (t === null) throw bad(`Data "${field}" inválida.`);
   return t;
 }
 

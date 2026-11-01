@@ -331,6 +331,18 @@ router.put('/surveys/:id', requireAdmin, (req, res) => {
   if (!current) throw new HttpError(404, 'Pesquisa não encontrada.');
   const s = surveyInput(req.body);
   const hasResponses = !!get('SELECT 1 FROM responses WHERE survey_id = ? LIMIT 1', sid);
+  // Texto e marcação de NPS mudam como as respostas antigas são lidas e calculadas: exige confirmação e fica na auditoria.
+  const historyChanges = !hasResponses ? [] : s.questions.flatMap((q, i) => {
+    const old = current.questions[i];
+    if (!old) return [];
+    const c = { question: i + 1 };
+    if (old.text !== q.text) c.text = [old.text, q.text];
+    if (old.is_nps !== !!q.is_nps) c.is_nps = [old.is_nps, !!q.is_nps];
+    return c.text || c.is_nps ? [c] : [];
+  });
+  if (historyChanges.length && req.body.confirmHistory !== true) {
+    return res.status(409).json({ code: 'HISTORY_CHANGE', error: `Esta pesquisa já tem respostas. A alteração em ${historyChanges.length} pergunta(s) também vale para as respostas antigas e pode mudar o NPS já calculado. Para uma pergunta com outro sentido, use "Duplicar". Salvar mesmo assim?` });
+  }
   tx(() => {
     run(`UPDATE surveys SET title=?, welcome_title=?, welcome_text=?, thanks_title=?, thanks_text=?, thanks_media_id=?,
       thanks_seconds=?, idle_seconds=?, active=?, contact_mode=?, languages=?, i18n=?, updated_at=? WHERE id=?`,
@@ -341,7 +353,7 @@ router.put('/surveys/:id', requireAdmin, (req, res) => {
       insertQuestions(sid, s.questions);
     } else {
       // Com respostas coletadas, a estrutura fica congelada para não corromper o histórico.
-      // Só é permitido corrigir textos e a marcação de NPS (que recalcula os relatórios).
+      // Só é permitido corrigir textos e a marcação de NPS (que recalcula os relatórios), com confirmação.
       if (s.questions.length !== current.questions.length) throw new HttpError(409, 'Esta pesquisa já tem respostas: não é possível adicionar ou remover perguntas. Use "Duplicar".');
       s.questions.forEach((q, i) => {
         const old = current.questions[i];
@@ -355,7 +367,7 @@ router.put('/surveys/:id', requireAdmin, (req, res) => {
     }
     if (!s.active) run('UPDATE branches SET survey_id = NULL WHERE survey_id = ?', sid);
   });
-  audit(req.user.id, 'survey.update', { id: sid, title: s.title }, req.ip);
+  audit(req.user.id, 'survey.update', { id: sid, title: s.title, ...(historyChanges.length ? { historyChanges } : {}) }, req.ip);
   res.json({ ok: true });
 });
 

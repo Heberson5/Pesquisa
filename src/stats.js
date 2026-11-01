@@ -9,6 +9,7 @@ const { loadSurvey, npsFromCounts } = require('./surveys');
 const { getSettings } = require('./settings');
 const { buildReport } = require('./report');
 const { MEDIA_DIR } = require('./db');
+const { localDay } = require('./time');
 
 // Monta o filtro comum (período, filial, pesquisa) respeitando o escopo do usuário.
 function responseFilter(user, q) {
@@ -40,16 +41,19 @@ const NPS_AGG = `SUM(CASE WHEN a.value_num >= 9 THEN 1 ELSE 0 END) AS promoters,
   SUM(CASE WHEN a.value_num BETWEEN 7 AND 8 THEN 1 ELSE 0 END) AS passives,
   SUM(CASE WHEN a.value_num <= 6 THEN 1 ELSE 0 END) AS detractors`;
 const NPS_JOIN = 'JOIN answers a ON a.response_id = r.id JOIN questions q ON q.id = a.question_id AND q.is_nps = 1';
+// Cada resposta conta uma vez nos totais: vale a primeira pergunta de NPS respondida. O detalhe por pergunta usa NPS_JOIN.
+const NPS_MAIN = `a.response_id = r.id AND a.question_id = (SELECT q2.id FROM answers a2 JOIN questions q2 ON q2.id = a2.question_id AND q2.is_nps = 1
+  WHERE a2.response_id = r.id ORDER BY q2.position, q2.id LIMIT 1)`;
 const npsRow = (row) => npsFromCounts(row?.promoters || 0, row?.passives || 0, row?.detractors || 0);
 
 function computeStats(user, query) {
   const f = responseFilter(user, query);
   const totalResponses = get(`SELECT COUNT(*) AS n FROM responses r ${f.sql}`, ...f.params).n;
-  const overall = npsRow(get(`SELECT ${NPS_AGG} FROM responses r ${NPS_JOIN} ${f.sql}`, ...f.params));
+  const overall = npsRow(get(`SELECT ${NPS_AGG} FROM responses r JOIN answers a ON ${NPS_MAIN} ${f.sql}`, ...f.params));
   const defaultGoal = getSettings().defaultNpsGoal;
   const byBranch = all(`SELECT b.id, b.name, b.nps_goal, COUNT(DISTINCT r.id) AS responses, ${NPS_AGG}
       FROM responses r JOIN branches b ON b.id = r.branch_id
-      LEFT JOIN answers a ON a.response_id = r.id AND a.question_id IN (SELECT id FROM questions WHERE is_nps = 1)
+      LEFT JOIN answers a ON ${NPS_MAIN}
       ${f.sql} GROUP BY b.id ORDER BY b.name`, ...f.params)
     .map((r) => {
       const n = npsRow(r);
@@ -61,18 +65,24 @@ function computeStats(user, query) {
   const byQuestion = all(`SELECT q.id, q.text, s.title AS survey, ${NPS_AGG}
       FROM responses r ${NPS_JOIN} JOIN surveys s ON s.id = q.survey_id ${f.sql} GROUP BY q.id ORDER BY s.title, q.position`, ...f.params)
     .map((r) => ({ id: r.id, text: r.text, survey: r.survey, ...npsRow(r) }));
-  const trend = all(`SELECT date(r.submitted_at / 1000, 'unixepoch', 'localtime') AS day, COUNT(DISTINCT r.id) AS responses, ${NPS_AGG}
-      FROM responses r LEFT JOIN answers a ON a.response_id = r.id AND a.question_id IN (SELECT id FROM questions WHERE is_nps = 1)
-      ${f.sql} GROUP BY day ORDER BY day`, ...f.params)
-    .map((r) => ({ day: r.day, responses: r.responses, nps: npsRow(r).nps }));
-  const scoreDist = all(`SELECT a.value_num AS score, COUNT(*) AS n FROM responses r ${NPS_JOIN} ${f.sql} GROUP BY a.value_num`, ...f.params);
+  // Agrupado aqui, e não no SQL, para o dia ser o do fuso da empresa (o SQLite só conhece o fuso do servidor).
+  const days = new Map();
+  for (const r of all(`SELECT r.submitted_at AS at, a.value_num AS score FROM responses r LEFT JOIN answers a ON ${NPS_MAIN} ${f.sql}`, ...f.params)) {
+    const day = localDay(r.at);
+    if (!days.has(day)) days.set(day, { responses: 0, promoters: 0, passives: 0, detractors: 0 });
+    const d = days.get(day);
+    d.responses++;
+    if (r.score !== null) d[r.score >= 9 ? 'promoters' : r.score >= 7 ? 'passives' : 'detractors']++;
+  }
+  const trend = [...days].sort(([a], [b]) => (a < b ? -1 : 1)).map(([day, d]) => ({ day, responses: d.responses, nps: npsRow(d).nps }));
+  const scoreDist = all(`SELECT a.value_num AS score, COUNT(*) AS n FROM responses r JOIN answers a ON ${NPS_MAIN} ${f.sql} GROUP BY a.value_num`, ...f.params);
   const comments = all(`SELECT r.submitted_at, b.name AS branch, q.text AS question, a.value_text AS comment
       FROM responses r JOIN answers a ON a.response_id = r.id JOIN questions q ON q.id = a.question_id AND q.type = 'text'
       JOIN branches b ON b.id = r.branch_id ${f.sql} ORDER BY r.submitted_at DESC LIMIT 15`, ...f.params);
   const channels = all(`SELECT r.channel, COUNT(*) AS n FROM responses r ${f.sql} GROUP BY r.channel`, ...f.params);
   // Regiões de onde vieram as respostas do QR/link (somente quem autorizou a localização).
   const geoWhere = `${f.sql ? f.sql + ' AND' : 'WHERE'} r.geo_region IS NOT NULL`;
-  const geoJoin = 'LEFT JOIN answers a ON a.response_id = r.id AND a.question_id IN (SELECT id FROM questions WHERE is_nps = 1)';
+  const geoJoin = `LEFT JOIN answers a ON ${NPS_MAIN}`;
   const byRegion = all(`SELECT COALESCE(r.geo_uf, r.geo_region) AS place, r.geo_region AS region, COUNT(DISTINCT r.id) AS responses, ${NPS_AGG}
       FROM responses r ${geoJoin} ${geoWhere} GROUP BY place, region ORDER BY responses DESC LIMIT 30`, ...f.params)
     .map((r) => ({ place: r.place, region: r.region, responses: r.responses, ...npsRow(r) }));
