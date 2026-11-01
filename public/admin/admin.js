@@ -736,7 +736,7 @@
       const target = q.cond ? questions.findIndex((x) => x._k === q.cond.k) : -1;
       return { id: q.id, text: q.text, help_text: q.help_text || '', type: q.type, required: !!q.required, is_nps: !!q.is_nps, options: q.options,
         display: ['nps', 'scale5'].includes(q.type) ? (q.display || 'default') : undefined, icon: q.display === 'icons' ? q.icon || null : null,
-        show_if: target >= 0 && target < i ? { ref: target, op: q.cond.op, value: q.cond.value } : null,
+        show_if: target >= 0 ? { ref: target, op: q.cond.op, value: q.cond.value } : null,
         i18n: cleanI18n(q.i18n) };
     });
   }
@@ -803,6 +803,8 @@
     const frozen = ro || locked;
     const root = h('div', { class: 'q-tree' });
     let open = null; // { kind: 'add' | 'edit', k }
+    const openMore = new Set(); // _k das perguntas com "Mais opções" aberto, para sobreviver ao render
+    const sameGroup = (i, j) => par[i] < 0 || condKey(questions[i].cond) === condKey(questions[j].cond);
     let par = []; let lvl = []; let depth = [];
     const descends = (j, anc) => { for (let k = par[j]; k >= 0; k = par[k]) if (k === anc) return true; return false; };
 
@@ -830,8 +832,10 @@
       if (same.length) at = blockEnd(same[same.length - 1]);
       questions.splice(at, 0, { text: '', type: 'scale5', required: true, is_nps: false, options: [], i18n: {}, _k: Math.max(0, ...questions.map((x) => x._k)) + 1, cond: { k: m._k, ...cond } });
     }
+    // Irmãs entre as quais i pode andar: filhas só dentro do próprio grupo de condição.
+    const siblings = (i) => questions.map((_, j) => j).filter((j) => par[j] === par[i] && sameGroup(i, j));
     function move(i, d) {
-      const sibs = questions.map((_, j) => j).filter((j) => par[j] === par[i]);
+      const sibs = siblings(i);
       const pos = sibs.indexOf(i);
       const other = sibs[pos + d];
       if (other === undefined) return;
@@ -841,6 +845,9 @@
     }
     function remove(i) {
       const n = blockEnd(i) - i;
+      const inside = new Set(questions.slice(i, i + n).map((x) => x._k));
+      const outside = questions.findIndex((x, j) => (j < i || j >= i + n) && x.cond && inside.has(x.cond.k));
+      if (outside >= 0) return toast(`A pergunta ${outside + 1} depende desta pergunta (ou de uma ramificação dela). Mude ou remova a pergunta ${outside + 1} antes.`, true);
       if (n > 1 && !confirm(`Remover esta pergunta e as ${n - 1} ramificação(ões) abaixo dela?`)) return;
       questions.splice(i, n); render();
     }
@@ -894,7 +901,7 @@
             q.options = next;
           } })) : null;
 
-      const sibs = questions.map((_, j) => j).filter((j) => par[j] === par[i]);
+      const sibs = siblings(i);
       const pos = sibs.indexOf(i);
       const t = q.cond ? questions.find((x) => x._k === q.cond.k) : null;
       const legacy = q.cond && par[i] < 0 ? h('div', { class: 'q-legacy-note small' },
@@ -916,7 +923,7 @@
           frozen ? null : h('button', { class: 'btn danger sm', disabled: blockEnd(i) - i === questions.length, onclick: () => remove(i) }, 'Remover')),
         legacy,
         h('div', { class: 'row' }, type, req), opts,
-        h('details', { class: 'q-more' }, h('summary', {}, 'Mais opções' + (q.is_nps ? ' · NPS' : '')),
+        h('details', { class: 'q-more', open: openMore.has(q._k), ontoggle: (e) => { if (e.target.open) openMore.add(q._k); else openMore.delete(q._k); } }, h('summary', {}, 'Mais opções' + (q.is_nps ? ' · NPS' : '')),
           h('div', { class: 'row' }, help), isScale ? h('div', { class: 'row' }, disp) : null, iconPick ? h('div', { class: 'row' }, iconPick) : null,
           h('div', { class: 'row' }, nps), translations(q)),
         branchUi);
