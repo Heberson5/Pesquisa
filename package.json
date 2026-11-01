@@ -13,7 +13,8 @@
     "dev": "node --disable-warning=ExperimentalWarning --watch server.js",
     "create-admin": "node --disable-warning=ExperimentalWarning scripts/create-admin.js",
     "seed:demo": "node --disable-warning=ExperimentalWarning scripts/seed-demo.js",
-    "test": "node --disable-warning=ExperimentalWarning --test tests/*.test.js"
+    "test": "node --disable-warning=ExperimentalWarning --test tests/*.test.js",
+    "seed:finados": "node --disable-warning=ExperimentalWarning scripts/seed-finados.js"
   },
   "dependencies": {
     "express": "^5.2.1",

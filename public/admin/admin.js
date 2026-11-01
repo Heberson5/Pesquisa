@@ -293,7 +293,15 @@
     document.querySelectorAll('.modal-bg').forEach((m) => m.remove()); // janela aberta não sobrevive à troca de página
     const reset = /^#\/redefinir\/([A-Za-z0-9_-]{20,100})$/.exec(location.hash);
     if (reset) return showReset(reset[1]);
-    if (!me) { try { await loadMe(); } catch { return; } }
+    if (!me) {
+      try { await loadMe(); } catch (e) {
+        // Sem internet o aplicativo abre pela cópia guardada: avisa em vez de deixar a tela em branco.
+        if (e.message !== '401') root.replaceChildren(h('div', { class: 'login-side' }, h('div', { class: 'login' }, h('h1', {}, 'Sem conexão'),
+          h('p', { class: 'muted' }, 'Não foi possível falar com o servidor. Verifique a internet e tente de novo.'),
+          h('button', { class: 'btn', onclick: () => location.reload() }, 'Tentar de novo'))));
+        return;
+      }
+    }
     const [, name = 'dashboard', param] = location.hash.split('/');
     const page = PAGES.find((p) => p[0] === name && (!p[3] || me.role === p[3])) || PAGES[0];
     const container = h('div', {}, h('p', { class: 'muted' }, 'Carregando…'));

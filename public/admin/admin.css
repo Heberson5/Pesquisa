@@ -285,3 +285,41 @@ details.tr .form-grid { margin-top: 10px; }
 tr.tone-warn td:first-child { box-shadow: inset 3px 0 0 var(--mid); }
 tr.tone-bad td:first-child { box-shadow: inset 3px 0 0 var(--bad); }
 label.f > .small { font-weight: 400; }
+
+/* ---------- aplicativo instalado e telas pequenas */
+html { -webkit-text-size-adjust: 100%; }
+body { -webkit-tap-highlight-color: transparent; overflow-wrap: break-word; }
+img, svg, video, canvas { max-width: 100%; }
+.pwa-banner { position: fixed; left: 12px; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom, 0px)); z-index: 55; display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+  background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; box-shadow: 0 10px 30px rgba(0,0,0,.22); font-size: 14px; font-weight: 600; max-width: 560px; margin: 0 auto; }
+.pwa-banner > span { flex: 1 1 220px; }
+@media (display-mode: standalone) {
+  .mobile-bar { padding-top: calc(12px + env(safe-area-inset-top, 0px)); }
+  body { overscroll-behavior-y: none; }
+}
+@media (max-width: 900px) {
+  .mobile-bar { padding-left: calc(16px + env(safe-area-inset-left, 0px)); padding-right: calc(16px + env(safe-area-inset-right, 0px)); }
+  .side { padding-top: calc(18px + env(safe-area-inset-top, 0px)); padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px)); overflow-y: auto; max-width: 86vw; }
+  .nav a, .side-btn { min-height: 44px; }
+  .main { padding-bottom: calc(40px + env(safe-area-inset-bottom, 0px)); padding-left: calc(16px + env(safe-area-inset-left, 0px)); padding-right: calc(16px + env(safe-area-inset-right, 0px)); }
+  .grid.k4 { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+  .hbar { grid-template-columns: minmax(100px, 38%) 1fr 52px; }
+}
+@media (max-width: 640px) {
+  .grid { gap: 12px; }
+  .kpi { gap: 12px; } .kpi-icon { width: 40px; height: 40px; }
+  .bars { height: 130px; }
+  .chart svg { height: 170px; }
+  .tabs button { min-height: 44px; }
+  .btn.icon-only { min-width: 40px; min-height: 40px; justify-content: center; }
+  .modal { padding-bottom: calc(18px + env(safe-area-inset-bottom, 0px)); }
+  .toast { bottom: calc(12px + env(safe-area-inset-bottom, 0px)); }
+  .hours-row { grid-template-columns: 1fr 1fr; }
+  .login-wrap { min-height: 100dvh; }
+}
+@media (max-width: 380px) {
+  .main { padding-left: 12px; padding-right: 12px; }
+  .card { padding: 14px; }
+  .grid.k4 { grid-template-columns: minmax(0, 1fr); }
+  h1 { font-size: 20px; }
+}

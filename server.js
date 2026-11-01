@@ -61,6 +61,25 @@ app.get('/kiosk/manifest.webmanifest', (req, res) => {
   }));
 });
 
+// Painel instalável (PWA): nome e cores vêm das Configurações; sem ícone próprio usa os ícones padrão.
+app.get('/admin/manifest.webmanifest', (req, res) => {
+  const s = getSettings();
+  const icon = s.appIconMediaId ? get('SELECT mime FROM media WHERE id = ?', s.appIconMediaId) : null;
+  const icons = icon && /^image\/(png|webp|jpeg)$/.test(icon.mime)
+    ? [{ src: '/app-icon', sizes: '512x512', type: icon.mime, purpose: 'any' }, { src: '/app-icon', sizes: '192x192', type: icon.mime, purpose: 'any' }]
+    : [{ src: '/admin/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+      { src: '/admin/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+      { src: '/admin/icon-maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' }];
+  res.type('application/manifest+json').set('Cache-Control', 'no-cache').send(JSON.stringify({
+    name: `${s.companyName} · Painel`, short_name: 'Painel', lang: 'pt-BR', id: '/admin/', start_url: '/admin/', scope: '/admin/',
+    display: 'standalone', orientation: 'any', background_color: '#f5f7fb', theme_color: s.primaryColor, icons,
+  }));
+});
+app.get('/admin/sw.js', (req, res, next) => {
+  res.set({ 'Cache-Control': 'no-cache', 'Content-Type': 'text/javascript; charset=utf-8' });
+  res.sendFile(path.join(__dirname, 'public', 'admin', 'sw.js'), (e) => e && next(e));
+});
+
 const staticOpts = { index: 'index.html', dotfiles: 'deny', redirect: true, maxAge: 0 };
 app.use('/admin', express.static(path.join(__dirname, 'public', 'admin'), staticOpts));
 app.use('/kiosk', express.static(path.join(__dirname, 'public', 'kiosk'), staticOpts));
