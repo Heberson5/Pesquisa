@@ -156,3 +156,55 @@ video.nap { position: fixed; width: 2px; height: 2px; opacity: .01; pointer-even
 .geo-chip { font: inherit; font-size: 14px; padding: 9px 14px; border-radius: 99px; border: 1px solid currentColor; background: transparent; color: inherit; opacity: .85; cursor: pointer; }
 .geo-chip.on { background: var(--accent); color: #1f2937; border-color: transparent; opacity: 1; font-weight: 700; }
 body.mode-link .welcome-wrap { min-height: calc(100dvh - 40px); }
+
+/* ---- celular: conteúdo sempre dentro da tela, em pé ou deitado */
+.q-body { align-items: flex-start; }
+.q-body > * { margin-block: auto; } /* centraliza sem cortar o topo quando não couber */
+.branch-tag { max-width: calc(100% - 96px); text-align: right; line-height: 1.25; }
+.choices { grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); }
+.pair-input { width: 100%; min-width: 0; font-size: clamp(24px, 8vw, 40px); letter-spacing: .2em; }
+.contact, .thanks { max-height: 100%; overflow-y: auto; }
+@media (max-width: 480px) {
+  .btn-xl { font-size: 21px; padding: 18px 30px; }
+  .choice { font-size: 20px; padding: 18px 14px; }
+  .text-answer { font-size: 18px; padding: 14px; }
+  .q-help { font-size: 16px; }
+}
+@media (max-width: 700px) and (orientation: landscape) {
+  .rating-11 { grid-template-columns: repeat(11, 1fr); }
+}
+/* tela baixa (celular deitado): tudo menor para as notas e os botões caberem sem rolar */
+@media (max-height: 520px) {
+  .app { padding: max(8px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); }
+  .progress { height: 5px; }
+  .q-head { margin: 6px 0; }
+  .q-count { font-size: 12px; }
+  .q-text { font-size: clamp(17px, 3vw, 24px); margin-top: 2px; }
+  .q-help { font-size: 14px; }
+  .q-nav { min-height: 0; padding-top: 6px; }
+  .q-nav .btn-lg { min-width: 0; padding: 8px 20px; font-size: 16px; }
+  .rating { gap: 6px; }
+  .rating-numbers .r-btn, .rating-5.rating-numbers .r-btn { aspect-ratio: auto; height: clamp(44px, 22vh, 76px); border-radius: 14px; }
+  .r-big { font-size: 20px; }
+  .rating-5 .face-svg { width: 48px; height: 48px; }
+  .rating-11 .face-svg, .r-icon { max-width: 40px; }
+  .r-btn { padding: 4px 2px; gap: 2px; }
+  .nps-legend { margin-top: 6px; font-size: 13px; }
+  .choices { gap: 8px; }
+  .choice { font-size: 17px; padding: 10px; border-radius: 12px; }
+  .text-answer { font-size: 16px; padding: 10px; }
+  .welcome-logo, .thanks-logo { max-height: 56px; padding: 6px 12px; margin-bottom: 8px; border-radius: 12px; }
+  .welcome-title, .thanks-title { font-size: clamp(24px, 4.5vw, 36px); margin-bottom: 6px; }
+  .welcome-text, .thanks-text { font-size: 16px; margin-bottom: 14px; }
+  .btn-xl { font-size: 18px; padding: 12px 32px; }
+  .thanks-media { max-height: 40vh; margin-bottom: 10px; }
+  .card { padding: 16px; }
+  .pair-form { margin-top: 10px; gap: 8px; }
+  .pair-input { padding: 8px; }
+  .btn-lg { font-size: 17px; padding: 10px 24px; }
+  .contact { gap: 8px; }
+  .contact-form { padding: 10px; gap: 8px; }
+  .contact-form label { font-size: 14px; }
+  .field { font-size: 16px; padding: 8px 10px; }
+  .consent { font-size: 14px !important; }
+}

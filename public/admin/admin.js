@@ -947,7 +947,12 @@
 
     function card(i) {
       const q = questions[i];
-      const text = h('input', { value: q.text, placeholder: 'Texto da pergunta', disabled: ro, oninput: (e) => { q.text = e.target.value; } });
+      // Caixa que cresce com o texto: no celular a pergunta inteira fica visível, sem cortar.
+      const fitText = (el) => { el.style.height = 'auto'; el.style.height = `${el.scrollHeight + 2}px`; };
+      const text = h('textarea', { class: 'q-text-input', rows: '1', value: q.text, placeholder: 'Texto da pergunta', 'aria-label': 'Texto da pergunta', disabled: ro,
+        onkeydown: (e) => { if (e.key === 'Enter') e.preventDefault(); },
+        oninput: (e) => { q.text = e.target.value.replace(/\s*\n\s*/g, ' '); if (q.text !== e.target.value) e.target.value = q.text; fitText(e.target); } });
+      requestAnimationFrame(() => fitText(text));
       const help = h('input', { value: q.help_text || '', placeholder: 'Texto de apoio (opcional)', disabled: ro, oninput: (e) => { q.help_text = e.target.value; } });
       const type = h('select', { disabled: frozen, 'aria-label': 'Tipo da pergunta', onchange: (e) => {
         if (refsTo(q).length) { e.target.value = q.type; return toast('Esta pergunta tem ramificações. Remova as ramificações antes de mudar o tipo.', true); }

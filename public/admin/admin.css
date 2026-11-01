@@ -183,13 +183,12 @@ label.chk input { width: 18px; height: 18px; accent-color: var(--brand); }
   .form-grid { grid-template-columns: minmax(0, 1fr); }
   .btn { min-height: 40px; }
   .btn.sm { min-height: 36px; }
-  .tabs { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
-  .tabs button { white-space: nowrap; flex: none; }
+  .tabs button { flex: 1 1 auto; justify-content: center; padding: 8px 10px; }
   .q-editor { padding: 12px; }
   .q-editor .row > * { flex: 1 1 140px; min-width: 0; }
   .q-editor .row > b, .q-editor .row > .btn, .q-editor .row > label.chk { flex: 0 0 auto; }
   .q-editor > .row:first-child { gap: 8px; }
-  .q-editor > .row:first-child > input { order: 3; flex: 1 0 100%; }
+  .q-editor > .row:first-child > .q-text-input { order: 3; flex: 1 0 100%; }
   .q-editor > .row:first-child > .q-num { order: 0; margin-right: auto; }
   .q-editor .row.cond > *, .q-editor .row.cond select { flex: 1 1 100%; min-width: 0; }
   .q-editor .row.cond input[type=number] { width: 100%; }
@@ -218,7 +217,7 @@ label.chk input { width: 18px; height: 18px; accent-color: var(--brand); }
   .kpi .value { font-size: 28px; }
   .modal-bg { padding: 10px; align-items: flex-end; }
   .modal { padding: 18px; border-radius: 16px; max-height: 92vh; }
-  .modal .actions { flex-wrap: wrap; } .modal .actions .btn { flex: 1 1 auto; justify-content: center; }
+  .modal .actions { flex-wrap: wrap; position: sticky; bottom: -18px; background: var(--surface); margin-bottom: -18px; padding: 10px 0 18px; } .modal .actions .btn { flex: 1 1 auto; justify-content: center; }
   .code-box { font-size: 28px; letter-spacing: .15em; padding: 16px 8px; }
   .toast { left: 12px; right: 12px; bottom: 12px; max-width: none; }
   .recovery { grid-template-columns: 1fr; }
@@ -325,6 +324,7 @@ img, svg, video, canvas { max-width: 100%; }
 }
 
 /* Editor de perguntas em árvore */
+.q-text-input { flex: 1; min-width: 0; resize: none; overflow: hidden; line-height: 1.35; }
 .q-tree .q-editor { margin-bottom: 0; }
 .q-tree .q-node { margin-bottom: 12px; }
 .q-children { margin: 10px 0 0 12px; padding-left: 12px; border-left: 3px solid var(--brand-soft); }
