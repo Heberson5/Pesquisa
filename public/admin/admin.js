@@ -332,6 +332,18 @@
 
   async function branches(force) { if (force || !cache.branches) cache.branches = await api('/branches'); return cache.branches; }
   async function surveys(force) { if (force || !cache.surveys) cache.surveys = await api('/surveys'); return cache.surveys; }
+  // Lista completa (principais, momentos e arquivadas) para filtros e nomes de relatórios e auditoria; sempre atual, sem cache.
+  async function filterSurveys() { cache.filterSurveys = await api('/surveys?all=1'); return cache.filterSurveys; }
+  // Uma principal vira um grupo: "tudo" (ela e seus momentos somados) e cada momento. Pesquisa sem momentos vira uma opção simples.
+  function surveyFilterOptions(list) {
+    const label = (s) => s.title + (s.archived_at ? ' (arquivada)' : '');
+    return list.filter((s) => !s.parent_id).map((m) => {
+      const moments = list.filter((x) => x.parent_id === m.id);
+      if (!moments.length) return h('option', { value: String(m.id) }, label(m));
+      return h('optgroup', { label: label(m) }, h('option', { value: String(m.id) }, 'Tudo (' + m.title + ')'),
+        moments.map((x) => h('option', { value: String(x.id) }, label(x))));
+    });
+  }
 
   // ------------------------------------------------------------ filtros reutilizáveis
   function filterBar(state, onChange, { withSurvey = true } = {}) {
@@ -339,7 +351,7 @@
     const to = h('input', { type: 'date', value: state.to });
     const br = h('select', {}, h('option', { value: '' }, 'Todas as filiais'), cache.branches.map((b) => h('option', { value: String(b.id) }, b.name)));
     br.value = state.branchId || '';
-    const sv = h('select', {}, h('option', { value: '' }, 'Todas as pesquisas'), cache.surveys.map((s) => h('option', { value: String(s.id) }, s.title)));
+    const sv = h('select', {}, h('option', { value: '' }, 'Todas as pesquisas'), surveyFilterOptions(cache.filterSurveys));
     sv.value = state.surveyId || '';
     const ch = h('select', {}, h('option', { value: '' }, 'Tablet e QR Code'), h('option', { value: 'tablet' }, 'Só tablet'), h('option', { value: 'link' }, 'Só QR Code / link'));
     ch.value = state.channel || '';
@@ -358,7 +370,7 @@
 
   // ------------------------------------------------------------ dashboard
   async function pageDashboard() {
-    await Promise.all([branches(), surveys()]);
+    await Promise.all([branches(), filterSurveys()]);
     const body = h('div');
     const load = async () => {
       body.replaceChildren(h('p', { class: 'muted' }, 'Carregando…'));
@@ -581,7 +593,7 @@
   }
 
   async function pageResponses() {
-    await Promise.all([branches(), surveys()]);
+    await Promise.all([branches(), filterSurveys()]);
     const isAdmin = me.role === 'admin'; // só administrador exclui respostas (o servidor também confere)
     let page = 1;
     const body = h('div');
@@ -1492,8 +1504,8 @@
   const TONE_LABEL = { ok: 'Normal', warn: 'Atenção', bad: 'Importante' };
 
   async function pageAudit() {
-    const [rows, brs, svs, users, devs] = await Promise.all([api('/audit?limit=500'), branches(), surveys(), api('/users'), api('/devices')]);
-    const ctx = { branches: new Map(brs.map((b) => [b.id, b.name])), surveys: new Map(svs.map((x) => [x.id, x.title])),
+    const [rows, brs, svs, users, devs] = await Promise.all([api('/audit?limit=500'), branches(), filterSurveys(), api('/users'), api('/devices')]);
+    const ctx = { branches: new Map(brs.map((b) => [b.id, b.name])), surveys: new Map(svs.map((x) => [x.id, x.display_title])),
       users: new Map(users.map((u) => [u.id, u.name])), devices: new Map(devs.map((x) => [x.id, x.name])) };
     const events = rows.map((r) => ({ r, e: auditEvent(r, ctx) }));
     const cat = h('select', {}, h('option', { value: '' }, 'Todos os tipos'), Object.entries(AUDIT_CATS).map(([k, l]) => h('option', { value: k }, l)));

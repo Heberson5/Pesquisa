@@ -412,3 +412,56 @@ test('relatório continua contando respostas de pesquisa arquivada', async () =>
   assert.equal((await arq(p)).status, 200);
   assert.equal((await admin.req('GET', `/api/admin/stats?surveyId=${p}`)).json.totalResponses, 2);
 });
+
+test('relatório: principal soma ela e os momentos; momento filtra só ele; NPS conta cada resposta uma vez', async () => {
+  const p = await mkMain('Soma');
+  const a = (await mkMoment(p, 'Abertura')).json.id;
+  const b = (await mkMoment(p, 'Fechamento')).json.id;
+  // segunda pergunta de NPS no momento A (ramo): a resposta com as duas notas ainda conta uma vez
+  const q2 = run("INSERT INTO questions (survey_id, position, text, type, is_nps) VALUES (?, 2, 'Outra nota?', 'nps', 1)", a, ).lastInsertRowid;
+  const ra = resp(a);
+  run('INSERT INTO answers (response_id, question_id, value_num) VALUES (?,?,10)', ra.lastInsertRowid, qOf(a));
+  run('INSERT INTO answers (response_id, question_id, value_num) VALUES (?,?,0)', ra.lastInsertRowid, q2);
+  const rp = resp(p);
+  run('INSERT INTO answers (response_id, question_id, value_num) VALUES (?,?,3)', rp.lastInsertRowid, qOf(p));
+  const st = async (id) => (await admin.req('GET', `/api/admin/stats?surveyId=${id}`)).json;
+  const sp = await st(p);
+  assert.equal(sp.totalResponses, 2);
+  assert.equal(sp.overall.total, 2);
+  assert.equal(sp.overall.promoters, 1);
+  assert.equal(sp.overall.detractors, 1);
+  assert.equal(sp.scoreDist.reduce((t, d) => t + d.n, 0), 2);
+  assert.equal(sp.byBranch[0].total, 2);
+  assert.ok(sp.byQuestion.some((q) => q.survey === 'Soma · Abertura'), 'quebra por pergunta com o nome Principal · Momento');
+  assert.ok(sp.byQuestion.some((q) => q.survey === 'Soma'));
+  const sa = await st(a);
+  assert.equal(sa.totalResponses, 1);
+  assert.equal(sa.overall.total, 1);
+  assert.equal((await st(b)).totalResponses, 0);
+  const pptx = await admin.req('GET', `/api/admin/report.pptx?surveyId=${a}`);
+  assert.equal(pptx.status, 200);
+  const csv = (await admin.req('GET', `/api/admin/responses.csv?surveyId=${p}`)).text;
+  assert.ok(csv.includes('Soma · Abertura'), 'exportação traz Principal · Momento');
+  assert.ok(csv.includes('"Soma"'));
+  const list = (await admin.req('GET', `/api/admin/responses?surveyId=${p}`)).json;
+  assert.deepEqual(list.rows.map((r) => r.survey).sort(), ['Soma', 'Soma · Abertura']);
+});
+
+test('relatório: momento arquivado com respostas ainda filtra e entra na soma da principal', async () => {
+  const p = await mkMain('Soma arquivada');
+  const a = (await mkMoment(p, 'Antigo')).json.id;
+  resp(a); resp(p);
+  run('UPDATE surveys SET archived_at = ? WHERE id = ?', Date.now(), a);
+  const st = async (id) => (await admin.req('GET', `/api/admin/stats?surveyId=${id}`)).json.totalResponses;
+  assert.equal(await st(a), 1);
+  assert.equal(await st(p), 2);
+});
+
+test('casos e pesquisa de titular mostram Principal · Momento', async () => {
+  const p = await mkMain('Casos');
+  const a = (await mkMoment(p, 'Dia 1')).json.id;
+  const rid = resp(a).lastInsertRowid;
+  run("UPDATE responses SET contact_phone_lookup = 'zz-lookup' WHERE id = ?", rid);
+  const caseId = run("INSERT INTO cases (response_id, branch_id, created_at, updated_at) VALUES (?,?,?,?)", rid, branch, Date.now(), Date.now()).lastInsertRowid;
+  assert.equal((await admin.req('GET', `/api/admin/cases/${caseId}`)).json.survey, 'Casos · Dia 1');
+});

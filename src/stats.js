@@ -5,7 +5,7 @@ const { UFS } = require('./geo');
 const { get, all } = require('./db');
 const { bad, id, dateParam } = require('./validate');
 const { scope, assertBranch, placeholders } = require('./scope');
-const { loadSurvey, npsFromCounts } = require('./surveys');
+const { loadSurvey, npsFromCounts, familyIds, displayTitle } = require('./surveys');
 const { getSettings } = require('./settings');
 const { buildReport } = require('./report');
 const { MEDIA_DIR } = require('./db');
@@ -19,7 +19,8 @@ function responseFilter(user, q) {
   const to = dateParam(q.to, 'até');
   if (from !== null) { where.push('r.submitted_at >= ?'); params.push(from); }
   if (to !== null) { where.push('r.submitted_at < ?'); params.push(to + 86_400_000); }
-  if (q.surveyId) { where.push('r.survey_id = ?'); params.push(id(q.surveyId, 'pesquisa')); }
+  // Principal: ela e todos os momentos (inclusive arquivados); momento: só ele.
+  if (q.surveyId) { const ids = familyIds(id(q.surveyId, 'pesquisa')); where.push(`r.survey_id IN (${placeholders(ids)})`); params.push(...ids); }
   if (q.channel) { if (!['tablet', 'link'].includes(q.channel)) throw bad('Canal inválido.'); where.push('r.channel = ?'); params.push(q.channel); }
   if (q.branchId) {
     const bid = id(q.branchId, 'filial');
@@ -62,8 +63,8 @@ function computeStats(user, query) {
     });
   // Ranking: maior NPS primeiro (filiais sem nota de NPS ficam no fim).
   const ranking = [...byBranch].sort((a, b) => (b.nps ?? -1000) - (a.nps ?? -1000) || b.total - a.total).map((b, i) => ({ position: i + 1, ...b }));
-  const byQuestion = all(`SELECT q.id, q.text, s.title AS survey, ${NPS_AGG}
-      FROM responses r ${NPS_JOIN} JOIN surveys s ON s.id = q.survey_id ${f.sql} GROUP BY q.id ORDER BY s.title, q.position`, ...f.params)
+  const byQuestion = all(`SELECT q.id, q.text, CASE WHEN p.title IS NULL THEN s.title ELSE p.title || ' · ' || s.title END AS survey, ${NPS_AGG}
+      FROM responses r ${NPS_JOIN} JOIN surveys s ON s.id = q.survey_id LEFT JOIN surveys p ON p.id = s.parent_id ${f.sql} GROUP BY q.id ORDER BY COALESCE(p.title, s.title), p.id IS NOT NULL, s.title, q.position`, ...f.params)
     .map((r) => ({ id: r.id, text: r.text, survey: r.survey, ...npsRow(r) }));
   // Agrupado aqui, e não no SQL, para o dia ser o do fuso da empresa (o SQLite só conhece o fuso do servidor).
   const days = new Map();
@@ -115,13 +116,13 @@ function computeBreakdown(user, survey, query) {
 async function reportFor(user, query, generatedBy) {
   const stats = computeStats(user, query);
   const f = responseFilter(user, query);
-  const surveyIds = query.surveyId ? [id(query.surveyId, 'pesquisa')]
+  const surveyIds = query.surveyId ? familyIds(id(query.surveyId, 'pesquisa'))
     : all(`SELECT r.survey_id, COUNT(*) AS n FROM responses r ${f.sql} GROUP BY r.survey_id ORDER BY n DESC LIMIT 3`, ...f.params).map((r) => r.survey_id);
-  const surveys = surveyIds.map(loadSurvey).filter(Boolean).map((s) => ({ title: s.title, questions: computeBreakdown(user, s, query) }));
+  const surveys = surveyIds.map(loadSurvey).filter(Boolean).map((s) => ({ title: displayTitle(s.id), questions: computeBreakdown(user, s, query) }));
   const branchName = query.branchId ? get('SELECT name FROM branches WHERE id = ?', id(query.branchId, 'filial'))?.name : null;
   const buffer = await buildReport({
     settings: getSettings(), stats, surveys, mediaDir: MEDIA_DIR,
-    filters: { from: query.from || null, to: query.to || null, branch: branchName, survey: query.surveyId ? surveys[0]?.title : null },
+    filters: { from: query.from || null, to: query.to || null, branch: branchName, survey: query.surveyId ? displayTitle(id(query.surveyId, 'pesquisa')) : null },
     generatedBy,
   });
   return { buffer, stats };

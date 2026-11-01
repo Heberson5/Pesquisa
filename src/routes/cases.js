@@ -68,8 +68,8 @@ const assignable = (branchId) => all(`SELECT DISTINCT u.id, u.name FROM users u 
 
 router.get('/:id', (req, res) => {
   const c = loadCase(req.user, id(req.params.id));
-  const r = get(`SELECT r.*, b.name AS branch, s.title AS survey, d.name AS device FROM responses r JOIN branches b ON b.id = r.branch_id
-    JOIN surveys s ON s.id = r.survey_id LEFT JOIN devices d ON d.id = r.device_id WHERE r.id = ?`, c.response_id);
+  const r = get(`SELECT r.*, b.name AS branch, CASE WHEN sp.title IS NULL THEN s.title ELSE sp.title || ' · ' || s.title END AS survey, d.name AS device FROM responses r JOIN branches b ON b.id = r.branch_id
+    JOIN surveys s ON s.id = r.survey_id LEFT JOIN surveys sp ON sp.id = s.parent_id LEFT JOIN devices d ON d.id = r.device_id WHERE r.id = ?`, c.response_id);
   const answers = all(`SELECT q.text, q.type, q.is_nps, a.value_num, a.value_text FROM answers a JOIN questions q ON q.id = a.question_id
     WHERE a.response_id = ? ORDER BY q.position`, r.id).map((a) => ({
     question: a.text, is_nps: !!a.is_nps,

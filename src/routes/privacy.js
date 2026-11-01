@@ -19,8 +19,8 @@ function matches(body) {
   if (phone && !/^\d{10,13}$/.test(phone)) throw bad('Telefone inválido.');
   if (email && !isEmail(email)) throw bad('E-mail inválido.');
   if (!phone && !email) throw bad('Informe telefone ou e-mail.');
-  const rows = all(`SELECT r.id, r.submitted_at, r.contact_name_enc, r.contact_phone_enc, r.contact_email_enc, r.contact_consent_at, b.name AS branch, s.title AS survey
-      FROM responses r JOIN branches b ON b.id = r.branch_id JOIN surveys s ON s.id = r.survey_id
+  const rows = all(`SELECT r.id, r.submitted_at, r.contact_name_enc, r.contact_phone_enc, r.contact_email_enc, r.contact_consent_at, b.name AS branch, CASE WHEN sp.title IS NULL THEN s.title ELSE sp.title || ' · ' || s.title END AS survey
+      FROM responses r JOIN branches b ON b.id = r.branch_id JOIN surveys s ON s.id = r.survey_id LEFT JOIN surveys sp ON sp.id = s.parent_id
       WHERE r.anonymized_at IS NULL AND (r.contact_phone_lookup = ? OR r.contact_email_lookup = ?) ORDER BY r.submitted_at`,
   phone ? lookup('phone:' + phone) : '-', email ? lookup('email:' + email) : '-');
   return { rows, key: { phone: !!phone, email: !!email } };

@@ -597,8 +597,8 @@ router.get('/surveys/:id/breakdown', (req, res) => {
 function listResponses(user, query, limit, offset) {
   const f = responseFilter(user, query);
   const total = get(`SELECT COUNT(*) AS n FROM responses r ${f.sql}`, ...f.params).n;
-  const rows = all(`SELECT r.id, r.uuid, r.submitted_at, r.started_at, r.channel, r.lang, r.geo_lat, r.geo_lng, r.geo_city, r.geo_uf, r.geo_region, COALESCE(r.device_label, d.name) AS device_label, b.name AS branch, b.city AS branch_city, s.title AS survey, d.name AS device
-      FROM responses r JOIN branches b ON b.id = r.branch_id JOIN surveys s ON s.id = r.survey_id
+  const rows = all(`SELECT r.id, r.uuid, r.submitted_at, r.started_at, r.channel, r.lang, r.geo_lat, r.geo_lng, r.geo_city, r.geo_uf, r.geo_region, COALESCE(r.device_label, d.name) AS device_label, b.name AS branch, b.city AS branch_city, CASE WHEN sp.title IS NULL THEN s.title ELSE sp.title || ' · ' || s.title END AS survey, d.name AS device
+      FROM responses r JOIN branches b ON b.id = r.branch_id JOIN surveys s ON s.id = r.survey_id LEFT JOIN surveys sp ON sp.id = s.parent_id
       LEFT JOIN devices d ON d.id = r.device_id ${f.sql} ORDER BY r.submitted_at DESC LIMIT ? OFFSET ?`, ...f.params, limit, offset);
   if (rows.length) {
     const ans = all(`SELECT a.response_id, q.text, q.type, q.is_nps, a.value_num, a.value_text FROM answers a
