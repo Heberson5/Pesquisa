@@ -128,3 +128,53 @@ test('o painel mostra os agendamentos da pesquisa, o que está no ar e a próxim
   assert.equal((await gestor.req('POST', '/api/admin/schedules', { body: { surveyId: a, branchId: other, startsAt: local(t0), endsAt: local(t0 + MIN) } })).status, 403);
   assert.equal((await admin.req('GET', '/api/admin/schedules?surveyId=abc')).status, 400);
 });
+
+const DAY = 86_400_000;
+const mkPeriod = (from, to) => Number(run('INSERT INTO schedules (survey_id, branch_id, starts_at, ends_at, created_at) VALUES (?,?,?,?,?)', a, branch, from, to, Date.now()).lastInsertRowid);
+const delPeriod = (sid) => admin.req('DELETE', `/api/admin/schedules/${sid}`);
+const row = (sid) => get('SELECT * FROM schedules WHERE id = ?', sid);
+
+test('excluir período que ainda não começou apaga a linha', async () => {
+  const s = mkPeriod(Date.now() + DAY, Date.now() + 2 * DAY);
+  const r = await delPeriod(s);
+  assert.equal(r.status, 200);
+  assert.equal(r.json.action, 'deleted');
+  assert.equal(row(s), undefined);
+  assert.ok(get("SELECT 1 AS x FROM audit_log WHERE action = 'schedule.delete'"));
+});
+
+test('excluir período no ar encerra agora, mantém a linha, audita e o tablet volta para a padrão', async () => {
+  const t0 = Date.now();
+  const s = mkPeriod(t0 - MIN, t0 + DAY);
+  assert.equal((await config()).json.survey.id, a);
+  const r = await delPeriod(s);
+  assert.equal(r.status, 200);
+  assert.equal(r.json.action, 'ended');
+  const after = row(s);
+  assert.ok(after, 'linha mantida');
+  assert.ok(after.ends_at >= t0 && after.ends_at <= Date.now());
+  assert.equal(after.starts_at, t0 - MIN);
+  const log = get("SELECT detail FROM audit_log WHERE action = 'schedule.end' ORDER BY id DESC");
+  assert.ok(log, 'auditado');
+  assert.equal((await config()).json.survey.id, padrao);
+  // encerrado agora: segunda tentativa cai na regra dos 30 dias
+  assert.equal((await delPeriod(s)).status, 409);
+});
+
+test('período encerrado há menos de 30 dias é recusado com 409 e fica guardado', async () => {
+  const s = mkPeriod(Date.now() - 10 * DAY, Date.now() - 5 * DAY);
+  const r = await delPeriod(s);
+  assert.equal(r.status, 409);
+  assert.match(r.json.error, /30 dias/);
+  assert.match(r.json.error, /sem conexão/);
+  assert.ok(row(s));
+});
+
+test('período encerrado há mais de 30 dias é apagado', async () => {
+  const s = mkPeriod(Date.now() - 50 * DAY, Date.now() - 40 * DAY);
+  const r = await delPeriod(s);
+  assert.equal(r.status, 200);
+  assert.equal(r.json.action, 'deleted');
+  assert.equal(row(s), undefined);
+  assert.equal((await delPeriod(s)).status, 404);
+});

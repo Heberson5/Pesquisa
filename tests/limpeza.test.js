@@ -99,3 +99,23 @@ test('ids não listados (de fora da lista) nunca são tocados e repetir é inofe
   assert.equal(r.status, 0, r.stderr);
   assert.equal(snapshot().replace(/"archived_at":\d+/g, ''), antes.replace(/"archived_at":\d+/g, ''));
 });
+
+test('principal com momento criado em --before ou depois é pulada com aviso; a listagem mostra os momentos', () => {
+  const velha = mk('Velha com momento novo');
+  const mVelho = mk('Momento velho', { parent: velha });
+  const mNovo = mk('Momento novo', { parent: velha, created: Date.parse('2026-08-01') });
+  const lista = script(`--before=${BEFORE}`);
+  assert.equal(lista.status, 0, lista.stderr);
+  assert.ok(lista.stdout.includes(`
+${velha}	Velha com momento novo	0	0	pular	`));
+  assert.ok(lista.stdout.includes(`  momento ${mVelho}	Momento velho
+`));
+  assert.ok(lista.stdout.includes(`  momento ${mNovo}	Momento novo	(criado em --before ou depois)
+`));
+  const antes = snapshot();
+  const r = script(`--before=${BEFORE}`, `--aplicar=${velha}`);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stderr + r.stdout, /momento criado em --before ou depois/);
+  assert.equal(snapshot(), antes);
+  assert.ok(exists(velha) && exists(mNovo));
+});

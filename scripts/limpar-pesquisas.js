@@ -1,6 +1,7 @@
 'use strict';
 // Limpeza das pesquisas antigas (depois da nova pesquisa principal estar no ar). Sem --aplicar só lista, sem gravar.
-// Entram só pesquisas principais criadas ANTES de --before (os momentos seguem a principal), então o que foi criado depois nunca é tocado.
+// Entram só pesquisas principais criadas ANTES de --before (os momentos seguem a principal). Se algum momento foi criado em --before ou depois,
+// a principal inteira é pulada com aviso, para não apagar um momento novo sem ele estar na lista.
 //   apagada:   sem respostas, sem período no ar/pendente e sem período encerrado nos últimos 30 dias (vai com períodos e momentos);
 //   arquivada: com respostas ou período recente; sai da lista e de novos usos, e as respostas ficam;
 //   intacta:   padrão de uma filial, ou com período no ar/pendente (arquivar pararia a pesquisa sem aviso). O script avisa.
@@ -33,6 +34,8 @@ const marks = (ids) => ids.map(() => '?').join(',');
 // Decide a ação para uma pesquisa principal elegível.
 function decide(sid) {
   const ids = familyIds(sid);
+  const fresh = newMoments(sid);
+  if (fresh.length) return { action: 'pular', why: `tem momento criado em --before ou depois (${fresh.map((m) => m.id).join(', ')}); revise antes` };
   if (get(`SELECT 1 FROM branches WHERE survey_id IN (${marks(ids)}) LIMIT 1`, ...ids)) return { action: 'pular', why: 'é a pesquisa padrão de uma filial; troque o padrão da filial antes' };
   if (canDelete(sid).ok) return { action: 'apagar', why: 'sem respostas e sem período recente' };
   if (canArchive(sid).ok) return { action: 'arquivar', why: 'tem respostas ou período encerrado há menos de 30 dias' };
@@ -41,6 +44,8 @@ function decide(sid) {
 
 const candidates = all('SELECT id, title FROM surveys WHERE parent_id IS NULL AND archived_at IS NULL AND created_at < ? ORDER BY id', before);
 const eligible = new Map(candidates.map((s) => [s.id, s]));
+const momentsOf = (sid) => all('SELECT id, title, created_at FROM surveys WHERE parent_id = ? ORDER BY id', sid);
+const newMoments = (sid) => momentsOf(sid).filter((m) => m.created_at >= before);
 
 if (confirmed === null) {
   console.log('id\ttítulo\trespostas\tagendamentos\tação\tmotivo');
@@ -50,6 +55,7 @@ if (confirmed === null) {
     const sch = get(`SELECT COUNT(*) AS n FROM schedules WHERE survey_id IN (${marks(ids)})`, ...ids).n;
     const d = decide(s.id);
     console.log(`${s.id}\t${s.title}\t${resp}\t${sch}\t${d.action}\t${d.why}`);
+    for (const m of momentsOf(s.id)) console.log(`  momento ${m.id}\t${m.title}${m.created_at >= before ? '\t(criado em --before ou depois)' : ''}`);
   }
   console.log(`\nNada foi gravado. Para aplicar: --aplicar=<ids confirmados> (respostas hoje: ${countResponses()}).`);
   process.exit(0);
@@ -81,4 +87,5 @@ for (const sid of confirmed) {
 const totalAfter = countResponses();
 console.log(`\nApagadas: ${done.apagar}; arquivadas: ${done.arquivar}; puladas: ${done.pular}.`);
 console.log(`Total de respostas antes: ${totalBefore}; depois: ${totalAfter}.`);
-if (totalBefore !== totalAfter) { console.error('ERRO: a contagem de respostas mudou. Restaure o backup e investigue.'); process.exit(1); }
+if (totalAfter < totalBefore) { console.error('ERRO: a contagem de respostas diminuiu. Restaure o backup e investigue.'); process.exit(1); }
+if (totalAfter > totalBefore) console.log(`Chegaram ${totalAfter - totalBefore} resposta(s) durante a execução (tablets enviando); nenhuma foi apagada.`);

@@ -472,3 +472,18 @@ test('/config traz appVersion estável (hash do kiosk.js)', async () => {
   assert.match(a, /^[0-9a-f]{12}$/);
   assert.equal(a, b);
 });
+
+test('momento arquivado sai do detalhe e da contagem da principal, mas o relatório ainda o filtra', async () => {
+  const p = await mkMain('Arquivo no editor');
+  const x = (await mkMoment(p, 'Fica')).json.id;
+  const y = (await mkMoment(p, 'Arquivado')).json.id;
+  resp(y);
+  const count = async () => (await admin.req('GET', '/api/admin/surveys')).json.find((s) => s.id === p).moments;
+  assert.equal(await count(), 2);
+  run('UPDATE surveys SET archived_at = ? WHERE id = ?', Date.now(), y);
+  assert.deepEqual((await admin.req('GET', `/api/admin/surveys/${p}`)).json.moments.map((m) => m.id), [x]);
+  assert.equal(await count(), 1);
+  assert.ok((await admin.req('GET', '/api/admin/surveys?all=1')).json.some((s) => s.id === y), 'all=1 mantém');
+  assert.equal((await admin.req('GET', `/api/admin/stats?surveyId=${y}`)).json.totalResponses, 1);
+  assert.equal((await admin.req('GET', `/api/admin/stats?surveyId=${p}`)).json.totalResponses, 1);
+});

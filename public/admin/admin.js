@@ -722,9 +722,10 @@
         rows.length ? h('div', { class: 'table-wrap' }, h('table', {}, h('thead', {}, h('tr', {}, fixed ? null : h('th', {}, 'Pesquisa'), h('th', {}, 'Filial'), h('th', {}, 'Período'), h('th', {}, 'Situação'), h('th', {}))),
           h('tbody', {}, rows.map((c) => h('tr', {}, fixed ? null : h('td', {}, c.survey), h('td', {}, c.branch || 'Todas'), h('td', { class: 'small' }, `${fmtDateTz(c.starts_at, c.tz)} → ${fmtDateTz(c.ends_at, c.tz)}`),
             h('td', {}, status(c)), h('td', {}, me.role === 'admin' ? h('button', { class: 'btn secondary sm', onclick: async () => {
-              if (!confirm('Excluir este agendamento?')) return;
-              try { await api('/schedules/' + c.id, { method: 'DELETE' }); cache.branches = null; await draw(); } catch (ex) { toast(ex.message, true); }
-            } }, 'Excluir') : null))))))
+              const onAir = c.starts_at <= Date.now() && c.ends_at > Date.now();
+              if (!confirm(onAir ? 'Encerrar este período agora? A pesquisa sai do ar e os tablets voltam para a pesquisa seguinte.' : 'Excluir este agendamento?')) return;
+              try { const r = await api('/schedules/' + c.id, { method: 'DELETE' }); toast(r.action === 'ended' ? 'Período encerrado agora.' : 'Agendamento excluído.'); cache.branches = null; await draw(); } catch (ex) { toast(ex.message, true); }
+            } }, c.starts_at <= now && c.ends_at > now ? 'Encerrar' : 'Excluir') : null))))))
           : h('p', { class: 'muted small' }, fixed && !fixed.active ? 'Ative a pesquisa para poder agendá-la.' : 'Nenhum agendamento.'));
     };
     await draw();
@@ -1115,12 +1116,12 @@
               } }, 'Duplicar'),
               ro ? null : h('button', { class: 'btn danger sm', onclick: () => retireSurvey({ id: m.id, title: m.title, responses: m.responses }, refresh) }, m.responses > 0 ? 'Arquivar' : 'Excluir')))))
             : h('p', { class: 'muted small' }, 'Nenhum momento criado.'),
-          ro ? null : !s.active ? h('p', { class: 'small muted' }, 'Ative a pesquisa e salve para poder criar momentos.')
+          ...[ro ? null : !s.active ? h('p', { class: 'small muted' }, 'Ative a pesquisa e salve para poder criar momentos.')
             : h('form', { class: 'q-new-moment', onsubmit: (e) => { e.preventDefault(); create(); }, oninput: (e) => e.stopPropagation(), onchange: (e) => e.stopPropagation() },
               h('h3', {}, 'Novo momento'),
               h('div', { class: 'form-grid' }, h('label', { class: 'f' }, 'Nome', nm), h('label', { class: 'f' }, 'Primeira pergunta', qt), h('label', { class: 'f' }, 'Tipo', qty)),
               h('p', { class: 'small muted' }, 'O momento copia da pesquisa principal a tela inicial, o agradecimento, os idiomas e o modo de contato. Depois de criado, ele é independente. Salve a pesquisa antes: o momento copia o que está salvo.'),
-              h('button', { class: 'btn secondary', type: 'submit' }, '+ Criar momento')));
+              h('button', { class: 'btn secondary', type: 'submit' }, '+ Criar momento'))].filter(Boolean));
       };
       draw(s.moments || []);
       return box;
@@ -1158,7 +1159,7 @@
         isMoment ? h('a', { class: 'btn secondary', href: '#/pesquisas/' + s.parent.id }, '‹ Voltar à pesquisa principal') : h('a', { class: 'btn secondary', href: '#/pesquisas' }, 'Voltar'),
         retire, ro ? null : h('button', { class: 'btn', onclick: () => save() }, 'Salvar ' + noun)),
       s.archived_at ? h('div', { class: 'card small' }, 'Esta pesquisa está arquivada: fica fora da lista e não pode ser editada. As respostas continuam nos relatórios.') : null,
-      locked ? h('div', { class: 'card small' }, `🔒 Este ${noun} já possui respostas: mudar o texto de uma pergunta ou a marcação de NPS também afeta as respostas já recebidas e pede confirmação. Não é possível adicionar/remover perguntas nem mudar tipos e ramificações. Para perguntas novas ou com outro sentido, use "Duplicar".`) : null,
+      locked ? h('div', { class: 'card small' }, `🔒 ${isMoment ? 'Este momento' : 'Esta pesquisa'} já possui respostas: mudar o texto de uma pergunta ou a marcação de NPS também afeta as respostas já recebidas e pede confirmação. Não é possível adicionar/remover perguntas nem mudar tipos e ramificações. Para perguntas novas ou com outro sentido, use "Duplicar".`) : null,
       generalCard,
       isMoment ? await scheduleCard([], { id: sid, title: s.title, active: !!s.active }) : null,
       questionsCard,

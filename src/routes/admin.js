@@ -250,12 +250,24 @@ router.post('/schedules', requireAdmin, (req, res) => {
   res.status(201).json({ id: Number(r.lastInsertRowid) });
 });
 
+// Período futuro: apaga. No ar: encerra agora e mantém a linha. Encerrado há menos de 30 dias: recusa (o tablet ainda pode
+// mandar respostas offline dele). Mais antigo: apaga. Os tablets trocam de pesquisa pelo roteiro de sempre.
 router.delete('/schedules/:id', requireAdmin, (req, res) => {
   const sid = id(req.params.id);
-  const r = run('DELETE FROM schedules WHERE id = ?', sid);
-  if (!r.changes) throw new HttpError(404, 'Campanha não encontrada.');
+  const c = get('SELECT id, survey_id, branch_id, starts_at, ends_at FROM schedules WHERE id = ?', sid);
+  if (!c) throw new HttpError(404, 'Campanha não encontrada.');
+  const now = Date.now();
+  if (c.starts_at <= now && c.ends_at > now) {
+    run('UPDATE schedules SET ends_at = ? WHERE id = ?', now, sid);
+    audit(req.user.id, 'schedule.end', { id: sid, surveyId: c.survey_id, branchId: c.branch_id, endsAt: now, previousEndsAt: c.ends_at }, req.ip);
+    return res.json({ ok: true, action: 'ended' });
+  }
+  if (c.ends_at <= now && now - c.ends_at < 30 * 86_400_000) {
+    throw new HttpError(409, 'Este período terminou há menos de 30 dias e fica guardado: os tablets ainda podem enviar respostas dele sem conexão. Ele poderá ser excluído depois disso.');
+  }
+  run('DELETE FROM schedules WHERE id = ?', sid);
   audit(req.user.id, 'schedule.delete', { id: sid }, req.ip);
-  res.json({ ok: true });
+  res.json({ ok: true, action: 'deleted' });
 });
 
 // ---------------------------------------------------------------- pesquisas
@@ -268,7 +280,7 @@ router.get('/surveys', (req, res) => {
       CASE WHEN p.title IS NULL THEN s.title ELSE p.title || ' · ' || s.title END AS display_title,
       (SELECT COUNT(*) FROM questions q WHERE q.survey_id = s.id) AS questions,
       (SELECT COUNT(*) FROM questions q WHERE q.survey_id = s.id AND q.is_nps = 1) AS nps_questions,
-      (SELECT COUNT(*) FROM surveys m WHERE m.parent_id = s.id) AS moments,
+      (SELECT COUNT(*) FROM surveys m WHERE m.parent_id = s.id AND m.archived_at IS NULL) AS moments,
       (SELECT COUNT(*) FROM responses r WHERE ${family('r.survey_id')}) AS responses,
       (SELECT MIN(c.ends_at) FROM schedules c WHERE ${family('c.survey_id')} AND c.starts_at <= :now AND c.ends_at > :now) AS on_air_until,
       (SELECT MIN(c.starts_at) FROM schedules c WHERE ${family('c.survey_id')} AND c.starts_at > :now) AS next_start
@@ -285,7 +297,7 @@ router.get('/surveys/:id', (req, res) => {
   // Gestor só vê períodos das filiais dele (e os de "todas as filiais"), como em GET /schedules.
   const sc = scope(req.user);
   const visible = sc ? `AND (c.branch_id IS NULL OR c.branch_id IN (${placeholders(sc)}))` : '';
-  s.moments = all('SELECT id, title, active FROM surveys WHERE parent_id = ? ORDER BY id', s.id).map((m) => ({
+  s.moments = all('SELECT id, title, active FROM surveys WHERE parent_id = ? AND archived_at IS NULL ORDER BY id', s.id).map((m) => ({
     ...m,
     responses: get('SELECT COUNT(*) AS n FROM responses WHERE survey_id = ?', m.id).n,
     schedules: all(`SELECT c.id, c.branch_id, b.name AS branch, c.starts_at, c.ends_at FROM schedules c LEFT JOIN branches b ON b.id = c.branch_id
