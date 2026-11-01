@@ -9,7 +9,7 @@ const { get, all, run, tx, audit } = require('../db');
 const { hashPassword, verifyPassword, pairingCode, sha256, passwordPolicyError, rateLimiter } = require('../security');
 const { destroySession, destroyUserSessions, requireUser, requireAdmin } = require('../auth');
 const { HttpError, bad, str, int, bool, id, email, dateParam } = require('../validate');
-const { QUESTION_TYPES, DISPLAYS, LANGS, LANG_LABELS, CONTACT_MODES, displayTitle, loadSurvey, normalizeQuestions, normalizeI18n, npsFromCounts } = require('../surveys');
+const { QUESTION_TYPES, DISPLAYS, LANGS, LANG_LABELS, CONTACT_MODES, displayTitle, familyIds, canDelete, canArchive, loadSurvey, normalizeQuestions, normalizeI18n, npsFromCounts } = require('../surveys');
 const { getSettings, saveSettings, emailList } = require('../settings');
 const { queueEmail, queueWhatsApp, renderEmail, processOutbox, outboxStatus, webhookSecret, whatsappCheck } = require('../notify');
 const delivery = require('../delivery');
@@ -173,6 +173,7 @@ router.put('/branches/:id/survey', (req, res) => {
   assertBranch(req.user, bid);
   const sid = req.body?.surveyId === null ? null : id(req.body?.surveyId, 'pesquisa');
   if (sid && !get('SELECT 1 FROM surveys WHERE id = ? AND active = 1', sid)) throw bad('Pesquisa inexistente ou inativa.');
+  if (sid && get('SELECT 1 FROM surveys WHERE id = ? AND archived_at IS NOT NULL', sid)) throw new HttpError(409, 'Pesquisa arquivada não pode ser a padrão da filial.');
   if (sid && get('SELECT 1 FROM surveys WHERE id = ? AND parent_id IS NOT NULL', sid)) throw bad('A pesquisa padrão da filial deve ser uma pesquisa principal, não um momento.');
   run('UPDATE branches SET survey_id = ? WHERE id = ?', sid, bid);
   audit(req.user.id, 'branch.set_survey', { branchId: bid, surveyId: sid }, req.ip);
@@ -223,8 +224,9 @@ router.get('/schedules', (req, res) => {
 
 router.post('/schedules', requireAdmin, (req, res) => {
   const surveyId = id(req.body?.surveyId, 'pesquisa');
-  const target = get('SELECT parent_id FROM surveys WHERE id = ? AND active = 1', surveyId);
+  const target = get('SELECT parent_id, archived_at FROM surveys WHERE id = ? AND active = 1', surveyId);
   if (!target) throw bad('Pesquisa inexistente ou inativa.');
+  if (target.archived_at) throw new HttpError(409, 'Pesquisa arquivada não pode ser agendada.');
   // Momento de pesquisa principal inativa nunca iria ao ar: recusa em vez de criar um período morto.
   if (target.parent_id !== null && !get('SELECT 1 FROM surveys WHERE id = ? AND active = 1', target.parent_id)) throw bad('A pesquisa principal deste momento está inativa. Ative-a antes de agendar.');
   // Só momentos são agendados. Pesquisa antiga sem parent_id que já teve período (ex.: Finados) segue aceita.
@@ -368,6 +370,7 @@ router.post('/surveys/:id/moments', requireAdmin, (req, res) => {
   const parent = loadSurvey(id(req.params.id));
   if (!parent) throw new HttpError(404, 'Pesquisa não encontrada.');
   if (parent.parent_id) throw bad('Um momento não pode ter momentos. Crie o momento na pesquisa principal.');
+  if (parent.archived_at) throw new HttpError(409, 'Pesquisa arquivada não recebe momentos.');
   if (!parent.active) throw bad('A pesquisa principal está inativa. Ative-a antes de criar momentos.');
   const s = surveyInput({
     title: req.body?.title, questions: req.body?.questions, active: true,
@@ -388,6 +391,7 @@ router.put('/surveys/:id', requireAdmin, (req, res) => {
   const sid = id(req.params.id);
   const current = loadSurvey(sid);
   if (!current) throw new HttpError(404, 'Pesquisa não encontrada.');
+  if (current.archived_at) throw new HttpError(409, 'Pesquisa arquivada não pode ser editada.');
   const hasResponses = !!get('SELECT 1 FROM responses WHERE survey_id = ? LIMIT 1', sid);
   const s = surveyInput(req.body, { validateTree: !hasResponses });
   // Pesquisa inativa não entra no ar: desativar sem aviso faria um agendamento falhar em silêncio.
@@ -469,6 +473,41 @@ router.post('/surveys/:id/duplicate', requireAdmin, (req, res) => {
   });
   audit(req.user.id, 'survey.duplicate', { from: src.id, id: newId }, req.ip);
   res.status(201).json({ id: newId });
+});
+
+// Exclui a pesquisa (e, se principal, os momentos) com períodos e perguntas. Nunca toca em respostas: canDelete garante que não há nenhuma.
+router.delete('/surveys/:id', requireAdmin, (req, res) => {
+  const sid = id(req.params.id);
+  const s = get('SELECT id, title, parent_id FROM surveys WHERE id = ?', sid);
+  if (!s) throw new HttpError(404, 'Pesquisa não encontrada.');
+  const ids = familyIds(sid);
+  tx(() => {
+    const check = canDelete(sid);
+    if (!check.ok) throw new HttpError(409, check.reason);
+    for (const x of ids.slice().reverse()) {
+      run('DELETE FROM schedules WHERE survey_id = ?', x);
+      run('DELETE FROM questions WHERE survey_id = ?', x);
+      run('DELETE FROM surveys WHERE id = ?', x);
+    }
+  });
+  audit(req.user.id, 'survey.delete', { id: sid, title: s.title, moments: ids.length - 1 }, req.ip);
+  res.json({ ok: true });
+});
+
+// Arquivar tira da lista e de novos usos sem apagar nada; active não muda e as respostas da fila do tablet continuam sendo aceitas.
+router.post('/surveys/:id/archive', requireAdmin, (req, res) => {
+  const sid = id(req.params.id);
+  const s = get('SELECT id, title, archived_at FROM surveys WHERE id = ?', sid);
+  if (!s) throw new HttpError(404, 'Pesquisa não encontrada.');
+  if (s.archived_at) throw new HttpError(409, 'Esta pesquisa já está arquivada.');
+  const ids = familyIds(sid);
+  tx(() => {
+    const check = canArchive(sid);
+    if (!check.ok) throw new HttpError(409, check.reason);
+    run(`UPDATE surveys SET archived_at = ? WHERE archived_at IS NULL AND id IN (${ids.map(() => '?').join(',')})`, Date.now(), ...ids);
+  });
+  audit(req.user.id, 'survey.archive', { id: sid, title: s.title, moments: ids.length - 1 }, req.ip);
+  res.json({ ok: true });
 });
 
 // ---------------------------------------------------------------- mídia (imagem/vídeo de agradecimento)

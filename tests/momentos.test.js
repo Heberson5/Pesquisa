@@ -274,3 +274,141 @@ test('migração: banco no esquema antigo ganha parent_id e archived_at sem perd
     db.close();
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+// ---------------------------------------------------------------- excluir e arquivar
+const del = (sid) => admin.req('DELETE', `/api/admin/surveys/${sid}`);
+const arq = (sid) => admin.req('POST', `/api/admin/surveys/${sid}/archive`);
+const resp = (sid, at = Date.now()) => run('INSERT INTO responses (uuid, survey_id, branch_id, submitted_at, received_at) VALUES (?,?,?,?,?)', crypto.randomUUID(), sid, branch, at, at);
+const exists = (sid) => !!get('SELECT 1 AS x FROM surveys WHERE id = ?', sid);
+
+test('excluir sem respostas e sem período apaga a pesquisa e as perguntas, com auditoria', async () => {
+  const s = await mkMain('Excluir livre');
+  const r = await del(s);
+  assert.equal(r.status, 200, r.text);
+  assert.ok(!exists(s));
+  assert.equal(get('SELECT COUNT(*) AS n FROM questions WHERE survey_id = ?', s).n, 0);
+  assert.ok(get("SELECT 1 AS x FROM audit_log WHERE action = 'survey.delete'"));
+  assert.equal((await del(s)).status, 404);
+});
+
+test('excluir e arquivar são só do administrador', async () => {
+  makeUser('ges2@m.local', 'gestor', 'SenhaForte123', [branch]);
+  const g = new Client(); await g.login('ges2@m.local', 'SenhaForte123');
+  const s = await mkMain('Gestor não exclui');
+  assert.equal((await g.req('DELETE', `/api/admin/surveys/${s}`)).status, 403);
+  assert.equal((await g.req('POST', `/api/admin/surveys/${s}/archive`)).status, 403);
+  assert.ok(exists(s));
+});
+
+test('excluir recusa resposta, período pendente, no ar, encerrado há menos de 30 dias e padrão de filial', async () => {
+  const comResp = await mkMain('Com resposta'); resp(comResp);
+  const r1 = await del(comResp);
+  assert.equal(r1.status, 409); assert.match(r1.json.error, /respostas/i);
+
+  const mom = (await mkMoment(await mkMain('Principal'), 'Momento')).json.id;
+  sched(mom, Date.now() + 3_600_000, Date.now() + 7_200_000);
+  const r2 = await del(mom);
+  assert.equal(r2.status, 409); assert.match(r2.json.error, /per[ií]odo/i);
+  run('DELETE FROM schedules');
+  sched(mom, Date.now() - MIN, Date.now() + 3_600_000);
+  assert.equal((await del(mom)).status, 409);
+  run('DELETE FROM schedules');
+  sched(mom, Date.now() - 5 * 86_400_000, Date.now() - 4 * 86_400_000);
+  const r3 = await del(mom);
+  assert.equal(r3.status, 409); assert.match(r3.json.error, /30 dias/);
+  run('DELETE FROM schedules');
+  sched(mom, Date.now() - 40 * 86_400_000, Date.now() - 39 * 86_400_000);
+  assert.equal((await del(mom)).status, 200, 'encerrado há mais de 30 dias não bloqueia');
+
+  const r4 = await del(padrao);
+  assert.equal(r4.status, 409); assert.match(r4.json.error, /padr[aã]o/i);
+  assert.ok(exists(padrao));
+});
+
+test('excluir principal com momento bloqueado não apaga nada; sem bloqueio apaga principal, momentos, períodos e perguntas', async () => {
+  const p = await mkMain('Árvore');
+  const a = (await mkMoment(p, 'Alfa')).json.id;
+  const b = (await mkMoment(p, 'Beta')).json.id;
+  resp(b);
+  const r = await del(p);
+  assert.equal(r.status, 409, r.text);
+  assert.ok(exists(p) && exists(a) && exists(b));
+  assert.equal(get('SELECT COUNT(*) AS n FROM questions WHERE survey_id IN (?,?,?)', p, a, b).n, 3);
+  run('DELETE FROM responses WHERE survey_id = ?', b);
+  sched(a, Date.now() - 60 * 86_400_000, Date.now() - 59 * 86_400_000);
+  assert.equal((await del(p)).status, 200);
+  for (const x of [p, a, b]) assert.ok(!exists(x));
+  assert.equal(get('SELECT COUNT(*) AS n FROM schedules WHERE survey_id IN (?,?)', a, b).n, 0);
+  assert.equal(get('SELECT COUNT(*) AS n FROM questions WHERE survey_id IN (?,?,?)', p, a, b).n, 0);
+});
+
+test('arquivar principal arquiva os momentos, mantém active e tira da lista', async () => {
+  const p = await mkMain('Arquivar árvore');
+  const a = (await mkMoment(p, 'Alfa')).json.id;
+  const r = await arq(p);
+  assert.equal(r.status, 200, r.text);
+  for (const x of [p, a]) {
+    const row = get('SELECT active, archived_at FROM surveys WHERE id = ?', x);
+    assert.equal(row.active, 1);
+    assert.ok(row.archived_at);
+  }
+  assert.ok(!(await admin.req('GET', '/api/admin/surveys')).json.some((s) => s.id === p));
+  assert.ok((await admin.req('GET', '/api/admin/surveys?all=1')).json.some((s) => s.id === a));
+  assert.ok(get("SELECT 1 AS x FROM audit_log WHERE action = 'survey.archive'"));
+  assert.equal((await arq(p)).status, 409, 'já arquivada');
+});
+
+test('arquivar recusa período no ar ou pendente (inclusive de momento) e padrão de filial; momento sozinho segue a mesma regra', async () => {
+  const p = await mkMain('Arquivar bloqueado');
+  const a = (await mkMoment(p, 'Alfa')).json.id;
+  const b = (await mkMoment(p, 'Beta')).json.id;
+  sched(a, Date.now() + 3_600_000, Date.now() + 7_200_000);
+  assert.equal((await arq(p)).status, 409);
+  assert.equal((await arq(a)).status, 409);
+  assert.equal(get('SELECT COUNT(*) AS n FROM surveys WHERE archived_at IS NOT NULL AND id IN (?,?,?)', p, a, b).n, 0, 'nada arquivado');
+  assert.equal((await arq(b)).status, 200, 'momento sem período arquiva sozinho');
+  assert.ok(get('SELECT archived_at FROM surveys WHERE id = ?', b).archived_at);
+  assert.equal(get('SELECT archived_at FROM surveys WHERE id = ?', p).archived_at, null);
+  run('DELETE FROM schedules');
+  sched(a, Date.now() - 2 * 86_400_000, Date.now() - 86_400_000);
+  assert.equal((await arq(p)).status, 200, 'período encerrado não impede arquivar');
+  assert.equal((await arq(padrao)).status, 409);
+  assert.equal(get('SELECT archived_at FROM surveys WHERE id = ?', padrao).archived_at, null);
+});
+
+test('arquivada não recebe momento, agendamento, padrão de filial nem edição', async () => {
+  const p = await mkMain('Arquivada sem uso');
+  const a = (await mkMoment(p, 'Alfa')).json.id;
+  await arq(p);
+  const r1 = await mkMoment(p, 'Novo');
+  assert.equal(r1.status, 409, r1.text);
+  const r2 = await agenda(a, Date.now() + 3_600_000, Date.now() + 7_200_000);
+  assert.equal(r2.status, 409, r2.text);
+  const r3 = await admin.req('PUT', `/api/admin/branches/${branch}/survey`, { body: { surveyId: p } });
+  assert.equal(r3.status, 409, r3.text);
+  const cur = (await admin.req('GET', `/api/admin/surveys/${p}`)).json;
+  const r4 = await admin.req('PUT', `/api/admin/surveys/${p}`, { body: { ...cur, title: 'Mudou' } });
+  assert.equal(r4.status, 409, r4.text);
+  assert.equal(get('SELECT title FROM surveys WHERE id = ?', p).title, 'Arquivada sem uso');
+  assert.equal(get('SELECT survey_id FROM branches WHERE id = ?', branch).survey_id, padrao);
+});
+
+test('arquivada segue aceitando respostas da fila: momento com período encerrado há menos de 24 h', async () => {
+  const p = await mkMain('Arquivada com fila');
+  const a = (await mkMoment(p, 'Alfa')).json.id;
+  const fim = Date.now() - 3 * 3_600_000;
+  sched(a, fim - 30 * MIN, fim);
+  assert.equal((await arq(p)).status, 200);
+  assert.ok(get('SELECT archived_at FROM surveys WHERE id = ?', a).archived_at);
+  assert.equal((await send(a, fim - 5 * MIN)).status, 201, 'resposta dada durante o período');
+  assert.equal((await send(a, fim + 2 * 3_600_000)).status, 201, 'resposta da fila após o fim, dentro de 24 h');
+  assert.equal(get('SELECT COUNT(*) AS n FROM responses WHERE survey_id = ?', a).n, 2);
+});
+
+test('relatório continua contando respostas de pesquisa arquivada', async () => {
+  const p = await mkMain('Arquivada no relatório');
+  resp(p); resp(p);
+  assert.equal((await admin.req('GET', `/api/admin/stats?surveyId=${p}`)).json.totalResponses, 2);
+  assert.equal((await arq(p)).status, 200);
+  assert.equal((await admin.req('GET', `/api/admin/stats?surveyId=${p}`)).json.totalResponses, 2);
+});

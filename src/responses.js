@@ -13,7 +13,8 @@ const { timezone } = require('./config');
 
 // ---------------------------------------------------------------- pesquisa vigente (com campanhas agendadas)
 // Um momento só vai ao ar com a pesquisa principal ativa (não herda nada dela, só a permissão de estar no ar).
-const AIRABLE = '(v.parent_id IS NULL OR EXISTS (SELECT 1 FROM surveys p WHERE p.id = v.parent_id AND p.active = 1))';
+// Pesquisa arquivada nunca é escolhida para entrar no ar; saveResponse e surveyAllowed seguem aceitando as respostas dela (fila offline).
+const AIRABLE = '(v.archived_at IS NULL AND (v.parent_id IS NULL OR EXISTS (SELECT 1 FROM surveys p WHERE p.id = v.parent_id AND p.active = 1 AND p.archived_at IS NULL)))';
 
 // A campanha mais recente que cobre o momento vence; sem campanha, vale a pesquisa padrão da filial.
 function effectiveSurveyId(branch, at = Date.now()) {

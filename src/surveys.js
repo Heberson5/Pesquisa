@@ -34,6 +34,41 @@ function displayTitle(surveyId) {
   return s.parent_title ? `${s.parent_title} · ${s.title}` : s.title;
 }
 
+// A pesquisa e, se for principal, todos os momentos dela.
+function familyIds(surveyId) {
+  return [surveyId, ...all('SELECT id FROM surveys WHERE parent_id = ?', surveyId).map((m) => m.id)];
+}
+
+const PURGE_QUEUE_DAYS = 30; // a fila do tablet guarda respostas por até 30 dias depois do fim do período
+
+// Motivo pelo qual a pesquisa (e seus momentos) não pode sair do ar por arquivamento, ou null.
+// Período no ar ou pendente e padrão de filial deixariam de funcionar sem aviso.
+function liveBlock(ids, now) {
+  const ph = ids.map(() => '?').join(',');
+  if (get(`SELECT 1 FROM schedules WHERE survey_id IN (${ph}) AND ends_at > ? LIMIT 1`, ...ids, now)) return 'Há período no ar ou pendente nesta pesquisa (ou em algum momento dela). Exclua os agendamentos antes.';
+  if (get(`SELECT 1 FROM branches WHERE survey_id IN (${ph}) LIMIT 1`, ...ids)) return 'Esta pesquisa é a padrão de uma filial. Troque o padrão da filial antes.';
+  return null;
+}
+
+function canArchive(surveyId, now = Date.now()) {
+  const reason = liveBlock(familyIds(surveyId), now);
+  return reason ? { ok: false, reason } : { ok: true };
+}
+
+// Só se exclui sem respostas, sem período no ar ou pendente e sem período encerrado nos últimos 30 dias
+// (a fila do tablet ainda pode ter respostas dele). Numa principal vale para ela e todos os momentos.
+function canDelete(surveyId, now = Date.now()) {
+  const ids = familyIds(surveyId);
+  const ph = ids.map(() => '?').join(',');
+  if (get(`SELECT 1 FROM responses WHERE survey_id IN (${ph}) LIMIT 1`, ...ids)) return { ok: false, reason: 'Esta pesquisa (ou algum momento dela) já tem respostas. Arquive em vez de excluir.' };
+  const live = liveBlock(ids, now);
+  if (live) return { ok: false, reason: live };
+  if (get(`SELECT 1 FROM schedules WHERE survey_id IN (${ph}) AND ends_at > ? LIMIT 1`, ...ids, now - PURGE_QUEUE_DAYS * 86_400_000)) {
+    return { ok: false, reason: `Houve período encerrado nos últimos ${PURGE_QUEUE_DAYS} dias e o tablet ainda pode enviar respostas dele. Arquive em vez de excluir.` };
+  }
+  return { ok: true };
+}
+
 function loadSurvey(surveyId) {
   const s = get('SELECT * FROM surveys WHERE id = ?', surveyId);
   if (!s) return null;
@@ -227,6 +262,6 @@ function npsFromCounts(promoters, passives, detractors) {
 }
 
 module.exports = {
-  QUESTION_TYPES, DISPLAYS, LANGS, LANG_LABELS, CONTACT_MODES, OPS_BY_TYPE, displayTitle, loadSurvey, normalizeQuestion, normalizeQuestions,
+  QUESTION_TYPES, DISPLAYS, LANGS, LANG_LABELS, CONTACT_MODES, OPS_BY_TYPE, displayTitle, familyIds, canDelete, canArchive, loadSurvey, normalizeQuestion, normalizeQuestions,
   normalizeI18n, normalizeAnswer, npsFromCounts, parseOptions, isVisible, evalCondition,
 };
