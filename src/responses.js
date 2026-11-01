@@ -4,7 +4,7 @@
 const { get, all, run, tx } = require('./db');
 const geoLib = require('./geo');
 const { HttpError, bad, int, str, UUID_RE } = require('./validate');
-const { loadSurvey, normalizeAnswer, isVisible, LANGS } = require('./surveys');
+const { loadSurvey, displayTitle, normalizeAnswer, isVisible, LANGS } = require('./surveys');
 const { encrypt, lookup, normPhone, normEmail } = require('./vault');
 const { isEmail } = require('./notify');
 const { publicBranding } = require('./settings');
@@ -12,9 +12,12 @@ const alerts = require('./alerts');
 const { timezone } = require('./config');
 
 // ---------------------------------------------------------------- pesquisa vigente (com campanhas agendadas)
+// Um momento só vai ao ar com a pesquisa principal ativa (não herda nada dela, só a permissão de estar no ar).
+const AIRABLE = '(v.parent_id IS NULL OR EXISTS (SELECT 1 FROM surveys p WHERE p.id = v.parent_id AND p.active = 1))';
+
 // A campanha mais recente que cobre o momento vence; sem campanha, vale a pesquisa padrão da filial.
 function effectiveSurveyId(branch, at = Date.now()) {
-  const s = get(`SELECT s.survey_id FROM schedules s JOIN surveys v ON v.id = s.survey_id AND v.active = 1
+  const s = get(`SELECT s.survey_id FROM schedules s JOIN surveys v ON v.id = s.survey_id AND v.active = 1 AND ${AIRABLE}
       WHERE (s.branch_id = ? OR s.branch_id IS NULL) AND s.starts_at <= ? AND s.ends_at > ?
       ORDER BY s.starts_at DESC, s.id DESC LIMIT 1`, branch.id, at, at);
   return s ? s.survey_id : branch.survey_id;
@@ -31,7 +34,7 @@ function surveyAllowed(branch, surveyId, submittedAt) {
 
 // Momentos em que a pesquisa da filial muda (início e fim dos agendamentos), do mais próximo ao mais distante.
 function surveyChanges(branch, now, until) {
-  const times = all(`SELECT s.starts_at AS a, s.ends_at AS b FROM schedules s JOIN surveys v ON v.id = s.survey_id AND v.active = 1
+  const times = all(`SELECT s.starts_at AS a, s.ends_at AS b FROM schedules s JOIN surveys v ON v.id = s.survey_id AND v.active = 1 AND ${AIRABLE}
       WHERE (s.branch_id = ? OR s.branch_id IS NULL) AND s.ends_at > ? AND s.starts_at <= ?`, branch.id, now, until)
     .flatMap((r) => [r.a, r.b]).filter((t) => t > now && t <= until);
   let current = effectiveSurveyId(branch, now);
@@ -53,7 +56,7 @@ function surveyPlan(branch, now = Date.now()) {
 
 // O que o painel mostra da filial: a pesquisa no ar agora e a próxima troca automática.
 function branchAgenda(branch, now = Date.now()) {
-  const title = (sid) => (sid ? get('SELECT title FROM surveys WHERE id = ?', sid)?.title ?? null : null);
+  const title = displayTitle;
   const surveyId = effectiveSurveyId(branch, now);
   const next = surveyChanges(branch, now, now + 366 * 86_400_000)[0] || null;
   return { current_survey: title(surveyId), scheduled: surveyId !== branch.survey_id, next_change_at: next?.at ?? null, next_survey: next ? title(next.surveyId) : null };

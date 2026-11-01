@@ -9,7 +9,7 @@ const { get, all, run, tx, audit } = require('../db');
 const { hashPassword, verifyPassword, pairingCode, sha256, passwordPolicyError, rateLimiter } = require('../security');
 const { destroySession, destroyUserSessions, requireUser, requireAdmin } = require('../auth');
 const { HttpError, bad, str, int, bool, id, email, dateParam } = require('../validate');
-const { QUESTION_TYPES, DISPLAYS, LANGS, LANG_LABELS, CONTACT_MODES, loadSurvey, normalizeQuestions, normalizeI18n, npsFromCounts } = require('../surveys');
+const { QUESTION_TYPES, DISPLAYS, LANGS, LANG_LABELS, CONTACT_MODES, displayTitle, loadSurvey, normalizeQuestions, normalizeI18n, npsFromCounts } = require('../surveys');
 const { getSettings, saveSettings, emailList } = require('../settings');
 const { queueEmail, queueWhatsApp, renderEmail, processOutbox, outboxStatus, webhookSecret, whatsappCheck } = require('../notify');
 const delivery = require('../delivery');
@@ -173,6 +173,7 @@ router.put('/branches/:id/survey', (req, res) => {
   assertBranch(req.user, bid);
   const sid = req.body?.surveyId === null ? null : id(req.body?.surveyId, 'pesquisa');
   if (sid && !get('SELECT 1 FROM surveys WHERE id = ? AND active = 1', sid)) throw bad('Pesquisa inexistente ou inativa.');
+  if (sid && get('SELECT 1 FROM surveys WHERE id = ? AND parent_id IS NOT NULL', sid)) throw bad('A pesquisa padrão da filial deve ser uma pesquisa principal, não um momento.');
   run('UPDATE branches SET survey_id = ? WHERE id = ?', sid, bid);
   audit(req.user.id, 'branch.set_survey', { branchId: bid, surveyId: sid }, req.ip);
   res.json({ ok: true });
@@ -217,12 +218,15 @@ router.get('/schedules', (req, res) => {
     FROM schedules c JOIN surveys v ON v.id = c.survey_id LEFT JOIN branches b ON b.id = c.branch_id ${conds.length ? 'WHERE ' + conds.join(' AND ') : ''}
     ORDER BY c.starts_at DESC LIMIT 200`, ...params);
   // Cada campanha é mostrada no fuso da filial dela (ou da empresa, quando vale para todas).
-  res.json(rows.map((c) => ({ ...c, tz: c.branch_id ? zones.forBranch(get('SELECT id, timezone FROM branches WHERE id = ?', c.branch_id)) : companyTz })));
+  res.json(rows.map((c) => ({ ...c, survey: displayTitle(c.survey_id), tz: c.branch_id ? zones.forBranch(get('SELECT id, timezone FROM branches WHERE id = ?', c.branch_id)) : companyTz })));
 });
 
 router.post('/schedules', requireAdmin, (req, res) => {
   const surveyId = id(req.body?.surveyId, 'pesquisa');
-  if (!get('SELECT 1 FROM surveys WHERE id = ? AND active = 1', surveyId)) throw bad('Pesquisa inexistente ou inativa.');
+  const target = get('SELECT parent_id FROM surveys WHERE id = ? AND active = 1', surveyId);
+  if (!target) throw bad('Pesquisa inexistente ou inativa.');
+  // Só momentos são agendados. Pesquisa antiga sem parent_id que já teve período (ex.: Finados) segue aceita.
+  if (target.parent_id === null && !get('SELECT 1 FROM schedules WHERE survey_id = ? LIMIT 1', surveyId)) throw bad('Agende um momento da pesquisa, não a pesquisa principal.');
   const branchId = req.body?.branchId === null || req.body?.branchId === undefined || req.body?.branchId === '' ? null : id(req.body.branchId, 'filial');
   if (branchId !== null) assertBranch(req.user, branchId);
   // Data e hora digitadas valem no fuso da filial escolhida (ou no da empresa, se for para todas).
@@ -234,9 +238,8 @@ router.post('/schedules', requireAdmin, (req, res) => {
   if (endsAt - startsAt > 366 * 86_400_000) throw bad('Campanha de no máximo 1 ano.');
   if (endsAt < Date.now()) throw bad('Essa campanha já terminou.');
   // Dois agendamentos no mesmo horário deixariam dúvida sobre qual pesquisa aparece.
-  const clash = get(`SELECT v.title FROM schedules c JOIN surveys v ON v.id = c.survey_id
-    WHERE c.branch_id IS ? AND c.starts_at < ? AND c.ends_at > ? LIMIT 1`, branchId, endsAt, startsAt);
-  if (clash) throw new HttpError(409, `Já existe um agendamento nesse horário: "${clash.title}". Ajuste o período ou exclua o outro.`);
+  const clash = get('SELECT c.survey_id FROM schedules c WHERE c.branch_id IS ? AND c.starts_at < ? AND c.ends_at > ? LIMIT 1', branchId, endsAt, startsAt);
+  if (clash) throw new HttpError(409, `Já existe um agendamento nesse horário: "${displayTitle(clash.survey_id)}". Ajuste o período ou exclua o outro.`);
   const r = run('INSERT INTO schedules (survey_id, branch_id, starts_at, ends_at, created_by, created_at) VALUES (?,?,?,?,?,?)',
     surveyId, branchId, startsAt, endsAt, req.user.id, Date.now());
   audit(req.user.id, 'schedule.create', { id: r.lastInsertRowid, surveyId, branchId, startsAt, endsAt }, req.ip);
@@ -252,14 +255,21 @@ router.delete('/schedules/:id', requireAdmin, (req, res) => {
 });
 
 // ---------------------------------------------------------------- pesquisas
+// Padrão: só pesquisas principais não arquivadas, com os momentos somados (respostas e períodos).
+// ?all=1: todas, inclusive momentos e arquivadas, cada uma com os próprios números (para filtros de relatório e histórico).
 router.get('/surveys', (req, res) => {
-  res.json(all(`SELECT s.id, s.title, s.active, s.updated_at,
+  const every = req.query.all === '1';
+  const family = (col) => (every ? `${col} = s.id` : `${col} IN (SELECT s.id UNION ALL SELECT m.id FROM surveys m WHERE m.parent_id = s.id)`);
+  res.json(all(`SELECT s.id, s.title, s.active, s.updated_at, s.parent_id, s.archived_at,
+      CASE WHEN p.title IS NULL THEN s.title ELSE p.title || ' · ' || s.title END AS display_title,
       (SELECT COUNT(*) FROM questions q WHERE q.survey_id = s.id) AS questions,
       (SELECT COUNT(*) FROM questions q WHERE q.survey_id = s.id AND q.is_nps = 1) AS nps_questions,
-      (SELECT COUNT(*) FROM responses r WHERE r.survey_id = s.id) AS responses,
-      (SELECT MIN(c.ends_at) FROM schedules c WHERE c.survey_id = s.id AND c.starts_at <= :now AND c.ends_at > :now) AS on_air_until,
-      (SELECT MIN(c.starts_at) FROM schedules c WHERE c.survey_id = s.id AND c.starts_at > :now) AS next_start
-    FROM surveys s ORDER BY s.active DESC, s.updated_at DESC`.replaceAll(':now', String(Date.now()))));
+      (SELECT COUNT(*) FROM surveys m WHERE m.parent_id = s.id) AS moments,
+      (SELECT COUNT(*) FROM responses r WHERE ${family('r.survey_id')}) AS responses,
+      (SELECT MIN(c.ends_at) FROM schedules c WHERE ${family('c.survey_id')} AND c.starts_at <= :now AND c.ends_at > :now) AS on_air_until,
+      (SELECT MIN(c.starts_at) FROM schedules c WHERE ${family('c.survey_id')} AND c.starts_at > :now) AS next_start
+    FROM surveys s LEFT JOIN surveys p ON p.id = s.parent_id
+    ${every ? '' : 'WHERE s.parent_id IS NULL AND s.archived_at IS NULL'} ORDER BY s.active DESC, s.updated_at DESC`.replaceAll(':now', String(Date.now()))));
 });
 
 router.get('/surveys/:id', (req, res) => {
@@ -267,6 +277,13 @@ router.get('/surveys/:id', (req, res) => {
   if (!s.id) throw new HttpError(404, 'Pesquisa não encontrada.');
   s.has_responses = !!get('SELECT 1 FROM responses WHERE survey_id = ? LIMIT 1', s.id);
   s.thanks_media = s.thanks_media_id ? get('SELECT id, mime, original_name FROM media WHERE id = ?', s.thanks_media_id) : null;
+  s.parent = s.parent_id ? get('SELECT id, title FROM surveys WHERE id = ?', s.parent_id) : null;
+  s.moments = all('SELECT id, title, active FROM surveys WHERE parent_id = ? ORDER BY id', s.id).map((m) => ({
+    ...m,
+    responses: get('SELECT COUNT(*) AS n FROM responses WHERE survey_id = ?', m.id).n,
+    schedules: all(`SELECT c.id, c.branch_id, b.name AS branch, c.starts_at, c.ends_at FROM schedules c LEFT JOIN branches b ON b.id = c.branch_id
+      WHERE c.survey_id = ? ORDER BY c.starts_at`, m.id).map((c) => ({ ...c, tz: c.branch_id ? zones.forBranch(get('SELECT id, timezone FROM branches WHERE id = ?', c.branch_id)) : companyTz })),
+  }));
   res.json(s);
 });
 
@@ -320,18 +337,44 @@ function insertQuestions(surveyId, questions) {
   });
 }
 
+// s: campos já validados (título, textos, tempos, contato, idiomas, traduções). parentId: nulo na principal.
+function insertSurveyRow(s, parentId, active, now) {
+  return Number(run(`INSERT INTO surveys (title, welcome_title, welcome_text, thanks_title, thanks_text, thanks_media_id,
+    thanks_seconds, idle_seconds, active, contact_mode, languages, i18n, parent_id, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+  s.title, s.welcome_title, s.welcome_text, s.thanks_title, s.thanks_text, s.thanks_media_id,
+  s.thanks_seconds, s.idle_seconds, active, s.contact_mode, JSON.stringify(s.languages), i18nForDb(s.i18n), parentId, now, now).lastInsertRowid);
+}
+
 router.post('/surveys', requireAdmin, (req, res) => {
   const s = surveyInput(req.body);
   const now = Date.now();
   const newId = tx(() => {
-    const r = run(`INSERT INTO surveys (title, welcome_title, welcome_text, thanks_title, thanks_text, thanks_media_id,
-      thanks_seconds, idle_seconds, active, contact_mode, languages, i18n, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-    s.title, s.welcome_title, s.welcome_text, s.thanks_title, s.thanks_text, s.thanks_media_id,
-    s.thanks_seconds, s.idle_seconds, s.active, s.contact_mode, JSON.stringify(s.languages), i18nForDb(s.i18n), now, now);
-    insertQuestions(r.lastInsertRowid, s.questions);
-    return Number(r.lastInsertRowid);
+    const nid = insertSurveyRow(s, null, s.active, now);
+    insertQuestions(nid, s.questions);
+    return nid;
   });
   audit(req.user.id, 'survey.create', { id: newId, title: s.title }, req.ip);
+  res.status(201).json({ id: newId });
+});
+
+// Momento: pesquisa filha com perguntas próprias. Copia da principal telas, tempos, idiomas, traduções e modo de contato
+// (depois de criado, mudar a principal não altera o momento). Só um nível: momento não tem momentos.
+router.post('/surveys/:id/moments', requireAdmin, (req, res) => {
+  const parent = loadSurvey(id(req.params.id));
+  if (!parent) throw new HttpError(404, 'Pesquisa não encontrada.');
+  if (parent.parent_id) throw bad('Um momento não pode ter momentos. Crie o momento na pesquisa principal.');
+  const s = surveyInput({
+    title: req.body?.title, questions: req.body?.questions, active: true,
+    welcome_title: parent.welcome_title, welcome_text: parent.welcome_text, thanks_title: parent.thanks_title, thanks_text: parent.thanks_text,
+    thanks_media_id: parent.thanks_media_id, thanks_seconds: parent.thanks_seconds, idle_seconds: parent.idle_seconds,
+    contact_mode: parent.contact_mode, languages: parent.languages, i18n: parent.i18n,
+  });
+  const newId = tx(() => {
+    const nid = insertSurveyRow(s, parent.id, 1, Date.now());
+    insertQuestions(nid, s.questions);
+    return nid;
+  });
+  audit(req.user.id, 'survey.moment_create', { id: newId, parentId: parent.id, title: s.title }, req.ip);
   res.status(201).json({ id: newId });
 });
 
@@ -342,8 +385,9 @@ router.put('/surveys/:id', requireAdmin, (req, res) => {
   const hasResponses = !!get('SELECT 1 FROM responses WHERE survey_id = ? LIMIT 1', sid);
   const s = surveyInput(req.body, { validateTree: !hasResponses });
   // Pesquisa inativa não entra no ar: desativar sem aviso faria um agendamento falhar em silêncio.
-  if (!s.active && get('SELECT 1 FROM schedules WHERE survey_id = ? AND ends_at > ? LIMIT 1', sid, Date.now())) {
-    throw new HttpError(409, 'Esta pesquisa tem agendamentos pendentes. Exclua os agendamentos antes de desativá-la.');
+  // Na principal, vale também o período de qualquer um de seus momentos.
+  if (!s.active && get('SELECT 1 FROM schedules WHERE (survey_id = ? OR survey_id IN (SELECT id FROM surveys WHERE parent_id = ?)) AND ends_at > ? LIMIT 1', sid, sid, Date.now())) {
+    throw new HttpError(409, 'Esta pesquisa (ou algum momento dela) tem agendamentos pendentes. Exclua os agendamentos antes de desativá-la.');
   }
   // Com respostas, as perguntas são casadas por id: ordem, tipo, opções e condições ficam congeladas.
   if (hasResponses) {
@@ -401,13 +445,21 @@ router.post('/surveys/:id/duplicate', requireAdmin, (req, res) => {
   const src = loadSurvey(id(req.params.id));
   if (!src) throw new HttpError(404, 'Pesquisa não encontrada.');
   const now = Date.now();
+  const copy = (survey, title, parentId, active) => {
+    const nid = insertSurveyRow({ ...survey, title }, parentId, active, now);
+    insertQuestions(nid, withRefs(survey).questions.map((q) => ({ ...q, required: q.required ? 1 : 0, is_nps: q.is_nps ? 1 : 0 })));
+    return nid;
+  };
+  // Principal: copia as perguntas e os momentos. Momento: cria um irmão na mesma principal. Períodos nunca são copiados.
   const newId = tx(() => {
-    const r = run(`INSERT INTO surveys (title, welcome_title, welcome_text, thanks_title, thanks_text, thanks_media_id,
-      thanks_seconds, idle_seconds, active, contact_mode, languages, i18n, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,1,?,?,?,?,?)`,
-    (src.title + ' (cópia)').slice(0, 120), src.welcome_title, src.welcome_text, src.thanks_title, src.thanks_text,
-    src.thanks_media_id, src.thanks_seconds, src.idle_seconds, src.contact_mode, JSON.stringify(src.languages), i18nForDb(src.i18n), now, now);
-    insertQuestions(r.lastInsertRowid, withRefs(src).questions.map((q) => ({ ...q, required: q.required ? 1 : 0, is_nps: q.is_nps ? 1 : 0 })));
-    return Number(r.lastInsertRowid);
+    const nid = copy(src, (src.title + ' (cópia)').slice(0, 120), src.parent_id, 1);
+    if (!src.parent_id) {
+      for (const m of all('SELECT id FROM surveys WHERE parent_id = ? AND archived_at IS NULL ORDER BY id', src.id)) {
+        const ms = loadSurvey(m.id);
+        copy(ms, ms.title, nid, ms.active);
+      }
+    }
+    return nid;
   });
   audit(req.user.id, 'survey.duplicate', { from: src.id, id: newId }, req.ip);
   res.status(201).json({ id: newId });

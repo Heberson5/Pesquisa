@@ -27,6 +27,13 @@ const CONTACT_MODES = { never: 'Não perguntar', detractors: 'Só para quem deu 
 const parseJson = (v, fallback) => { try { return v ? JSON.parse(v) : fallback; } catch { return fallback; } };
 function parseOptions(q) { return parseJson(q.options_json, []); }
 
+// Nome mostrado em listas, filtros e relatórios: "Principal · Momento" para um momento, o próprio título nos demais.
+function displayTitle(surveyId) {
+  const s = surveyId ? get('SELECT s.title, p.title AS parent_title FROM surveys s LEFT JOIN surveys p ON p.id = s.parent_id WHERE s.id = ?', surveyId) : null;
+  if (!s) return null;
+  return s.parent_title ? `${s.parent_title} · ${s.title}` : s.title;
+}
+
 function loadSurvey(surveyId) {
   const s = get('SELECT * FROM surveys WHERE id = ?', surveyId);
   if (!s) return null;
@@ -220,6 +227,6 @@ function npsFromCounts(promoters, passives, detractors) {
 }
 
 module.exports = {
-  QUESTION_TYPES, DISPLAYS, LANGS, LANG_LABELS, CONTACT_MODES, OPS_BY_TYPE, loadSurvey, normalizeQuestion, normalizeQuestions,
+  QUESTION_TYPES, DISPLAYS, LANGS, LANG_LABELS, CONTACT_MODES, OPS_BY_TYPE, displayTitle, loadSurvey, normalizeQuestion, normalizeQuestions,
   normalizeI18n, normalizeAnswer, npsFromCounts, parseOptions, isVisible, evalCondition,
 };

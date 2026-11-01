@@ -77,8 +77,9 @@ test('fuso escolhido na filial vale mais que o do tablet; valida entrada; "auto"
 });
 
 test('campanha agendada vale no fuso da filial; "todas" usa o da empresa; lista mostra o fuso', async () => {
-  const sv = (await admin.req('POST', '/api/admin/surveys', { body: { title: 'Campanha fuso', welcome_title: 'Olá', thanks_title: 'Ok', thanks_seconds: 5, idle_seconds: 30,
+  const main = (await admin.req('POST', '/api/admin/surveys', { body: { title: 'Campanha fuso', welcome_title: 'Olá', thanks_title: 'Ok', thanks_seconds: 5, idle_seconds: 30,
     questions: [{ text: 'Nota?', type: 'nps', is_nps: true }] } })).json.id;
+  const sv = (await admin.req('POST', `/api/admin/surveys/${main}/moments`, { body: { title: 'Momento fuso', questions: [{ text: 'Nota?', type: 'nps', is_nps: true }] } })).json.id; // só momentos são agendados
   await put(admin, { timezone: 'America/Manaus' });
   const mk = (branchId) => admin.req('POST', '/api/admin/schedules', { body: { surveyId: sv, branchId, startsAt: '2030-01-10T08:00', endsAt: '2030-01-20T08:00' } });
   assert.equal((await mk(branch)).status, 201);

@@ -127,7 +127,8 @@ test('link público: limite de respostas por aparelho/IP', async () => {
 });
 
 test('campanhas: pesquisa agendada substitui a padrão no período; validações e escopo', async () => {
-  const camp = (await admin.req('POST', '/api/admin/surveys', { body: { ...base, title: 'Campanha Natal', questions: [{ text: 'Natal?', type: 'nps', is_nps: true }] } })).json.id;
+  const natal = (await admin.req('POST', '/api/admin/surveys', { body: { ...base, title: 'Campanha Natal', questions: [{ text: 'Natal?', type: 'nps', is_nps: true }] } })).json.id;
+  const camp = (await admin.req('POST', `/api/admin/surveys/${natal}/moments`, { body: { title: 'Véspera', questions: [{ text: 'Natal?', type: 'nps', is_nps: true }] } })).json.id; // só momentos são agendados
   for (const bad of [{ startsAt: local(10), endsAt: local(5) }, { startsAt: '2026-13-01T08:00', endsAt: local(60) }, { startsAt: local(-120), endsAt: local(-60) }, { startsAt: 'amanhã', endsAt: local(60) }]) {
     assert.equal((await admin.req('POST', '/api/admin/schedules', { body: { surveyId: camp, branchId: branch, ...bad } })).status, 400, JSON.stringify(bad));
   }

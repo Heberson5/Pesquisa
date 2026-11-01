@@ -259,6 +259,9 @@ for (const [table, column, ddl] of [
   ['surveys', 'languages', "languages TEXT NOT NULL DEFAULT '[\"pt\"]'"],
   ['surveys', 'i18n', 'i18n TEXT'],
   ['surveys', 'contact_mode', "contact_mode TEXT NOT NULL DEFAULT 'never'"],
+  // Momento = pesquisa filha (um nível só) que recebe os períodos; archived_at tira a pesquisa da lista sem apagar o histórico.
+  ['surveys', 'parent_id', 'parent_id INTEGER REFERENCES surveys(id)'],
+  ['surveys', 'archived_at', 'archived_at INTEGER'],
   ['questions', 'show_if', 'show_if TEXT'],
   ['questions', 'i18n', 'i18n TEXT'],
 ]) addColumnIfMissing(table, column, ddl);
@@ -266,7 +269,8 @@ for (const [table, column, ddl] of [
 db.exec("UPDATE responses SET device_label = (SELECT name FROM devices WHERE devices.id = responses.device_id) WHERE device_label IS NULL AND device_id IS NOT NULL");
 db.exec(`CREATE INDEX IF NOT EXISTS idx_resp_phone ON responses(contact_phone_lookup);
 CREATE INDEX IF NOT EXISTS idx_resp_email ON responses(contact_email_lookup);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_branch_public ON branches(public_token_hash);`);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_branch_public ON branches(public_token_hash);
+CREATE INDEX IF NOT EXISTS idx_surveys_parent ON surveys(parent_id);`);
 
 // Bancos de versões anteriores não aceitavam a aparência 'default'. Recria a tabela seguindo o
 // procedimento oficial do SQLite (nova tabela → copia → apaga a antiga → renomeia a nova), que mantém

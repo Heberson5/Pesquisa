@@ -9,9 +9,11 @@ const TZ = 'America/Manaus';
 const MIN = 60_000;
 const local = (t) => new Date(t + -4 * 60 * MIN).toISOString().slice(0, 16);
 const base = { welcome_title: 'Olá', thanks_title: 'Ok', thanks_seconds: 5, idle_seconds: 30 };
-let admin; let gestor; let branch; let other; let padrao; let a; let b; let token; let otherToken;
+let admin; let gestor; let branch; let other; let padrao; let a; let b; let token; let otherToken; let principal;
 
 const mkSurvey = async (title) => (await admin.req('POST', '/api/admin/surveys', { body: { ...base, title, questions: [{ text: `${title}?`, type: 'nps', is_nps: true }] } })).json.id;
+// Só momentos recebem períodos: A e B são momentos de uma pesquisa principal.
+const mkMoment = async (title) => (await admin.req('POST', `/api/admin/surveys/${principal}/moments`, { body: { title, questions: [{ text: `${title}?`, type: 'nps', is_nps: true }] } })).json.id;
 const agenda = (body) => admin.req('POST', '/api/admin/schedules', { body });
 const config = (tok = token) => new Client().req('GET', '/api/kiosk/config', { headers: { Authorization: 'Bearer ' + tok } });
 const qOf = (sid) => get('SELECT id FROM questions WHERE survey_id = ?', sid).id;
@@ -28,7 +30,7 @@ test.before(async () => {
   admin = new Client(); await admin.login('adm@a.local', 'SenhaForte123');
   branch = (await admin.req('POST', '/api/admin/branches', { body: { code: 'AG1', name: 'Agenda', timezone: TZ } })).json.id;
   other = (await admin.req('POST', '/api/admin/branches', { body: { code: 'AG2', name: 'Outra', timezone: TZ } })).json.id;
-  padrao = await mkSurvey('Padrão'); a = await mkSurvey('Pesquisa A'); b = await mkSurvey('Pesquisa B');
+  padrao = await mkSurvey('Padrão'); principal = await mkSurvey('Campanha'); a = await mkMoment('Pesquisa A'); b = await mkMoment('Pesquisa B');
   for (const id of [branch, other]) await admin.req('PUT', `/api/admin/branches/${id}/survey`, { body: { surveyId: padrao } });
   token = await pair(branch); otherToken = await pair(other);
   makeUser('ges@a.local', 'gestor', 'SenhaForte123', [other]);
@@ -113,14 +115,14 @@ test('o painel mostra os agendamentos da pesquisa, o que está no ar e a próxim
   await agenda({ surveyId: b, branchId: branch, startsAt: local(t0), endsAt: local(t0 + 30 * MIN) });
   const only = (await admin.req('GET', `/api/admin/schedules?surveyId=${b}`)).json;
   assert.deepEqual(only.map((c) => c.survey_id), [b]);
-  const list = (await admin.req('GET', '/api/admin/surveys')).json;
+  const list = (await admin.req('GET', '/api/admin/surveys?all=1')).json;
   assert.ok(list.find((s) => s.id === a).on_air_until > Date.now());
   assert.ok(list.find((s) => s.id === b).next_start > Date.now());
   assert.equal(list.find((s) => s.id === padrao).next_start, null);
   const br = (await admin.req('GET', '/api/admin/branches')).json.find((x) => x.id === branch);
-  assert.equal(br.current_survey, 'Pesquisa A');
+  assert.equal(br.current_survey, 'Campanha · Pesquisa A');
   assert.equal(br.scheduled, true);
-  assert.equal(br.next_survey, 'Pesquisa B');
+  assert.equal(br.next_survey, 'Campanha · Pesquisa B');
   assert.ok(br.next_change_at > Date.now());
   assert.equal((await gestor.req('GET', `/api/admin/schedules?surveyId=${a}`)).json.length, 0);
   assert.equal((await gestor.req('POST', '/api/admin/schedules', { body: { surveyId: a, branchId: other, startsAt: local(t0), endsAt: local(t0 + MIN) } })).status, 403);
