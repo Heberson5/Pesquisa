@@ -2,6 +2,9 @@
 // API pública do quiosque (tablet). Sem login de pessoa: o tablet é pareado
 // uma vez com um código gerado no painel e passa a usar um token próprio.
 const express = require('express');
+const fs = require('node:fs');
+const path = require('node:path');
+const crypto = require('node:crypto');
 const { get, run, audit } = require('../db');
 const { randomToken, sha256, rateLimiter } = require('../security');
 const { requireDevice } = require('../auth');
@@ -10,6 +13,10 @@ const { buildConfig, saveResponse, surveyPlan } = require('../responses');
 const zones = require('../zones');
 
 const router = express.Router();
+
+// Versão do app do tablet: hash do kiosk.js calculado uma vez ao subir o servidor.
+// O tablet compara com a versão que recebeu antes e se recarrega quando muda.
+const APP_VERSION = crypto.createHash('sha256').update(fs.readFileSync(path.join(__dirname, '..', '..', 'public', 'kiosk', 'kiosk.js'))).digest('hex').slice(0, 12);
 
 const pairLimiter = rateLimiter({ windowMs: 15 * 60_000, max: 10, message: 'Muitas tentativas de pareamento. Aguarde 15 minutos.' });
 // Por dispositivo: um cliente leva pelo menos alguns segundos para responder.
@@ -40,7 +47,7 @@ router.get('/config', configLimiter, requireDevice, (req, res) => {
   if (reported && reported !== d.timezone) run('UPDATE devices SET timezone = ?, timezone_at = ? WHERE id = ?', reported, Date.now(), d.id);
   else if (reported) run('UPDATE devices SET timezone_at = ? WHERE id = ?', Date.now(), d.id);
   const branch = branchOf(d);
-  res.json(buildConfig(branch, { device: { name: d.name }, plan: surveyPlan(branch) }, zones.forBranch(branch, { timezone: reported || d.timezone })));
+  res.json({ ...buildConfig(branch, { device: { name: d.name }, plan: surveyPlan(branch) }, zones.forBranch(branch, { timezone: reported || d.timezone })), appVersion: APP_VERSION });
 });
 
 const branchOf = (d) => get('SELECT * FROM branches WHERE id = ?', d.branch_id);

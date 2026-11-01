@@ -12,6 +12,9 @@
   const CONFIG_REFRESH_MS = 60_000;
   const FLUSH_MS = 30_000;
   const PLAN_CHECK_MS = 5_000;
+  const VERSION_KEY = 'kiosk.appVersion';
+  const RELOAD_KEY = 'kiosk.reloadAt';
+  const RELOAD_GUARD_MS = 10 * 60_000;
 
   const app = document.getElementById('app');
   const offlineBar = document.getElementById('offline');
@@ -176,8 +179,23 @@
   }
 
   // ------------------------------------------------------------ configuração
+  // Versão nova do app no servidor: guarda a da primeira resposta e, quando vier outra, recarrega só na tela
+  // inicial (nunca no meio de uma pesquisa), no máximo uma vez a cada 10 min. A fila de respostas fica no localStorage.
+  function checkAppVersion(v) {
+    if (!v) return;
+    const known = store.get(VERSION_KEY);
+    if (!known) return store.set(VERSION_KEY, v);
+    if (known === v) return;
+    if (!['welcome', 'unavailable', 'offline', 'closed'].includes(screen) || state) return;
+    if (Date.now() - (store.get(RELOAD_KEY) || 0) < RELOAD_GUARD_MS) return;
+    store.set(RELOAD_KEY, Date.now());
+    store.set(VERSION_KEY, v);
+    location.reload();
+  }
+
   async function loadConfig() {
     const c = await api('/config');
+    if (MODE === 'tablet') checkAppVersion(c.appVersion);
     const comparable = (x) => JSON.stringify({ ...x, ticket: undefined, plan: undefined, clockSkew: undefined });
     const changed = comparable(c) !== comparable(config);
     if (c.plan) c.clockSkew = c.plan.serverNow - Date.now(); // o relógio que vale é o do servidor, não o do tablet

@@ -1,6 +1,6 @@
 // Service worker: guarda a "casca" do quiosque para abrir mesmo sem internet.
 // As chamadas de API nunca são cacheadas aqui (a fila offline fica no kiosk.js).
-const CACHE = 'kiosk-v2';
+const CACHE = 'kiosk-v3';
 const SHELL = ['/kiosk/', '/kiosk/index.html', '/kiosk/kiosk.css', '/kiosk/kiosk.js', '/kiosk/icon.svg', '/kiosk/manifest.webmanifest', '/shared/icons.js'];
 self.addEventListener('install', (e) => e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting())));
 self.addEventListener('activate', (e) => e.waitUntil(

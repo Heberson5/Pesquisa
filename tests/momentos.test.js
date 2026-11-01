@@ -465,3 +465,10 @@ test('casos e pesquisa de titular mostram Principal · Momento', async () => {
   const caseId = run("INSERT INTO cases (response_id, branch_id, created_at, updated_at) VALUES (?,?,?,?)", rid, branch, Date.now(), Date.now()).lastInsertRowid;
   assert.equal((await admin.req('GET', `/api/admin/cases/${caseId}`)).json.survey, 'Casos · Dia 1');
 });
+
+test('/config traz appVersion estável (hash do kiosk.js)', async () => {
+  const a = (await config()).json.appVersion;
+  const b = (await config()).json.appVersion;
+  assert.match(a, /^[0-9a-f]{12}$/);
+  assert.equal(a, b);
+});
