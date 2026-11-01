@@ -250,6 +250,30 @@ router.post('/schedules', requireAdmin, (req, res) => {
   res.status(201).json({ id: Number(r.lastInsertRowid) });
 });
 
+// Futuro: muda filial, início e fim. No ar: só o fim, porque já há tablets usando. Encerrado: fica como está (histórico e respostas offline).
+router.put('/schedules/:id', requireAdmin, (req, res) => {
+  const sid = id(req.params.id);
+  const c = get('SELECT id, survey_id, branch_id, starts_at, ends_at FROM schedules WHERE id = ?', sid);
+  if (!c) throw new HttpError(404, 'Campanha não encontrada.');
+  const now = Date.now();
+  if (c.ends_at <= now) throw new HttpError(409, 'Este período já terminou e não pode ser alterado. Crie um novo agendamento.');
+  const onAir = c.starts_at <= now;
+  const branchId = onAir || req.body?.branchId === undefined ? c.branch_id : (req.body.branchId === null || req.body.branchId === '' ? null : id(req.body.branchId, 'filial'));
+  if (branchId !== null) assertBranch(req.user, branchId);
+  const tz = branchId !== null ? zones.forBranch(get('SELECT id, timezone FROM branches WHERE id = ?', branchId)) : companyTz;
+  const startsAt = onAir ? c.starts_at : parseLocal(req.body?.startsAt, tz);
+  const endsAt = parseLocal(req.body?.endsAt, tz);
+  if (startsAt === null || endsAt === null) throw bad('Datas inválidas (use dia e hora).');
+  if (endsAt <= startsAt) throw bad('O fim precisa ser depois do início.');
+  if (endsAt - startsAt > 366 * 86_400_000) throw bad('Campanha de no máximo 1 ano.');
+  if (endsAt <= now) throw bad('O fim precisa ser depois de agora. Para tirar do ar agora, use Encerrar.');
+  const clash = get('SELECT c.survey_id FROM schedules c WHERE c.id <> ? AND c.branch_id IS ? AND c.starts_at < ? AND c.ends_at > ? LIMIT 1', sid, branchId, endsAt, startsAt);
+  if (clash) throw new HttpError(409, `Já existe um agendamento nesse horário: "${displayTitle(clash.survey_id)}". Ajuste o período ou exclua o outro.`);
+  run('UPDATE schedules SET branch_id = ?, starts_at = ?, ends_at = ? WHERE id = ?', branchId, startsAt, endsAt, sid);
+  audit(req.user.id, 'schedule.update', { id: sid, surveyId: c.survey_id, branchId, startsAt, endsAt, previous: { branchId: c.branch_id, startsAt: c.starts_at, endsAt: c.ends_at } }, req.ip);
+  res.json({ ok: true });
+});
+
 // Período futuro: apaga. No ar: encerra agora e mantém a linha. Encerrado há menos de 30 dias: recusa (o tablet ainda pode
 // mandar respostas offline dele). Mais antigo: apaga. Os tablets trocam de pesquisa pelo roteiro de sempre.
 router.delete('/schedules/:id', requireAdmin, (req, res) => {

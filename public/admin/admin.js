@@ -694,6 +694,28 @@
 
   // Agendamentos: colocam uma pesquisa no ar em uma filial (ou em todas) por um período, e tudo volta sozinho à padrão.
   // Com "fixed", o quadro fica dentro da pesquisa e lista só os agendamentos dela (sem recarregar a página, para não perder edições).
+  // Valor de <input datetime-local> no fuso do agendamento, não no do navegador.
+  const toLocalInput = (t, tz) => new Intl.DateTimeFormat('sv-SE', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(t)).replace(' ', 'T');
+
+  // Edita um período. No ar, só o fim muda: os tablets já estão usando essa pesquisa.
+  function editPeriod(c, brs, after) {
+    const onAir = c.starts_at <= Date.now();
+    const br = h('select', { disabled: onAir }, h('option', { value: '' }, 'Todas as filiais'), brs.map((b) => h('option', { value: String(b.id) }, b.name)));
+    br.value = c.branch_id ? String(c.branch_id) : '';
+    const st = h('input', { type: 'datetime-local', disabled: onAir, value: toLocalInput(c.starts_at, c.tz) });
+    const en = h('input', { type: 'datetime-local', value: toLocalInput(c.ends_at, c.tz) });
+    modal('Editar agendamento', h('div', { class: 'form-grid' }, h('label', { class: 'f' }, 'Filial', br),
+      h('label', { class: 'f' }, 'Entra no ar', st), h('label', { class: 'f' }, 'Sai do ar', en),
+      h('p', { class: 'small muted' }, onAir ? 'Este período já está no ar: só o horário de saída pode mudar.' : 'O dia e a hora valem no fuso da filial escolhida (ou no da empresa, quando for "Todas as filiais").'),
+      h('p', { class: 'small muted' }, 'Os tablets com internet recebem a mudança em até 1 minuto. Um tablet sem internet segue o horário anterior até se conectar.')),
+    [{ label: 'Salvar', onClick: async (close) => {
+      try {
+        await api('/schedules/' + c.id, { method: 'PUT', body: { branchId: br.value ? Number(br.value) : null, startsAt: st.value, endsAt: en.value } });
+        close(); toast('Agendamento alterado.'); cache.branches = null; await after();
+      } catch (ex) { toast(ex.message, true); }
+    } }]);
+  }
+
   async function scheduleCard(svs, fixed = null) {
     const brs = await branches();
     const card = h('div', { class: 'card' });
@@ -721,7 +743,7 @@
         me.role === 'admin' && (!fixed || fixed.active) ? h('button', { class: 'btn secondary', onclick: add }, icon('calendar', 16), 'Agendar') : null),
         rows.length ? h('div', { class: 'table-wrap' }, h('table', {}, h('thead', {}, h('tr', {}, fixed ? null : h('th', {}, 'Pesquisa'), h('th', {}, 'Filial'), h('th', {}, 'Período'), h('th', {}, 'Situação'), h('th', {}))),
           h('tbody', {}, rows.map((c) => h('tr', {}, fixed ? null : h('td', {}, c.survey), h('td', {}, c.branch || 'Todas'), h('td', { class: 'small' }, `${fmtDateTz(c.starts_at, c.tz)} → ${fmtDateTz(c.ends_at, c.tz)}`),
-            h('td', {}, status(c)), h('td', {}, me.role === 'admin' ? h('button', { class: 'btn secondary sm', onclick: async () => {
+            h('td', {}, status(c)), h('td', {}, me.role === 'admin' && c.ends_at > now ? h('button', { class: 'btn secondary sm', onclick: () => editPeriod(c, brs, draw) }, 'Editar') : null, ' ', me.role === 'admin' ? h('button', { class: 'btn secondary sm', onclick: async () => {
               const onAir = c.starts_at <= Date.now() && c.ends_at > Date.now();
               if (!confirm(onAir ? 'Encerrar este período agora? A pesquisa sai do ar e os tablets voltam para a pesquisa seguinte.' : 'Excluir este agendamento?')) return;
               try { const r = await api('/schedules/' + c.id, { method: 'DELETE' }); toast(r.action === 'ended' ? 'Período encerrado agora.' : 'Agendamento excluído.'); cache.branches = null; await draw(); } catch (ex) { toast(ex.message, true); }
@@ -880,6 +902,33 @@
       questions.splice(i, n); render();
     }
 
+    // "Não coletar nada": tira as perguntas dessa resposta; o cliente segue direto para a próxima tela.
+    function removeGroup(items, label) {
+      const from = items[0];
+      const n = blockEnd(items[items.length - 1]) - from;
+      const inside = new Set(questions.slice(from, from + n).map((x) => x._k));
+      const outside = questions.findIndex((x, j) => (j < from || j >= from + n) && x.cond && inside.has(x.cond.k));
+      if (outside >= 0) return toast(`A pergunta ${outside + 1} depende de uma pergunta desta ramificação. Mude ou remova a pergunta ${outside + 1} antes.`, true);
+      if (!confirm(`${label}: não coletar nada? Remove ${n} pergunta(s) desta ramificação.`)) return;
+      questions.splice(from, n); render();
+    }
+    // Respostas sem nenhuma ramificação, para deixar claro que ali nada é coletado.
+    function uncovered(m, kids) {
+      const hit = (c, v) => (c.op === 'lte' ? v <= c.value : c.op === 'gte' ? v >= c.value : c.op === 'between' ? v >= c.value[0] && v <= c.value[1] : c.op === 'in' ? c.value.includes(v) : v === c.value);
+      const conds = kids.map((j) => questions[j].cond);
+      if (m.type === 'nps' || m.type === 'scale5') {
+        const [min, max] = m.type === 'nps' ? [0, 10] : [1, 5];
+        const out = [];
+        for (let v = min; v <= max; v++) {
+          if (conds.some((c) => hit(c, v))) continue;
+          const last = out[out.length - 1];
+          if (last && last[1] === v - 1) last[1] = v; else out.push([v, v]);
+        }
+        return out.map(([a, b]) => (a === b ? `Se ${a}` : `Se ${a} a ${b}`));
+      }
+      return condPresets(m).filter((p) => !conds.some((c) => condKey(c) === condKey(p) || (c.op === 'in' && c.value.includes(p.value)))).map((p) => condText(p, m));
+    }
+
     // Traduções de uma pergunta (aparece quando a pesquisa tem inglês/espanhol).
     function translations(q) {
       const ls = extraLangs();
@@ -974,9 +1023,11 @@
         const head = editing
           ? condPicker(m, g.cond, (c) => { g.items.forEach((j) => { questions[j].cond = { k: m._k, ...c }; }); open = null; render(); }, () => { open = null; render(); }, 'Aplicar')
           : h('div', { class: 'q-branch-head' }, icon('sliders', 16), h('b', {}, condText(g.cond, m)), h('span', { class: 'small muted' }, `na pergunta ${i + 1}`),
-            frozen ? null : h('button', { class: 'btn secondary sm', onclick: () => { open = { kind: 'edit', k: first }; render(); } }, 'Alterar'));
+            frozen ? null : h('button', { class: 'btn secondary sm', onclick: () => { open = { kind: 'edit', k: first }; render(); } }, 'Alterar'),
+            frozen ? null : h('button', { class: 'btn secondary sm', onclick: () => removeGroup(g.items, condText(g.cond, m)) }, 'Não coletar nada'));
         return h('div', { class: 'q-branch' }, head, g.items.map(node));
-      })));
+      }),
+      uncovered(m, kids).map((label) => h('div', { class: 'q-branch-head q-branch-none small' }, h('b', {}, label), h('span', { class: 'muted' }, 'não coleta nada: segue direto')))));
       return out;
     }
 
@@ -1106,10 +1157,11 @@
           h('p', { class: 'small muted' }, 'Cada momento é um horário em que a pesquisa entra no ar, com perguntas próprias. Fora dos momentos, os tablets usam as perguntas da pesquisa principal. Quem já está respondendo termina a pesquisa que começou.'),
           moments.length ? h('div', {}, moments.map((m) => h('div', { class: 'q-editor' },
             h('div', { class: 'row' }, h('b', {}, m.title), m.active ? null : h('span', { class: 'badge off' }, 'Inativo'), h('span', { class: 'small muted' }, `${m.responses} resposta(s)`)),
-            m.schedules.length ? h('ul', { class: 'small' }, m.schedules.map((c) => h('li', {}, `${c.branch || 'Todas as filiais'}: ${fmtDateTz(c.starts_at, c.tz)} → ${fmtDateTz(c.ends_at, c.tz)} (${stateOf(c)})`)))
+            m.schedules.length ? h('ul', { class: 'small' }, m.schedules.map((c) => h('li', {}, `${c.branch || 'Todas as filiais'}: ${fmtDateTz(c.starts_at, c.tz)} → ${fmtDateTz(c.ends_at, c.tz)} (${stateOf(c)}) `,
+              !ro && c.ends_at > Date.now() ? h('button', { class: 'btn secondary sm', onclick: async () => editPeriod(c, await branches(), refresh) }, 'Editar horário') : null)))
               : h('p', { class: 'small muted' }, 'Sem períodos. Abra o momento para agendar.'),
             h('div', { class: 'row' },
-              h('a', { class: 'btn secondary sm', href: '#/pesquisas/' + m.id }, ro ? 'Ver' : 'Abrir'),
+              h('a', { class: 'btn secondary sm', href: '#/pesquisas/' + m.id }, ro ? 'Ver' : 'Editar perguntas'),
               ro ? null : h('button', { class: 'btn secondary sm', onclick: async () => {
                 if (!leaveOk()) return;
                 try { const r = await api(`/surveys/${m.id}/duplicate`, { method: 'POST' }); dirty = false; toast('Momento duplicado, sem períodos.'); location.hash = '#/pesquisas/' + r.id; } catch (ex) { toast(ex.message, true); }
@@ -1730,6 +1782,7 @@
       case 'branch.update': return E('cadastros', '', `Alterou a filial "${d.name || brName(d.id)}"`, d.active === 0 || d.active === false ? 'Filial DESATIVADA.' : '');
       case 'branch.set_survey': return E('cadastros', '', `Definiu a pesquisa padrão da filial "${brName(d.branchId)}"`, d.surveyId ? `Pesquisa: ${sv(d.surveyId)}.` : 'Sem pesquisa padrão.');
       case 'branch.public_link': return E('cadastros', d.regenerated ? 'warn' : '', `${d.regenerated ? 'Gerou um novo QR Code/link' : d.enabled ? 'Ativou o QR Code/link' : 'Desativou o QR Code/link'} da filial "${brName(d.branchId)}"`, d.regenerated ? 'O QR Code antigo parou de funcionar.' : '');
+      case 'schedule.update': return E('cadastros', '', 'Alterou um agendamento', `Pesquisa: ${sv(d.surveyId)} · de ${d.startsAt ? new Date(d.startsAt).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : '…'} a ${d.endsAt ? new Date(d.endsAt).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : '…'}.`);
       case 'schedule.create': return E('cadastros', '', `Agendou uma pesquisa${d.branchId ? ' na filial "' + brName(d.branchId) + '"' : ' em todas as filiais'}`, `Pesquisa: ${sv(d.surveyId)} · de ${d.startsAt ? new Date(d.startsAt).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : '…'} a ${d.endsAt ? new Date(d.endsAt).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : '…'}.`);
       case 'schedule.delete': return E('cadastros', '', 'Excluiu um agendamento de pesquisa');
       case 'survey.create': return E('cadastros', '', `Criou a pesquisa "${d.title || sv(d.id)}"`);

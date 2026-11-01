@@ -109,6 +109,41 @@ test('não dá para desativar pesquisa com agendamento pendente; depois de exclu
   await admin.req('PUT', `/api/admin/surveys/${a}`, { body: { ...body, active: true } });
 });
 
+test('editar agendamento: futuro muda tudo, no ar só o fim, encerrado não muda; conflito e escopo continuam valendo', async () => {
+  const edit = (sid, body, c = admin) => c.req('PUT', `/api/admin/schedules/${sid}`, { body });
+  const row = (sid) => get('SELECT * FROM schedules WHERE id = ?', sid);
+  const t0 = Date.now() + 60 * MIN;
+  const fut = (await agenda({ surveyId: a, branchId: branch, startsAt: local(t0), endsAt: local(t0 + 30 * MIN) })).json.id;
+  const outro = (await agenda({ surveyId: b, branchId: branch, startsAt: local(t0 + 60 * MIN), endsAt: local(t0 + 90 * MIN) })).json.id;
+
+  assert.equal((await edit(fut, { branchId: other, startsAt: local(t0 + 10 * MIN), endsAt: local(t0 + 20 * MIN) })).status, 200);
+  assert.equal(row(fut).branch_id, other);
+  assert.equal(row(fut).starts_at, parseLocal(local(t0 + 10 * MIN), TZ));
+  assert.deepEqual((await config(otherToken)).json.plan.changes.map((c) => c.surveyId), [a, padrao], 'o roteiro do tablet segue a edição');
+
+  await edit(fut, { branchId: branch, startsAt: local(t0), endsAt: local(t0 + 30 * MIN) });
+  const clash = await edit(fut, { branchId: branch, startsAt: local(t0 + 70 * MIN), endsAt: local(t0 + 80 * MIN) });
+  assert.equal(clash.status, 409);
+  assert.match(clash.json.error, /Pesquisa B/);
+  assert.equal(row(fut).starts_at, parseLocal(local(t0), TZ), 'recusado não altera');
+  assert.equal((await edit(outro, { branchId: branch, startsAt: local(t0 + 65 * MIN), endsAt: local(t0 + 90 * MIN) })).status, 200, 'o próprio período não conta como conflito');
+  assert.equal((await edit(fut, { branchId: branch, startsAt: local(t0 + 40 * MIN), endsAt: local(t0 + 30 * MIN) })).status, 400);
+  assert.equal((await edit(fut, { branchId: branch, startsAt: local(t0), endsAt: local(t0 + 30 * MIN) }, gestor)).status, 403);
+  assert.equal((await edit(999999, { endsAt: local(t0) })).status, 404);
+
+  const inicio = Date.now() - 5 * MIN;
+  const noAr = Number(run('INSERT INTO schedules (survey_id, branch_id, starts_at, ends_at, created_at) VALUES (?,?,?,?,?)', a, other, inicio, Date.now() + 10 * MIN, Date.now()).lastInsertRowid);
+  assert.equal((await edit(noAr, { branchId: branch, startsAt: local(Date.now() + 5 * MIN), endsAt: local(Date.now() + 40 * MIN) })).status, 200);
+  assert.equal(row(noAr).starts_at, inicio, 'no ar: início fica');
+  assert.equal(row(noAr).branch_id, other, 'no ar: filial fica');
+  assert.equal(row(noAr).ends_at, parseLocal(local(Date.now() + 40 * MIN), TZ));
+  assert.equal((await edit(noAr, { endsAt: local(Date.now() - 2 * MIN) })).status, 400, 'fim no passado: use Encerrar');
+
+  const fim = Date.now() - 3 * MIN;
+  const velho = Number(run('INSERT INTO schedules (survey_id, branch_id, starts_at, ends_at, created_at) VALUES (?,?,?,?,?)', a, branch, fim - 10 * MIN, fim, Date.now()).lastInsertRowid);
+  assert.equal((await edit(velho, { branchId: branch, startsAt: local(t0), endsAt: local(t0 + 5 * MIN) })).status, 409);
+});
+
 test('o painel mostra os agendamentos da pesquisa, o que está no ar e a próxima troca, respeitando o escopo', async () => {
   const t0 = Date.now() + 30 * MIN;
   await agenda({ surveyId: a, branchId: branch, startsAt: local(Date.now() - MIN), endsAt: local(t0) });
