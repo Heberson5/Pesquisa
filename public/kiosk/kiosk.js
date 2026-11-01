@@ -303,6 +303,7 @@
     switch (cond.op) {
       case 'lte': return v <= cond.value;
       case 'gte': return v >= cond.value;
+      case 'between': return Array.isArray(cond.value) && v >= cond.value[0] && v <= cond.value[1];
       case 'eq': return v === cond.value;
       case 'in': return Array.isArray(cond.value) && cond.value.includes(v);
       case 'has': return Array.isArray(v) && v.includes(cond.value);

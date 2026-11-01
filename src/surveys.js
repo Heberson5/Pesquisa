@@ -40,13 +40,14 @@ function loadSurvey(surveyId) {
 
 // ---------------------------------------------------------------- perguntas condicionais
 // show_if = { q: id da pergunta anterior, op, value }. Ex.: mostrar "O que podemos melhorar?" só se a nota NPS <= 6.
-const OPS_BY_TYPE = { nps: ['lte', 'gte', 'eq'], scale5: ['lte', 'gte', 'eq'], yesno: ['eq'], single: ['eq', 'in'], multi: ['has'] };
+const OPS_BY_TYPE = { nps: ['lte', 'gte', 'eq', 'between'], scale5: ['lte', 'gte', 'eq', 'between'], yesno: ['eq'], single: ['eq', 'in'], multi: ['has'] };
 
 function evalCondition(cond, value) {
   if (value === undefined || value === null) return false;
   switch (cond.op) {
     case 'lte': return value <= cond.value;
     case 'gte': return value >= cond.value;
+    case 'between': return Array.isArray(cond.value) && value >= cond.value[0] && value <= cond.value[1];
     case 'eq': return value === cond.value;
     case 'in': return Array.isArray(cond.value) && cond.value.includes(value);
     case 'has': return Array.isArray(value) && value.includes(cond.value);
@@ -71,7 +72,11 @@ function normalizeCondition(input, index, previous) {
   let value = input.value;
   if (target.type === 'nps' || target.type === 'scale5') {
     const [min, max] = target.type === 'nps' ? [0, 10] : [1, 5];
-    if (!Number.isInteger(value) || value < min || value > max) throw bad(`Valor da condição da pergunta ${index + 1} fora da escala.`);
+    const inScale = (v) => Number.isInteger(v) && v >= min && v <= max;
+    if (input.op === 'between') {
+      if (!Array.isArray(value) || value.length !== 2 || !value.every(inScale) || value[0] > value[1]) throw bad(`Faixa da condição da pergunta ${index + 1} inválida.`);
+      value = [value[0], value[1]];
+    } else if (!inScale(value)) throw bad(`Valor da condição da pergunta ${index + 1} fora da escala.`);
   } else if (target.type === 'yesno') {
     if (value !== 'sim' && value !== 'nao') throw bad(`Valor da condição da pergunta ${index + 1} inválido.`);
   } else if (input.op === 'in') {
