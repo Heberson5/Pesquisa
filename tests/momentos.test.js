@@ -198,6 +198,33 @@ test('a lista traz só principais, com momentos e respostas somadas; all=1 traz 
   } finally { run('UPDATE surveys SET archived_at = NULL WHERE id = ?', padrao); }
 });
 
+test('momento de principal inativa não é agendado e a principal inativa não ganha momentos', async () => {
+  const t0 = Date.now() + 30 * MIN;
+  run('UPDATE surveys SET active = 0 WHERE id = ?', main);
+  try {
+    const r = await agenda(m1, t0, t0 + 10 * MIN);
+    assert.equal(r.status, 400);
+    assert.match(r.json.error, /inativa/);
+    assert.equal(get('SELECT COUNT(*) AS n FROM schedules WHERE survey_id = ?', m1).n, 0);
+    assert.equal((await mkMoment(main, 'Tarde demais')).status, 400);
+  } finally { run('UPDATE surveys SET active = 1 WHERE id = ?', main); }
+  assert.equal((await agenda(m1, t0, t0 + 10 * MIN)).status, 201);
+});
+
+test('gestor vê no detalhe só os períodos das filiais dele e os de todas as filiais', async () => {
+  const outra = (await admin.req('POST', '/api/admin/branches', { body: { code: 'MO2', name: 'Outra', timezone: TZ } })).json.id;
+  makeUser('ges@m.local', 'gestor', 'SenhaForte123', [outra]);
+  const ges = new Client(); await ges.login('ges@m.local', 'SenhaForte123');
+  const t0 = Date.now() + 30 * MIN;
+  const na = await agenda(m2, t0, t0 + 10 * MIN, branch);
+  const nb = await agenda(m2, t0 + 20 * MIN, t0 + 30 * MIN, outra);
+  const todas = await agenda(m2, t0 + 40 * MIN, t0 + 50 * MIN, null);
+  const ids = (j) => j.moments.find((x) => x.id === m2).schedules.map((c) => c.id).sort();
+  const vistoGestor = ids((await ges.req('GET', `/api/admin/surveys/${main}`)).json);
+  assert.deepEqual(vistoGestor, [nb.json.id, todas.json.id].sort(), 'sem a filial fora do escopo');
+  assert.deepEqual(ids((await admin.req('GET', `/api/admin/surveys/${main}`)).json), [na.json.id, nb.json.id, todas.json.id].sort());
+});
+
 test('o painel de filiais mostra "Principal · Momento" na pesquisa atual e na próxima', async () => {
   const t0 = Date.now();
   sched(m2, t0 - MIN, t0 + 10 * MIN);

@@ -225,6 +225,8 @@ router.post('/schedules', requireAdmin, (req, res) => {
   const surveyId = id(req.body?.surveyId, 'pesquisa');
   const target = get('SELECT parent_id FROM surveys WHERE id = ? AND active = 1', surveyId);
   if (!target) throw bad('Pesquisa inexistente ou inativa.');
+  // Momento de pesquisa principal inativa nunca iria ao ar: recusa em vez de criar um período morto.
+  if (target.parent_id !== null && !get('SELECT 1 FROM surveys WHERE id = ? AND active = 1', target.parent_id)) throw bad('A pesquisa principal deste momento está inativa. Ative-a antes de agendar.');
   // Só momentos são agendados. Pesquisa antiga sem parent_id que já teve período (ex.: Finados) segue aceita.
   if (target.parent_id === null && !get('SELECT 1 FROM schedules WHERE survey_id = ? LIMIT 1', surveyId)) throw bad('Agende um momento da pesquisa, não a pesquisa principal.');
   const branchId = req.body?.branchId === null || req.body?.branchId === undefined || req.body?.branchId === '' ? null : id(req.body.branchId, 'filial');
@@ -278,11 +280,14 @@ router.get('/surveys/:id', (req, res) => {
   s.has_responses = !!get('SELECT 1 FROM responses WHERE survey_id = ? LIMIT 1', s.id);
   s.thanks_media = s.thanks_media_id ? get('SELECT id, mime, original_name FROM media WHERE id = ?', s.thanks_media_id) : null;
   s.parent = s.parent_id ? get('SELECT id, title FROM surveys WHERE id = ?', s.parent_id) : null;
+  // Gestor só vê períodos das filiais dele (e os de "todas as filiais"), como em GET /schedules.
+  const sc = scope(req.user);
+  const visible = sc ? `AND (c.branch_id IS NULL OR c.branch_id IN (${placeholders(sc)}))` : '';
   s.moments = all('SELECT id, title, active FROM surveys WHERE parent_id = ? ORDER BY id', s.id).map((m) => ({
     ...m,
     responses: get('SELECT COUNT(*) AS n FROM responses WHERE survey_id = ?', m.id).n,
     schedules: all(`SELECT c.id, c.branch_id, b.name AS branch, c.starts_at, c.ends_at FROM schedules c LEFT JOIN branches b ON b.id = c.branch_id
-      WHERE c.survey_id = ? ORDER BY c.starts_at`, m.id).map((c) => ({ ...c, tz: c.branch_id ? zones.forBranch(get('SELECT id, timezone FROM branches WHERE id = ?', c.branch_id)) : companyTz })),
+      WHERE c.survey_id = ? ${visible} ORDER BY c.starts_at`, m.id, ...(sc || [])).map((c) => ({ ...c, tz: c.branch_id ? zones.forBranch(get('SELECT id, timezone FROM branches WHERE id = ?', c.branch_id)) : companyTz })),
   }));
   res.json(s);
 });
@@ -363,6 +368,7 @@ router.post('/surveys/:id/moments', requireAdmin, (req, res) => {
   const parent = loadSurvey(id(req.params.id));
   if (!parent) throw new HttpError(404, 'Pesquisa não encontrada.');
   if (parent.parent_id) throw bad('Um momento não pode ter momentos. Crie o momento na pesquisa principal.');
+  if (!parent.active) throw bad('A pesquisa principal está inativa. Ative-a antes de criar momentos.');
   const s = surveyInput({
     title: req.body?.title, questions: req.body?.questions, active: true,
     welcome_title: parent.welcome_title, welcome_text: parent.welcome_text, thanks_title: parent.thanks_title, thanks_text: parent.thanks_text,
