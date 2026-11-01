@@ -290,6 +290,7 @@
   }
 
   async function route() {
+    guard = null; // cada tela que precisa do aviso registra o seu de novo
     document.querySelectorAll('.modal-bg').forEach((m) => m.remove()); // janela aberta não sobrevive à troca de página
     const reset = /^#\/redefinir\/([A-Za-z0-9_-]{20,100})$/.exec(location.hash);
     if (reset) return showReset(reset[1]);
@@ -308,7 +309,16 @@
     layout(page[0], container);
     try { container.replaceChildren(await page[2](param)); } catch (e) { if (e.message !== '401') container.replaceChildren(h('div', { class: 'card bad' }, e.message)); }
   }
-  window.addEventListener('hashchange', route);
+  // Aviso de alteração não salva: o editor registra em `guard` uma função que diz se há edição pendente.
+  let guard = null;
+  let lastHash = location.hash;
+  let reverting = false;
+  window.addEventListener('hashchange', () => {
+    if (reverting) { reverting = false; return; }
+    if (guard && guard() && !confirm('Há alterações não salvas nesta tela. Sair sem salvar?')) { reverting = true; location.hash = lastHash; return; }
+    lastHash = location.hash; route();
+  });
+  window.addEventListener('beforeunload', (e) => { if (guard && guard()) { e.preventDefault(); e.returnValue = ''; } });
 
   // No celular as linhas das tabelas viram cartões; cada célula ganha o nome da coluna (CSS usa data-label).
   let labelPending = false;
@@ -643,27 +653,44 @@
   }
 
   // ------------------------------------------------------------ pesquisas
+  // Exclui (sem respostas) ou arquiva (com respostas) uma pesquisa principal ou um momento. O servidor recusa com 409 e explica o motivo.
+  async function retireSurvey(sv, after) {
+    const archive = sv.responses > 0;
+    const extra = sv.moments ? ' e os momentos dela' : '';
+    const ask = archive
+      ? `Arquivar "${sv.title}"${extra}? Ela sai da lista e deixa de ser usada, mas as respostas continuam nos relatórios.`
+      : `Excluir "${sv.title}"${extra} definitivamente? Isso não pode ser desfeito.`;
+    if (!confirm(ask)) return;
+    try {
+      await api(`/surveys/${sv.id}` + (archive ? '/archive' : ''), { method: archive ? 'POST' : 'DELETE' });
+      cache.surveys = null; toast(archive ? 'Arquivada.' : 'Excluída.');
+      await after();
+    } catch (ex) { if (ex.message !== '401') toast(ex.message, true); }
+  }
+
   async function pageSurveys(param) {
     if (param) return surveyEditor(param === 'nova' ? null : Number(param));
     const list = await surveys(true);
+    const admin = me.role === 'admin';
     return h('div', {},
-      pageHead('Pesquisas', 'Perguntas exibidas nos tablets e marcação do NPS',
-        me.role === 'admin' ? h('a', { class: 'btn', href: '#/pesquisas/nova' }, icon('plus', 18), 'Nova pesquisa') : null),
+      pageHead('Pesquisas', 'Cada pesquisa principal reúne as perguntas e os momentos agendados dela',
+        admin ? h('a', { class: 'btn', href: '#/pesquisas/nova' }, icon('plus', 18), 'Nova pesquisa') : null),
       h('div', { class: 'card table-wrap' }, h('table', {},
-        h('thead', {}, h('tr', {}, h('th', {}, 'Título'), h('th', {}, 'Perguntas'), h('th', {}, 'NPS'), h('th', {}, 'Respostas'), h('th', {}, 'Status'), h('th', {}, 'Agendamento'), h('th', {}))),
+        h('thead', {}, h('tr', {}, h('th', {}, 'Título'), h('th', {}, 'Perguntas'), h('th', {}, 'Momentos'), h('th', {}, 'Respostas'), h('th', {}, 'Status'), h('th', {}, 'Próxima troca'), h('th', {}))),
         h('tbody', {}, list.length ? list.map((s) => h('tr', {},
           h('td', {}, h('b', {}, s.title), h('div', { class: 'small muted' }, 'Atualizada ' + fmtDate(s.updated_at))),
-          h('td', {}, s.questions), h('td', {}, s.nps_questions ? h('span', { class: 'badge nps' }, `${s.nps_questions} marcada(s)`) : h('span', { class: 'badge warn' }, 'nenhuma')),
-          h('td', {}, s.responses), h('td', {}, h('span', { class: 'badge ' + (s.active ? 'ok' : 'off') }, s.active ? 'Ativa' : 'Inativa')),
+          h('td', {}, s.questions), h('td', {}, s.moments), h('td', {}, s.responses),
+          h('td', {}, h('span', { class: 'badge ' + (s.active ? 'ok' : 'off') }, s.active ? 'Ativa' : 'Inativa')),
           h('td', { class: 'small' }, s.on_air_until ? h('span', { class: 'badge ok' }, `No ar até ${fmtDate(s.on_air_until)}`) : s.next_start ? h('span', { class: 'badge warn' }, `Entra em ${fmtDate(s.next_start)}`) : h('span', { class: 'muted' }, '—')),
           h('td', {}, h('div', { class: 'row' },
-            h('a', { class: 'btn secondary sm', href: '#/pesquisas/' + s.id }, me.role === 'admin' ? 'Editar' : 'Ver'),
-            me.role === 'admin' ? h('button', { class: 'btn secondary sm', onclick: async () => {
-              const r = await api(`/surveys/${s.id}/duplicate`, { method: 'POST' }); toast('Pesquisa duplicada.'); location.hash = '#/pesquisas/' + r.id;
-            } }, 'Duplicar') : null))))
-          : h('tr', {}, h('td', { colspan: '7', class: 'empty' }, 'Nenhuma pesquisa criada.'))))),
-      await scheduleCard(list));
+            h('a', { class: 'btn secondary sm', href: '#/pesquisas/' + s.id }, admin ? 'Editar' : 'Ver'),
+            admin ? h('button', { class: 'btn secondary sm', onclick: async () => {
+              try { const r = await api(`/surveys/${s.id}/duplicate`, { method: 'POST' }); toast('Pesquisa duplicada.'); location.hash = '#/pesquisas/' + r.id; } catch (ex) { toast(ex.message, true); }
+            } }, 'Duplicar') : null,
+            admin ? h('button', { class: 'btn danger sm', onclick: () => retireSurvey(s, route) }, s.responses > 0 ? 'Arquivar' : 'Excluir') : null))))
+          : h('tr', {}, h('td', { colspan: '7', class: 'empty' }, 'Nenhuma pesquisa criada.'))))));
   }
+
 
   // Agendamentos: colocam uma pesquisa no ar em uma filial (ou em todas) por um período, e tudo volta sozinho à padrão.
   // Com "fixed", o quadro fica dentro da pesquisa e lista só os agendamentos dela (sem recarregar a página, para não perder edições).
@@ -967,14 +994,21 @@
 
   async function surveyEditor(sid) {
     const s = sid ? await api('/surveys/' + sid) : structuredClone(NEW_SURVEY);
-    const ro = me.role !== 'admin';
+    const isMoment = !!s.parent;
+    const ro = me.role !== 'admin' || !!s.archived_at;
     const locked = s.has_responses;
+    const totalResponses = s.has_responses || (s.moments || []).some((m) => m.responses > 0);
+    const noun = isMoment ? 'momento' : 'pesquisa';
     const f = {};
     const field = (key, label, type = 'text', extra = {}) => {
       const el = type === 'textarea' ? h('textarea', { rows: '2', ...extra }) : h('input', { type, ...extra });
       el.value = s[key] ?? ''; el.disabled = ro; f[key] = el;
       return h('label', { class: 'f' }, label, el);
     };
+    // Alteração não salva: qualquer edição marca; salvar zera. Somente leitura não tem aviso.
+    let dirty = false;
+    const markDirty = () => { dirty = true; };
+    const leaveOk = () => !dirty || confirm('Há alterações não salvas nesta tela. Sair sem salvar?');
     // Chave interna estável (_k): condições continuam apontando para a pergunta certa mesmo após mover blocos.
     const questions = prepareQuestions(s.questions);
     const langs = new Set(s.languages || ['pt']);
@@ -984,6 +1018,7 @@
 
     const tree = questionTree(questions, { ro, locked, extraLangs });
     const renderQuestions = tree.render;
+    tree.el.addEventListener('click', (e) => { if (e.target.closest('button')) markDirty(); }); // mover, remover e adicionar não disparam "input"
 
     // mídia de agradecimento
     let mediaId = s.thanks_media_id;
@@ -994,7 +1029,7 @@
       mediaPreview.append(m.mime.startsWith('video/')
         ? h('video', { class: 'preview-media', src: '/media/' + m.id, muted: true, autoplay: true, loop: true, playsinline: true })
         : h('img', { class: 'preview-media', src: '/media/' + m.id, alt: '' }));
-      if (!ro) mediaPreview.append(h('button', { class: 'btn secondary sm', onclick: () => { mediaId = null; showMedia(null); } }, 'Remover mídia'));
+      if (!ro) mediaPreview.append(h('button', { class: 'btn secondary sm', onclick: () => { mediaId = null; showMedia(null); markDirty(); } }, 'Remover mídia'));
     };
     showMedia(s.thanks_media);
     const file = h('input', { type: 'file', accept: 'image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm', disabled: ro, onchange: async (e) => {
@@ -1037,38 +1072,106 @@
       };
       try {
         if (sid) await api('/surveys/' + sid, { method: 'PUT', body });
-        else { const r = await api('/surveys', { method: 'POST', body }); location.hash = '#/pesquisas/' + r.id; }
-        toast('Pesquisa salva.'); cache.surveys = null;
+        else { const r = await api('/surveys', { method: 'POST', body }); dirty = false; location.hash = '#/pesquisas/' + r.id; }
+        dirty = false; toast(isMoment ? 'Momento salvo.' : 'Pesquisa salva.'); cache.surveys = null;
       } catch (ex) {
         if (ex.code === 'HISTORY_CHANGE') { if (confirm(ex.message)) save(true); return; }
         toast(ex.message, true);
       }
     };
 
-    return h('div', {},
-      pageHead(sid ? 'Editar pesquisa' : 'Nova pesquisa', s.title || null,
-        h('a', { class: 'btn secondary', href: '#/pesquisas' }, 'Voltar'), ro ? null : h('button', { class: 'btn', onclick: () => save() }, 'Salvar pesquisa')),
-      locked ? h('div', { class: 'card small' }, '🔒 Esta pesquisa já possui respostas: mudar o texto de uma pergunta ou a marcação de NPS também afeta as respostas já recebidas e pede confirmação. Não é possível adicionar/remover perguntas ou mudar tipos. Para perguntas novas ou com outro sentido, use "Duplicar".') : null,
-      h('div', { class: 'card' }, h('h2', {}, 'Dados gerais'), h('div', { class: 'form-grid' },
-        field('title', 'Título interno', 'text', { maxlength: '120' }),
-        h('label', { class: 'chk' }, activeChk, 'Pesquisa ativa'))),
-      sid ? await scheduleCard([], { id: sid, title: s.title, active: !!s.active }) : h('div', { class: 'card small muted' }, 'Depois de salvar a pesquisa, você poderá agendar aqui os horários em que ela entra no ar.'),
-      h('div', { class: 'card' }, h('h2', {}, 'Contato e idiomas'),
-        h('div', { class: 'form-grid' },
-          h('label', { class: 'f' }, 'Perguntar ao cliente se quer ser contatado', contactSel),
-          h('div', {}, h('div', { class: 'small muted' }, 'Idiomas oferecidos no tablet (além do português)'), langBox)),
-        h('p', { class: 'small muted' }, 'O contato só é gravado com autorização expressa do cliente (LGPD) e fica criptografado. As traduções vazias usam o texto em português.'),
-        surveyTr),
-      h('div', { class: 'card' }, h('h2', {}, 'Tela inicial do tablet'), h('div', { class: 'form-grid' },
-        field('welcome_title', 'Título', 'text', { maxlength: '120' }), field('welcome_text', 'Subtítulo', 'textarea', { maxlength: '300' }),
-        field('idle_seconds', 'Voltar ao início após inatividade (segundos)', 'number', { min: '15', max: '600' }))),
-      h('div', { class: 'card' }, h('h2', {}, 'Perguntas'),
-        h('p', { class: 'small muted' }, 'Use "+ Se a resposta for…" para criar uma pergunta que só aparece conforme a resposta. Em "Mais opções" fica o texto de apoio, a aparência e a marcação "Entra na análise de NPS" das perguntas de 0 a 10. A aparência (números, carinhas ou ícones) não muda o cálculo: o tablet sempre grava a nota de 0 a 10.'),
-        tree.el),
-      h('div', { class: 'card' }, h('h2', {}, 'Tela de agradecimento'), h('div', { class: 'form-grid' },
-        field('thanks_title', 'Título', 'text', { maxlength: '120' }), field('thanks_text', 'Mensagem', 'textarea', { maxlength: '300' }),
-        field('thanks_seconds', 'Tempo na tela (segundos)', 'number', { min: '3', max: '60' }),
-        h('label', { class: 'f' }, 'Imagem ou vídeo curto (até 25 MB)', file, mediaPreview))));
+    // Momentos (só na principal): lista com períodos, abrir, duplicar, excluir ou arquivar, e formulário de novo momento.
+    const momentsCard = () => {
+      const box = h('div', { class: 'card' });
+      const stateOf = (c) => (c.ends_at <= Date.now() ? 'encerrado' : c.starts_at <= Date.now() ? 'no ar' : 'agendado');
+      const draw = (moments) => {
+        const nm = h('input', { maxlength: '120', placeholder: 'Ex.: Antes do almoço', 'aria-label': 'Nome do momento' });
+        const qt = h('input', { maxlength: '300', placeholder: 'Texto da primeira pergunta', 'aria-label': 'Texto da primeira pergunta' });
+        const qty = h('select', { 'aria-label': 'Tipo da primeira pergunta' }, Object.entries(questionTypes).map(([k, v]) => h('option', { value: k }, v)));
+        qty.value = 'nps';
+        const create = async () => {
+          if (!nm.value.trim() || !qt.value.trim()) return toast('Informe o nome do momento e o texto da primeira pergunta.', true);
+          if (!leaveOk()) return;
+          const type = qty.value;
+          try {
+            const r = await api(`/surveys/${sid}/moments`, { method: 'POST', body: { title: nm.value.trim(), questions: questionsPayload([{
+              text: qt.value.trim(), type, required: true, is_nps: type === 'nps', options: ['single', 'multi'].includes(type) ? ['Opção 1', 'Opção 2'] : [], i18n: {} }], cleanI18n) } });
+            dirty = false; cache.surveys = null; toast('Momento criado.'); location.hash = '#/pesquisas/' + r.id;
+          } catch (ex) { toast(ex.message, true); }
+        };
+        const refresh = async () => draw((await api('/surveys/' + sid)).moments);
+        box.replaceChildren(
+          h('h2', {}, 'Agendamentos'),
+          h('p', { class: 'small muted' }, 'Cada momento é um horário em que a pesquisa entra no ar, com perguntas próprias. Fora dos momentos, os tablets usam as perguntas da pesquisa principal. Quem já está respondendo termina a pesquisa que começou.'),
+          moments.length ? h('div', {}, moments.map((m) => h('div', { class: 'q-editor' },
+            h('div', { class: 'row' }, h('b', {}, m.title), m.active ? null : h('span', { class: 'badge off' }, 'Inativo'), h('span', { class: 'small muted' }, `${m.responses} resposta(s)`)),
+            m.schedules.length ? h('ul', { class: 'small' }, m.schedules.map((c) => h('li', {}, `${c.branch || 'Todas as filiais'}: ${fmtDateTz(c.starts_at, c.tz)} → ${fmtDateTz(c.ends_at, c.tz)} (${stateOf(c)})`)))
+              : h('p', { class: 'small muted' }, 'Sem períodos. Abra o momento para agendar.'),
+            h('div', { class: 'row' },
+              h('a', { class: 'btn secondary sm', href: '#/pesquisas/' + m.id }, ro ? 'Ver' : 'Abrir'),
+              ro ? null : h('button', { class: 'btn secondary sm', onclick: async () => {
+                if (!leaveOk()) return;
+                try { const r = await api(`/surveys/${m.id}/duplicate`, { method: 'POST' }); dirty = false; toast('Momento duplicado, sem períodos.'); location.hash = '#/pesquisas/' + r.id; } catch (ex) { toast(ex.message, true); }
+              } }, 'Duplicar'),
+              ro ? null : h('button', { class: 'btn danger sm', onclick: () => retireSurvey({ id: m.id, title: m.title, responses: m.responses }, refresh) }, m.responses > 0 ? 'Arquivar' : 'Excluir')))))
+            : h('p', { class: 'muted small' }, 'Nenhum momento criado.'),
+          ro ? null : !s.active ? h('p', { class: 'small muted' }, 'Ative a pesquisa e salve para poder criar momentos.')
+            : h('form', { class: 'q-new-moment', onsubmit: (e) => { e.preventDefault(); create(); }, oninput: (e) => e.stopPropagation(), onchange: (e) => e.stopPropagation() },
+              h('h3', {}, 'Novo momento'),
+              h('div', { class: 'form-grid' }, h('label', { class: 'f' }, 'Nome', nm), h('label', { class: 'f' }, 'Primeira pergunta', qt), h('label', { class: 'f' }, 'Tipo', qty)),
+              h('p', { class: 'small muted' }, 'O momento copia da pesquisa principal a tela inicial, o agradecimento, os idiomas e o modo de contato. Depois de criado, ele é independente. Salve a pesquisa antes: o momento copia o que está salvo.'),
+              h('button', { class: 'btn secondary', type: 'submit' }, '+ Criar momento')));
+      };
+      draw(s.moments || []);
+      return box;
+    };
+
+    // Pesquisas antigas podem ter períodos na própria principal; continuam aparecendo (e funcionando) até serem removidos.
+    const ownSchedules = sid && !isMoment && (await api('/schedules?surveyId=' + sid)).length > 0;
+
+    const generalCard = h('div', { class: 'card' }, h('h2', {}, 'Dados gerais'), h('div', { class: 'form-grid' },
+      field('title', isMoment ? 'Nome do momento' : 'Título interno', 'text', { maxlength: '120' }),
+      h('label', { class: 'chk' }, activeChk, isMoment ? 'Momento ativo' : 'Pesquisa ativa')));
+    const questionsCard = h('div', { class: 'card' }, h('h2', {}, 'Perguntas'),
+      h('p', { class: 'small muted' }, 'Use "+ Se a resposta for…" para criar uma pergunta que só aparece conforme a resposta. Em "Mais opções" fica o texto de apoio, a aparência e a marcação "Entra na análise de NPS" das perguntas de 0 a 10. A aparência (números, carinhas ou ícones) não muda o cálculo: o tablet sempre grava a nota de 0 a 10.'),
+      tree.el);
+    const contactBlock = h('div', {}, h('h3', {}, 'Contato e idiomas'),
+      h('div', { class: 'form-grid' },
+        h('label', { class: 'f' }, 'Perguntar ao cliente se quer ser contatado', contactSel),
+        h('div', {}, h('div', { class: 'small muted' }, 'Idiomas oferecidos no tablet (além do português)'), langBox)),
+      h('p', { class: 'small muted' }, 'O contato só é gravado com autorização expressa do cliente (LGPD) e fica criptografado. As traduções vazias usam o texto em português.'),
+      surveyTr);
+    const welcomeBlock = h('div', {}, h('h3', {}, 'Tela inicial do tablet'), h('div', { class: 'form-grid' },
+      field('welcome_title', 'Título', 'text', { maxlength: '120' }), field('welcome_text', 'Subtítulo', 'textarea', { maxlength: '300' }),
+      field('idle_seconds', 'Voltar ao início após inatividade (segundos)', 'number', { min: '15', max: '600' })));
+    const thanksBlock = h('div', {}, h('h3', {}, 'Tela de agradecimento'), h('div', { class: 'form-grid' },
+      field('thanks_title', 'Título', 'text', { maxlength: '120' }), field('thanks_text', 'Mensagem', 'textarea', { maxlength: '300' }),
+      field('thanks_seconds', 'Tempo na tela (segundos)', 'number', { min: '3', max: '60' }),
+      h('label', { class: 'f' }, 'Imagem ou vídeo curto (até 25 MB)', file, mediaPreview)));
+    const fold = (title, ...content) => h('details', { class: 'card' }, h('summary', {}, h('b', {}, title)), ...content);
+
+    const retire = !sid || ro || isMoment ? null
+      : h('button', { class: 'btn danger', onclick: () => retireSurvey({ id: sid, title: s.title, responses: totalResponses ? 1 : 0, moments: (s.moments || []).length }, () => { dirty = false; location.hash = '#/pesquisas'; }) }, totalResponses ? 'Arquivar' : 'Excluir');
+
+    const page = h('div', {},
+      pageHead(isMoment ? 'Editar momento' : sid ? 'Editar pesquisa' : 'Nova pesquisa', isMoment ? `${s.parent.title} · ${s.title}` : s.title || null,
+        isMoment ? h('a', { class: 'btn secondary', href: '#/pesquisas/' + s.parent.id }, '‹ Voltar à pesquisa principal') : h('a', { class: 'btn secondary', href: '#/pesquisas' }, 'Voltar'),
+        retire, ro ? null : h('button', { class: 'btn', onclick: () => save() }, 'Salvar ' + noun)),
+      s.archived_at ? h('div', { class: 'card small' }, 'Esta pesquisa está arquivada: fica fora da lista e não pode ser editada. As respostas continuam nos relatórios.') : null,
+      locked ? h('div', { class: 'card small' }, `🔒 Este ${noun} já possui respostas: mudar o texto de uma pergunta ou a marcação de NPS também afeta as respostas já recebidas e pede confirmação. Não é possível adicionar/remover perguntas nem mudar tipos e ramificações. Para perguntas novas ou com outro sentido, use "Duplicar".`) : null,
+      generalCard,
+      isMoment ? await scheduleCard([], { id: sid, title: s.title, active: !!s.active }) : null,
+      questionsCard,
+      ownSchedules ? await scheduleCard([], { id: sid, title: s.title, active: !!s.active }) : null,
+      !isMoment ? (sid ? momentsCard() : h('div', { class: 'card small muted' }, 'Depois de salvar a pesquisa, você poderá criar aqui os momentos em que ela entra no ar, cada um com perguntas próprias.')) : null,
+      isMoment ? fold('Textos da tela e contato', contactBlock, welcomeBlock, thanksBlock)
+        : [fold('Contato e idiomas', contactBlock), fold('Tela inicial do tablet', welcomeBlock), fold('Tela de agradecimento', thanksBlock)]);
+    if (!ro) {
+      page.addEventListener('input', markDirty); page.addEventListener('change', markDirty);
+      mediaPreview.addEventListener('click', (e) => { if (e.target.closest('button')) markDirty(); });
+      guard = () => dirty;
+    }
+    return page;
   }
 
   // ------------------------------------------------------------ filiais
