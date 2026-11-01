@@ -13,7 +13,7 @@ function respond(at, scores) {
   scores.forEach((s, i) => run('INSERT INTO answers (response_id, question_id, value_num) VALUES (?,?,?)', rid, qs[i].id, s));
 }
 const putSurvey = (changes, extra = {}) => admin.req('PUT', `/api/admin/surveys/${survey}`, { body: { ...base, ...extra,
-  questions: qs.map((q, i) => ({ text: q.text, type: q.type, is_nps: q.is_nps, ...(changes[i] || {}) })) } });
+  questions: qs.map((q, i) => ({ id: q.id, text: q.text, type: q.type, is_nps: q.is_nps, ...(changes[i] || {}) })) } });
 
 test.before(async () => {
   await start();

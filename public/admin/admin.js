@@ -862,7 +862,7 @@
         i18n: cleanI18n(sI18n),
         questions: questions.map((q, i) => {
           const target = q.cond ? questions.findIndex((x) => x._k === q.cond.k) : -1;
-          return { text: q.text, help_text: q.help_text || '', type: q.type, required: !!q.required, is_nps: !!q.is_nps, options: q.options,
+          return { id: q.id, text: q.text, help_text: q.help_text || '', type: q.type, required: !!q.required, is_nps: !!q.is_nps, options: q.options,
             display: ['nps', 'scale5'].includes(q.type) ? (q.display || 'default') : undefined, icon: q.display === 'icons' ? q.icon || null : null,
             show_if: target >= 0 && target < i ? { ref: target, op: q.cond.op, value: q.cond.value } : null,
             i18n: cleanI18n(q.i18n) };

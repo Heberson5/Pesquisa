@@ -96,7 +96,8 @@ test('resposta offline da pesquisa de um agendamento encerrado não se perde; ou
 });
 
 test('não dá para desativar pesquisa com agendamento pendente; depois de excluir, pode', async () => {
-  const body = { ...base, title: 'Pesquisa A', active: false, questions: [{ text: 'Pesquisa A?', type: 'nps', is_nps: true }] };
+  const [qa] = (await admin.req('GET', `/api/admin/surveys/${a}`)).json.questions;
+  const body = { ...base, title: 'Pesquisa A', active: false, questions: [{ id: qa.id, text: 'Pesquisa A?', type: 'nps', is_nps: true }] };
   const s = await agenda({ surveyId: a, branchId: branch, startsAt: local(Date.now() + 30 * MIN), endsAt: local(Date.now() + 60 * MIN) });
   const r = await admin.req('PUT', `/api/admin/surveys/${a}`, { body });
   assert.equal(r.status, 409);

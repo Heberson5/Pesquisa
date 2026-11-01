@@ -111,7 +111,25 @@ function normalizeI18n(input, languages, fields, { optionsCount = 0, where = '' 
   return out;
 }
 
-function normalizeQuestions(list, languages = ['pt']) {
+// Árvore guardada em lista: sem show_if = principal (nível 0); no máximo 2 níveis de ramificação abaixo dela,
+// e cada filha fica dentro do bloco da mãe (só descendentes da mãe entre as duas, em pré-ordem).
+const MAX_BRANCH_DEPTH = 2;
+function validateTree(list) {
+  const parent = list.map((q) => (q.show_if ? q.show_if.ref : -1));
+  const level = [];
+  parent.forEach((p, i) => {
+    level[i] = p < 0 ? 0 : level[p] + 1;
+    if (level[i] > MAX_BRANCH_DEPTH) throw bad(`A pergunta ${i + 1} passa de ${MAX_BRANCH_DEPTH} níveis de ramificação abaixo da pergunta principal.`);
+  });
+  const descends = (j, anc) => { for (let k = parent[j]; k >= 0; k = parent[k]) if (k === anc) return true; return false; };
+  parent.forEach((p, i) => {
+    for (let j = p + 1; p >= 0 && j < i; j++) {
+      if (!descends(j, p)) throw bad(`A pergunta ${i + 1} deve ficar logo abaixo da pergunta ${p + 1} e de suas ramificações.`);
+    }
+  });
+}
+
+function normalizeQuestions(list, languages = ['pt'], { validate = true } = {}) {
   const out = [];
   list.forEach((input, i) => {
     const q = normalizeQuestion(input, i);
@@ -119,6 +137,7 @@ function normalizeQuestions(list, languages = ['pt']) {
     q.i18n = normalizeI18n(input.i18n, languages, [['text', 300], ['help_text', 300]], { optionsCount: q.options.length, where: `da pergunta ${i + 1}` });
     out.push(q);
   });
+  if (validate) validateTree(out);
   return out;
 }
 

@@ -66,3 +66,55 @@ test('sem a resposta da mãe, filha e neta obrigatórias não são exigidas', as
   const [, , , qo] = ids(sid);
   assert.equal((await send(sid, [{ questionId: qo, value: 'oi' }])).status, 201);
 });
+
+test('só duas camadas de ramificação abaixo da principal: o nível 3 é recusado', async () => {
+  const ok = await mk([nps(), filha({ ref: 0, op: 'lte', value: 6 }, { type: 'yesno', text: 'Filha?' }),
+    filha({ ref: 1, op: 'eq', value: 'sim' }, { type: 'yesno', text: 'Neta?' })]);
+  assert.equal(ok.status, 201, ok.text);
+  const r = await mk([nps(), filha({ ref: 0, op: 'lte', value: 6 }, { type: 'yesno', text: 'Filha?' }),
+    filha({ ref: 1, op: 'eq', value: 'sim' }, { type: 'yesno', text: 'Neta?' }),
+    filha({ ref: 2, op: 'eq', value: 'sim' }, { text: 'Bisneta?' })]);
+  assert.equal(r.status, 400, r.text);
+});
+
+test('a filha precisa ficar dentro do bloco da mãe', async () => {
+  const r = await mk([nps(), { text: 'Sem ligação', type: 'text', required: false }, filha({ ref: 0, op: 'lte', value: 6 })]);
+  assert.equal(r.status, 400, r.text);
+  const ok = await mk([nps(), filha({ ref: 0, op: 'lte', value: 6 }, { required: false }), filha({ ref: 0, op: 'gte', value: 9 }, { required: false }),
+    { text: 'Depois', type: 'text', required: false }]);
+  assert.equal(ok.status, 201, ok.text);
+});
+
+test('com respostas: show_if e ordem congelados, textos seguem editáveis', async () => {
+  const sid = (await mk([nps(), filha({ ref: 0, op: 'lte', value: 6 }, { required: false }), { text: 'Outra', type: 'text', required: false }])).json.id;
+  const qs = (await admin.req('GET', `/api/admin/surveys/${sid}`)).json.questions;
+  assert.ok(qs.every((q) => Number.isInteger(q.id)));
+  assert.equal((await send(sid, [{ questionId: qs[0].id, value: 9 }])).status, 201);
+  const put = (qlist, extra = {}) => admin.req('PUT', `/api/admin/surveys/${sid}`, { body: { ...base, title: 'Ramo congelado', ...extra,
+    questions: qlist.map((q) => ({ id: q.id, text: q.text, type: q.type, required: q.required, is_nps: q.is_nps, options: q.options, show_if: q.show_if })) } });
+  assert.equal((await put(qs)).status, 200);
+  const texto = (id) => all('SELECT text FROM questions WHERE id = ?', id)[0].text;
+
+  const mudou = qs.map((q, i) => (i === 1 ? { ...q, show_if: { ref: 0, op: 'lte', value: 5 } } : q));
+  assert.equal((await put(mudou)).status, 409);
+  const solta = qs.map((q, i) => (i === 1 ? { ...q, show_if: null } : q));
+  assert.equal((await put(solta)).status, 409);
+
+  const outraOrdem = [qs[0], qs[2], qs[1]].map((q, i) => (i === 0 ? q : { ...q, text: q.text + ' x', show_if: q.show_if && { ref: 0, op: q.show_if.op, value: q.show_if.value } }));
+  const r = await put(outraOrdem);
+  assert.equal(r.status, 409);
+  assert.equal(texto(qs[1].id), 'O que melhorar?');
+  assert.equal(texto(qs[2].id), 'Outra');
+
+  const semId = await admin.req('PUT', `/api/admin/surveys/${sid}`, { body: { ...base, title: 'Ramo congelado',
+    questions: qs.map((q) => ({ text: q.text, type: q.type, required: q.required, is_nps: q.is_nps, options: q.options, show_if: q.show_if })) } });
+  assert.equal(semId.status, 409);
+  assert.match(semId.json.error, /recarregu/i);
+
+  const edit = qs.map((q, i) => (i === 2 ? { ...q, text: 'Outra, editada' } : q));
+  const c = await put(edit);
+  assert.equal(c.status, 409);
+  assert.equal(c.json.code, 'HISTORY_CHANGE');
+  assert.equal((await put(edit, { confirmHistory: true })).status, 200);
+  assert.equal(texto(qs[2].id), 'Outra, editada');
+});

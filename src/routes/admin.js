@@ -270,7 +270,8 @@ router.get('/surveys/:id', (req, res) => {
   res.json(s);
 });
 
-function surveyInput(body) {
+// validateTree=false: pesquisa com respostas mantém a estrutura antiga (que pode não cumprir as regras novas) e só aceita edição de texto.
+function surveyInput(body, { validateTree = true } = {}) {
   const mediaId = body?.thanks_media_id ? String(body.thanks_media_id) : null;
   if (mediaId && (!/^[a-f0-9]{32}$/.test(mediaId) || !get('SELECT 1 FROM media WHERE id = ?', mediaId))) throw bad('Mídia inválida.');
   const questions = body?.questions;
@@ -289,7 +290,7 @@ function surveyInput(body) {
     contact_mode: body.contact_mode === undefined ? 'never' : (Object.hasOwn(CONTACT_MODES, body.contact_mode) ? body.contact_mode : (() => { throw bad('Modo de contato inválido.'); })()),
     languages,
     i18n: normalizeI18n(body.i18n, languages, [['welcome_title', 120], ['welcome_text', 300], ['thanks_title', 120], ['thanks_text', 300]], { where: 'da pesquisa' }),
-    questions: normalizeQuestions(questions, languages),
+    questions: normalizeQuestions(questions, languages, { validate: validateTree }),
   };
 }
 
@@ -338,12 +339,28 @@ router.put('/surveys/:id', requireAdmin, (req, res) => {
   const sid = id(req.params.id);
   const current = loadSurvey(sid);
   if (!current) throw new HttpError(404, 'Pesquisa não encontrada.');
-  const s = surveyInput(req.body);
+  const hasResponses = !!get('SELECT 1 FROM responses WHERE survey_id = ? LIMIT 1', sid);
+  const s = surveyInput(req.body, { validateTree: !hasResponses });
   // Pesquisa inativa não entra no ar: desativar sem aviso faria um agendamento falhar em silêncio.
   if (!s.active && get('SELECT 1 FROM schedules WHERE survey_id = ? AND ends_at > ? LIMIT 1', sid, Date.now())) {
     throw new HttpError(409, 'Esta pesquisa tem agendamentos pendentes. Exclua os agendamentos antes de desativá-la.');
   }
-  const hasResponses = !!get('SELECT 1 FROM responses WHERE survey_id = ? LIMIT 1', sid);
+  // Com respostas, as perguntas são casadas por id: ordem, tipo, opções e condições ficam congeladas.
+  if (hasResponses) {
+    const sent = req.body.questions;
+    if (s.questions.length !== current.questions.length) throw new HttpError(409, 'Esta pesquisa já tem respostas: não é possível adicionar ou remover perguntas. Use "Duplicar".');
+    if (!sent.every((q) => Number.isInteger(q?.id))) throw new HttpError(409, 'Esta tela está desatualizada. Recarregue a página e edite a pesquisa novamente.');
+    if (sent.some((q, i) => q.id !== current.questions[i].id)) throw new HttpError(409, 'Esta pesquisa já tem respostas: não é possível mudar a ordem das perguntas. Use "Duplicar".');
+    s.questions.forEach((q, i) => {
+      const old = current.questions[i];
+      if (old.type !== q.type || JSON.stringify(old.options) !== JSON.stringify(q.options)) {
+        throw new HttpError(409, 'Esta pesquisa já tem respostas: não é possível mudar tipo ou opções. Use "Duplicar".');
+      }
+      const oldCond = old.show_if ? JSON.stringify([old.show_if.q, old.show_if.op, old.show_if.value]) : null;
+      const newCond = q.show_if ? JSON.stringify([sent[q.show_if.ref].id, q.show_if.op, q.show_if.value]) : null;
+      if (oldCond !== newCond) throw new HttpError(409, 'Esta pesquisa já tem respostas: não é possível mudar as ramificações. Use "Duplicar".');
+    });
+  }
   // Texto e marcação de NPS mudam como as respostas antigas são lidas e calculadas: exige confirmação e fica na auditoria.
   const historyChanges = !hasResponses ? [] : s.questions.flatMap((q, i) => {
     const old = current.questions[i];
@@ -367,15 +384,11 @@ router.put('/surveys/:id', requireAdmin, (req, res) => {
     } else {
       // Com respostas coletadas, a estrutura fica congelada para não corromper o histórico.
       // Só é permitido corrigir textos e a marcação de NPS (que recalcula os relatórios), com confirmação.
-      if (s.questions.length !== current.questions.length) throw new HttpError(409, 'Esta pesquisa já tem respostas: não é possível adicionar ou remover perguntas. Use "Duplicar".');
       s.questions.forEach((q, i) => {
         const old = current.questions[i];
-        if (old.type !== q.type || JSON.stringify(old.options) !== JSON.stringify(q.options)) {
-          throw new HttpError(409, 'Esta pesquisa já tem respostas: não é possível mudar tipo ou opções. Use "Duplicar".');
-        }
         // A aparência (números/carinhas/ícones) pode mudar: o valor gravado continua o mesmo número.
         run('UPDATE questions SET text=?, help_text=?, required=?, is_nps=?, display=?, icon=?, show_if=?, i18n=? WHERE id=?',
-          q.text, q.help_text, q.required, q.is_nps, q.display, q.icon, condForDb(q.show_if, current.questions.map((x) => x.id)), i18nForDb(q.i18n), old.id);
+          q.text, q.help_text, q.required, q.is_nps, q.display, q.icon, old.show_if ? JSON.stringify(old.show_if) : null, i18nForDb(q.i18n), old.id);
       });
     }
     if (!s.active) run('UPDATE branches SET survey_id = NULL WHERE survey_id = ?', sid);
