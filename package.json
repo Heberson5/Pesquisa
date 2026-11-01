@@ -14,7 +14,7 @@
     "create-admin": "node --disable-warning=ExperimentalWarning scripts/create-admin.js",
     "seed:demo": "node --disable-warning=ExperimentalWarning scripts/seed-demo.js",
     "test": "node --disable-warning=ExperimentalWarning --test tests/*.test.js",
-    "seed:finados": "node --disable-warning=ExperimentalWarning scripts/seed-finados.js"
+    "limpar:pesquisas": "node --disable-warning=ExperimentalWarning scripts/limpar-pesquisas.js"
   },
   "dependencies": {
     "express": "^5.2.1",

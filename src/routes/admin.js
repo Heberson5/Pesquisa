@@ -9,7 +9,7 @@ const { get, all, run, tx, audit } = require('../db');
 const { hashPassword, verifyPassword, pairingCode, sha256, passwordPolicyError, rateLimiter } = require('../security');
 const { destroySession, destroyUserSessions, requireUser, requireAdmin } = require('../auth');
 const { HttpError, bad, str, int, bool, id, email, dateParam } = require('../validate');
-const { QUESTION_TYPES, DISPLAYS, LANGS, LANG_LABELS, CONTACT_MODES, displayTitle, familyIds, canDelete, canArchive, loadSurvey, normalizeQuestions, normalizeI18n, npsFromCounts } = require('../surveys');
+const { QUESTION_TYPES, DISPLAYS, LANGS, LANG_LABELS, CONTACT_MODES, displayTitle, familyIds, canDelete, canArchive, deleteFamily, archiveFamily, loadSurvey, normalizeQuestions, normalizeI18n, npsFromCounts } = require('../surveys');
 const { getSettings, saveSettings, emailList } = require('../settings');
 const { queueEmail, queueWhatsApp, renderEmail, processOutbox, outboxStatus, webhookSecret, whatsappCheck } = require('../notify');
 const delivery = require('../delivery');
@@ -484,11 +484,7 @@ router.delete('/surveys/:id', requireAdmin, (req, res) => {
   tx(() => {
     const check = canDelete(sid);
     if (!check.ok) throw new HttpError(409, check.reason);
-    for (const x of ids.slice().reverse()) {
-      run('DELETE FROM schedules WHERE survey_id = ?', x);
-      run('DELETE FROM questions WHERE survey_id = ?', x);
-      run('DELETE FROM surveys WHERE id = ?', x);
-    }
+    deleteFamily(sid);
   });
   audit(req.user.id, 'survey.delete', { id: sid, title: s.title, moments: ids.length - 1 }, req.ip);
   res.json({ ok: true });
@@ -504,7 +500,7 @@ router.post('/surveys/:id/archive', requireAdmin, (req, res) => {
   tx(() => {
     const check = canArchive(sid);
     if (!check.ok) throw new HttpError(409, check.reason);
-    run(`UPDATE surveys SET archived_at = ? WHERE archived_at IS NULL AND id IN (${ids.map(() => '?').join(',')})`, Date.now(), ...ids);
+    archiveFamily(sid);
   });
   audit(req.user.id, 'survey.archive', { id: sid, title: s.title, moments: ids.length - 1 }, req.ip);
   res.json({ ok: true });

@@ -84,6 +84,7 @@ public/admin/             painel
 public/kiosk/             app do tablet (PWA + service worker)
 scripts/create-admin.js   cria o primeiro administrador
 scripts/seed-demo.js      dados de demonstração
+scripts/limpar-pesquisas.js  lista e limpa pesquisas antigas (só aplica com --aplicar)
 tests/security.test.js    30 testes de segurança automatizados
 ```
 

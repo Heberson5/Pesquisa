@@ -1,6 +1,6 @@
 'use strict';
 // Regras de negócio de pesquisas: tipos de pergunta, validação de respostas e NPS.
-const { get, all } = require('./db');
+const { get, all, run } = require('./db');
 const { bad, str } = require('./validate');
 
 const QUESTION_TYPES = {
@@ -67,6 +67,21 @@ function canDelete(surveyId, now = Date.now()) {
     return { ok: false, reason: `Houve período encerrado nos últimos ${PURGE_QUEUE_DAYS} dias e o tablet ainda pode enviar respostas dele. Arquive em vez de excluir.` };
   }
   return { ok: true };
+}
+
+// Remove a pesquisa e, se principal, os momentos, com períodos e perguntas. Quem chama confirma canDelete dentro da mesma transação.
+function deleteFamily(surveyId) {
+  for (const x of familyIds(surveyId).reverse()) {
+    run('DELETE FROM schedules WHERE survey_id = ?', x);
+    run('DELETE FROM questions WHERE survey_id = ?', x);
+    run('DELETE FROM surveys WHERE id = ?', x);
+  }
+}
+
+// Arquiva a pesquisa e os momentos. Quem chama confirma canArchive dentro da mesma transação.
+function archiveFamily(surveyId, now = Date.now()) {
+  const ids = familyIds(surveyId);
+  run(`UPDATE surveys SET archived_at = ? WHERE archived_at IS NULL AND id IN (${ids.map(() => '?').join(',')})`, now, ...ids);
 }
 
 function loadSurvey(surveyId) {
@@ -262,6 +277,6 @@ function npsFromCounts(promoters, passives, detractors) {
 }
 
 module.exports = {
-  QUESTION_TYPES, DISPLAYS, LANGS, LANG_LABELS, CONTACT_MODES, OPS_BY_TYPE, displayTitle, familyIds, canDelete, canArchive, loadSurvey, normalizeQuestion, normalizeQuestions,
+  QUESTION_TYPES, DISPLAYS, LANGS, LANG_LABELS, CONTACT_MODES, OPS_BY_TYPE, displayTitle, familyIds, canDelete, canArchive, deleteFamily, archiveFamily, loadSurvey, normalizeQuestion, normalizeQuestions,
   normalizeI18n, normalizeAnswer, npsFromCounts, parseOptions, isVisible, evalCondition,
 };
