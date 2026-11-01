@@ -76,3 +76,39 @@ test('mudar texto ou marcação de NPS com respostas exige confirmação e fica 
   const log = get("SELECT detail FROM audit_log WHERE action = 'survey.update' ORDER BY id DESC LIMIT 1");
   assert.deepEqual(JSON.parse(log.detail).historyChanges, [{ question: 2, text: ['Voltaria?', 'Voltaria a nos procurar?'] }]);
 });
+
+test('árvore enviada pelo editor volta na mesma ordem e com as mesmas condições, inclusive após mover um bloco', async () => {
+  const q = (text, type, show_if = null, extra = {}) => ({ text, type, show_if, required: true, is_nps: false, options: [], ...extra });
+  const tree = [
+    q('Nota geral?', 'nps', null, { is_nps: true }),
+    q('Por que nota baixa?', 'yesno', { ref: 0, op: 'between', value: [0, 6] }),
+    q('Quer contato?', 'text', { ref: 1, op: 'eq', value: 'sim' }),
+    q('Por que nota baixa 2?', 'text', { ref: 0, op: 'between', value: [0, 6] }),
+    q('O que elogia?', 'text', { ref: 0, op: 'between', value: [9, 10] }),
+    q('Setor?', 'single', null, { options: ['Loja', 'Oficina'] }),
+    q('Qual a loja?', 'text', { ref: 5, op: 'eq', value: 'Loja' }),
+  ];
+  const create = await admin.req('POST', '/api/admin/surveys', { body: { ...base, title: 'Árvore', questions: tree } });
+  assert.equal(create.status, 201, create.text);
+  const read = async () => (await admin.req('GET', `/api/admin/surveys/${create.json.id}`)).json.questions;
+  const shape = (list) => list.map((x) => [x.text, x.show_if && [x.show_if.ref, x.show_if.op, x.show_if.value]]);
+  const saved = await read();
+  assert.deepEqual(shape(saved), shape(tree));
+
+  // O editor move o bloco "Setor?" (com a filha) para antes da pergunta 1 e reenvia com ids.
+  const moved = [saved[5], saved[6], ...saved.slice(0, 5)];
+  const refOf = (x) => (x.show_if ? moved.findIndex((m) => m.id === saved[x.show_if.ref].id) : null);
+  const body = { ...base, title: 'Árvore', questions: moved.map((x) => ({ id: x.id, text: x.text, type: x.type, required: !!x.required, is_nps: !!x.is_nps,
+    options: x.options, show_if: x.show_if ? { ref: refOf(x), op: x.show_if.op, value: x.show_if.value } : null })) };
+  const put = await admin.req('PUT', `/api/admin/surveys/${create.json.id}`, { body });
+  assert.equal(put.status, 200, put.text);
+  const after = await read();
+  assert.deepEqual(after.map((x) => x.text), moved.map((x) => x.text), 'mesmas perguntas, nova ordem');
+  assert.deepEqual(shape(after), [['Setor?', null], ['Qual a loja?', [0, 'eq', 'Loja']], ['Nota geral?', null],
+    ['Por que nota baixa?', [2, 'between', [0, 6]]], ['Quer contato?', [3, 'eq', 'sim']], ['Por que nota baixa 2?', [2, 'between', [0, 6]]], ['O que elogia?', [2, 'between', [9, 10]]]]);
+
+  // Uma filha separada da mãe por outra pergunta é recusada.
+  const broken = body.questions.slice(); broken.splice(1, 0, broken.splice(2, 1)[0]);
+  const bad = await admin.req('PUT', `/api/admin/surveys/${create.json.id}`, { body: { ...body, questions: broken.map((x) => ({ ...x, show_if: x.show_if && { ...x.show_if } })) } });
+  assert.equal(bad.status, 400);
+});

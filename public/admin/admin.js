@@ -716,6 +716,248 @@
     return d === 'numbers' ? 'números coloridos' : d === 'faces' ? 'carinhas coloridas' : (window.Icons.ICONS[settings.ratingIcon]?.label || 'ícones').toLowerCase();
   }
 
+  // ------------------------------------------------------------ editor de perguntas em árvore
+  // A lista é plana (como o servidor grava: pré-ordem da árvore); a árvore é só a forma de editar.
+  // Cada pergunta tem uma chave interna `_k` e, se for filha, `cond = { k: chave da mãe, op, value }`.
+  const COND_TYPES = ['nps', 'scale5', 'yesno', 'single', 'multi'];
+  const MAX_BRANCH_LEVEL = 2;
+  const TREE_LNAME = { en: 'Inglês', es: 'Espanhol' };
+
+  // Copia as perguntas do servidor para o formato do editor (chaves internas e condição por chave).
+  function prepareQuestions(list) {
+    const qs = list.map((q, i) => ({ ...q, options: [...(q.options || [])], i18n: structuredClone(q.i18n || {}), _k: i + 1 }));
+    qs.forEach((q) => { if (q.show_if && qs[q.show_if.ref]) q.cond = { k: qs[q.show_if.ref]._k, op: q.show_if.op, value: q.show_if.value }; });
+    return qs;
+  }
+
+  // Formato que o servidor recebe. show_if usa a posição da mãe, que sempre vem antes.
+  function questionsPayload(questions, cleanI18n) {
+    return questions.map((q, i) => {
+      const target = q.cond ? questions.findIndex((x) => x._k === q.cond.k) : -1;
+      return { id: q.id, text: q.text, help_text: q.help_text || '', type: q.type, required: !!q.required, is_nps: !!q.is_nps, options: q.options,
+        display: ['nps', 'scale5'].includes(q.type) ? (q.display || 'default') : undefined, icon: q.display === 'icons' ? q.icon || null : null,
+        show_if: target >= 0 && target < i ? { ref: target, op: q.cond.op, value: q.cond.value } : null,
+        i18n: cleanI18n(q.i18n) };
+    });
+  }
+
+  // Texto legível da condição de uma filha, em português.
+  function condText(c, mother) {
+    const v = c.value;
+    switch (c.op) {
+      case 'between': return Array.isArray(v) ? (v[0] === v[1] ? `Se ${v[0]}` : `Se ${v[0]} a ${v[1]}`) : 'Se (faixa inválida)';
+      case 'lte': return `Se até ${v}`;
+      case 'gte': return `Se ${v} ou mais`;
+      case 'eq':
+        if (mother && mother.type === 'yesno') return `Se ${v === 'sim' ? 'Sim' : 'Não'}`;
+        return typeof v === 'number' ? `Se for ${v}` : `Se for “${v}”`;
+      case 'in': return Array.isArray(v) ? `Se for uma destas: ${v.map((x) => `“${x}”`).join(', ')}` : 'Se (lista inválida)';
+      case 'has': return `Se marcar “${v}”`;
+      default: return 'Condição desconhecida';
+    }
+  }
+  const condKey = (c) => JSON.stringify([c.op, c.value]);
+
+  // Atalhos de condição para cada tipo de pergunta mãe.
+  function condPresets(m) {
+    if (m.type === 'nps') return [[0, 6], [7, 8], [9, 10]].map((v) => ({ op: 'between', value: v }));
+    if (m.type === 'scale5') return [[1, 2], [3, 3], [4, 5]].map((v) => ({ op: 'between', value: v }));
+    if (m.type === 'yesno') return [{ op: 'eq', value: 'sim' }, { op: 'eq', value: 'nao' }];
+    return m.options.map((o) => ({ op: m.type === 'multi' ? 'has' : 'eq', value: o }));
+  }
+
+  // Seletor "Se a resposta for…": atalhos, faixa livre (NPS e escala) e, ao editar, a condição atual.
+  function condPicker(m, current, apply, cancel, label) {
+    const scale = m.type === 'nps' || m.type === 'scale5';
+    const [min, max] = m.type === 'nps' ? [0, 10] : [1, 5];
+    const opts = condPresets(m).map((c) => ({ label: condText(c, m), cond: c }));
+    let initial = '0';
+    let lo = min; let hi = min;
+    if (current) {
+      const at = opts.findIndex((o) => condKey(o.cond) === condKey(current));
+      if (at >= 0) initial = String(at);
+      else if (scale && current.op === 'between' && Array.isArray(current.value)) { initial = 'range'; [lo, hi] = current.value; }
+      else { opts.push({ label: `${condText(current, m)} (atual)`, cond: current }); initial = String(opts.length - 1); }
+    }
+    const loIn = h('input', { type: 'number', min: String(min), max: String(max), value: String(lo), 'aria-label': 'De' });
+    const hiIn = h('input', { type: 'number', min: String(min), max: String(max), value: String(hi), 'aria-label': 'Até' });
+    const range = h('span', { class: 'q-range' }, 'de', loIn, 'a', hiIn);
+    const sel = h('select', { 'aria-label': 'Resposta que mostra a pergunta', onchange: () => { range.style.display = sel.value === 'range' ? '' : 'none'; } },
+      opts.map((o, j) => h('option', { value: String(j) }, o.label)), scale ? h('option', { value: 'range' }, 'Faixa livre…') : null);
+    sel.value = initial;
+    range.style.display = initial === 'range' ? '' : 'none';
+    return h('div', { class: 'q-picker' }, sel, range,
+      h('button', { class: 'btn sm', onclick: () => {
+        if (sel.value !== 'range') return apply(opts[Number(sel.value)].cond);
+        const a = Number(loIn.value); const b = Number(hiIn.value);
+        if (![a, b].every((n) => Number.isInteger(n) && n >= min && n <= max) || a > b) return toast(`Faixa inválida: use números inteiros de ${min} a ${max}, com o primeiro menor ou igual ao segundo.`, true);
+        apply({ op: 'between', value: [a, b] });
+      } }, label),
+      h('button', { class: 'btn secondary sm', onclick: cancel }, 'Cancelar'));
+  }
+
+  // Editor em árvore de uma lista de perguntas (a mesma lista é alterada no lugar).
+  // ro: só leitura total. locked: pesquisa com respostas (ordem, tipos, opções e condições congelados).
+  // extraLangs: função que devolve os idiomas de tradução ativos. Devolve { el, render }.
+  function questionTree(questions, { ro, locked, extraLangs }) {
+    const frozen = ro || locked;
+    const root = h('div', { class: 'q-tree' });
+    let open = null; // { kind: 'add' | 'edit', k }
+    let par = []; let lvl = []; let depth = [];
+    const descends = (j, anc) => { for (let k = par[j]; k >= 0; k = par[k]) if (k === anc) return true; return false; };
+
+    function analyze() {
+      const idx = new Map(questions.map((q, i) => [q._k, i]));
+      par = []; lvl = []; depth = [];
+      questions.forEach((q, i) => {
+        const t = q.cond && idx.has(q.cond.k) ? idx.get(q.cond.k) : -1;
+        const valid = t >= 0 && t < i && COND_TYPES.includes(questions[t].type);
+        depth[i] = valid ? depth[t] + 1 : 0;
+        let attached = valid && lvl[t] + 1 <= MAX_BRANCH_LEVEL;
+        for (let j = t + 1; attached && j < i; j++) if (!descends(j, t)) attached = false; // bloco precisa ser contíguo
+        par[i] = attached ? t : -1;
+        lvl[i] = attached ? lvl[t] + 1 : 0;
+      });
+    }
+    const kidsOf = (i) => questions.map((_, j) => j).filter((j) => par[j] === i);
+    const blockEnd = (i) => { let e = i + 1; while (e < questions.length && descends(e, i)) e++; return e; };
+    const refsTo = (q) => questions.filter((x) => x.cond && x.cond.k === q._k);
+
+    function addChild(i, cond) {
+      const m = questions[i];
+      let at = blockEnd(i);
+      const same = kidsOf(i).filter((j) => condKey(questions[j].cond) === condKey(cond));
+      if (same.length) at = blockEnd(same[same.length - 1]);
+      questions.splice(at, 0, { text: '', type: 'scale5', required: true, is_nps: false, options: [], i18n: {}, _k: Math.max(0, ...questions.map((x) => x._k)) + 1, cond: { k: m._k, ...cond } });
+    }
+    function move(i, d) {
+      const sibs = questions.map((_, j) => j).filter((j) => par[j] === par[i]);
+      const pos = sibs.indexOf(i);
+      const other = sibs[pos + d];
+      if (other === undefined) return;
+      if (d < 0) questions.splice(other, 0, ...questions.splice(i, blockEnd(i) - i));
+      else questions.splice(i, 0, ...questions.splice(other, blockEnd(other) - other));
+      render();
+    }
+    function remove(i) {
+      const n = blockEnd(i) - i;
+      if (n > 1 && !confirm(`Remover esta pergunta e as ${n - 1} ramificação(ões) abaixo dela?`)) return;
+      questions.splice(i, n); render();
+    }
+
+    // Traduções de uma pergunta (aparece quando a pesquisa tem inglês/espanhol).
+    function translations(q) {
+      const ls = extraLangs();
+      if (!ls.length) return null;
+      return h('details', { class: 'tr' }, h('summary', {}, 'Traduções (' + ls.map((l) => TREE_LNAME[l]).join(', ') + ')'),
+        ls.map((l) => {
+          q.i18n[l] = q.i18n[l] || {};
+          const t = q.i18n[l];
+          return h('div', { class: 'form-grid' },
+            h('label', { class: 'f' }, `Pergunta (${TREE_LNAME[l]})`, h('input', { value: t.text || '', disabled: ro, maxlength: '300', oninput: (e) => { t.text = e.target.value; } })),
+            h('label', { class: 'f' }, `Apoio (${TREE_LNAME[l]})`, h('input', { value: t.help_text || '', disabled: ro, maxlength: '300', oninput: (e) => { t.help_text = e.target.value; } })),
+            ['single', 'multi'].includes(q.type) ? h('label', { class: 'f' }, `Opções (${TREE_LNAME[l]}, uma por linha, na mesma ordem)`,
+              h('textarea', { rows: String(q.options.length), disabled: ro, value: (t.options || []).join('\n'), oninput: (e) => { t.options = e.target.value.split('\n').map((x) => x.trim()).filter(Boolean); } })) : null);
+        }));
+    }
+
+    function card(i) {
+      const q = questions[i];
+      const text = h('input', { value: q.text, placeholder: 'Texto da pergunta', disabled: ro, oninput: (e) => { q.text = e.target.value; } });
+      const help = h('input', { value: q.help_text || '', placeholder: 'Texto de apoio (opcional)', disabled: ro, oninput: (e) => { q.help_text = e.target.value; } });
+      const type = h('select', { disabled: frozen, 'aria-label': 'Tipo da pergunta', onchange: (e) => {
+        if (refsTo(q).length) { e.target.value = q.type; return toast('Esta pergunta tem ramificações. Remova as ramificações antes de mudar o tipo.', true); }
+        q.type = e.target.value; if (q.type !== 'nps') q.is_nps = false;
+        if (['single', 'multi'].includes(q.type) && q.options.length < 2) q.options = ['Opção 1', 'Opção 2'];
+        render();
+      } }, Object.entries(questionTypes).map(([k, v]) => h('option', { value: k }, v)));
+      type.value = q.type;
+      const req = h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: q.required, disabled: ro, onchange: (e) => { q.required = e.target.checked; } }), 'Obrigatória');
+      const isScale = ['nps', 'scale5'].includes(q.type);
+      const disp = h('select', { disabled: ro, title: 'Como a escala aparece no tablet — o valor gravado é sempre o número',
+        onchange: (e) => { q.display = e.target.value; render(); } },
+        Object.entries(displays).map(([k, v]) => h('option', { value: k }, 'Aparência: ' + (k === 'default' ? `${v} (${defaultStyleName()})` : v))));
+      disp.value = q.display || 'default';
+      const iconPick = isScale && q.display === 'icons' ? h('div', { class: 'icon-grid' },
+        h('button', { class: 'icon-choice' + (!q.icon ? ' selected' : ''), title: 'Padrão das configurações', disabled: ro, onclick: () => { q.icon = null; render(); } }, h('span', { class: 'small' }, 'Padrão')),
+        window.Icons.RATING_ICONS.map((k) => h('button', { class: 'icon-choice' + (q.icon === k ? ' selected' : ''), title: window.Icons.ICONS[k].label, disabled: ro,
+          onclick: () => { q.icon = k; render(); } }, icon(k, 20, { fill: q.icon === k })))) : null;
+      const nps = h('label', { class: 'chk', title: 'Somente perguntas do tipo NPS (0 a 10) entram no cálculo' },
+        h('input', { type: 'checkbox', checked: q.is_nps, disabled: ro || q.type !== 'nps', onchange: (e) => { q.is_nps = e.target.checked; render(); } }), icon('star', 16, { fill: q.is_nps }), 'Entra na análise de NPS');
+      const opts = ['single', 'multi'].includes(q.type) ? h('div', {},
+        h('div', { class: 'small muted' }, 'Opções (uma por linha)'),
+        h('textarea', { rows: String(Math.max(2, q.options.length)), disabled: frozen, value: q.options.join('\n'),
+          onchange: (e) => {
+            const next = e.target.value.split('\n').map((x) => x.trim()).filter(Boolean);
+            const used = refsTo(q).flatMap((x) => (Array.isArray(x.cond.value) ? x.cond.value : [x.cond.value]));
+            if (used.some((v) => !next.includes(v))) { e.target.value = q.options.join('\n'); return toast('Alguma ramificação usa uma opção que você tirou. Mude ou remova a ramificação antes.', true); }
+            q.options = next;
+          } })) : null;
+
+      const sibs = questions.map((_, j) => j).filter((j) => par[j] === par[i]);
+      const pos = sibs.indexOf(i);
+      const t = q.cond ? questions.find((x) => x._k === q.cond.k) : null;
+      const legacy = q.cond && par[i] < 0 ? h('div', { class: 'q-legacy-note small' },
+        `Condição antiga: ${t ? `${condText(q.cond, t)} na pergunta ${questions.indexOf(t) + 1}` : 'pergunta de origem não encontrada'}. `,
+        'Esta pergunta não está logo abaixo da pergunta de origem, por isso aparece como principal. ',
+        locked || ro ? null : h('button', { class: 'btn secondary sm', onclick: () => { q.cond = null; render(); } }, 'Tornar pergunta principal'),
+        ' Se salvar assim, o servidor diz o que ajustar.') : null;
+
+      const canBranch = !frozen && COND_TYPES.includes(q.type) && Math.max(lvl[i], depth[i]) < MAX_BRANCH_LEVEL && condPresets(q).length > 0;
+      const adding = open && open.kind === 'add' && open.k === q._k;
+      const branchUi = canBranch ? (adding
+        ? condPicker(q, null, (c) => { addChild(i, c); open = null; render(); }, () => { open = null; render(); }, 'Adicionar')
+        : h('button', { class: 'btn secondary sm q-branch-btn', onclick: () => { open = { kind: 'add', k: q._k }; render(); } }, '+ Se a resposta for…')) : null;
+
+      return h('div', { class: 'q-editor' + (q.is_nps ? ' nps-marked' : '') + (lvl[i] ? ' q-child' : '') },
+        h('div', { class: 'row' }, h('b', { class: 'q-num' }, String(i + 1)), text,
+          frozen ? null : h('button', { class: 'btn secondary sm', disabled: pos <= 0, onclick: () => move(i, -1), title: 'Subir (leva as ramificações junto)' }, '↑'),
+          frozen ? null : h('button', { class: 'btn secondary sm', disabled: pos >= sibs.length - 1, onclick: () => move(i, 1), title: 'Descer (leva as ramificações junto)' }, '↓'),
+          frozen ? null : h('button', { class: 'btn danger sm', disabled: blockEnd(i) - i === questions.length, onclick: () => remove(i) }, 'Remover')),
+        legacy,
+        h('div', { class: 'row' }, type, req), opts,
+        h('details', { class: 'q-more' }, h('summary', {}, 'Mais opções' + (q.is_nps ? ' · NPS' : '')),
+          h('div', { class: 'row' }, help), isScale ? h('div', { class: 'row' }, disp) : null, iconPick ? h('div', { class: 'row' }, iconPick) : null,
+          h('div', { class: 'row' }, nps), translations(q)),
+        branchUi);
+    }
+
+    function node(i) {
+      const kids = kidsOf(i);
+      const out = h('div', { class: 'q-node' }, card(i));
+      if (!kids.length) return out;
+      const groups = [];
+      kids.forEach((j) => {
+        const last = groups[groups.length - 1];
+        if (last && condKey(last.cond) === condKey(questions[j].cond)) last.items.push(j);
+        else groups.push({ cond: questions[j].cond, items: [j] });
+      });
+      const m = questions[i];
+      out.append(h('div', { class: 'q-children' }, groups.map((g) => {
+        const first = questions[g.items[0]]._k;
+        const editing = open && open.kind === 'edit' && open.k === first;
+        const head = editing
+          ? condPicker(m, g.cond, (c) => { g.items.forEach((j) => { questions[j].cond = { k: m._k, ...c }; }); open = null; render(); }, () => { open = null; render(); }, 'Aplicar')
+          : h('div', { class: 'q-branch-head' }, icon('sliders', 16), h('b', {}, condText(g.cond, m)), h('span', { class: 'small muted' }, `na pergunta ${i + 1}`),
+            frozen ? null : h('button', { class: 'btn secondary sm', onclick: () => { open = { kind: 'edit', k: first }; render(); } }, 'Alterar'));
+        return h('div', { class: 'q-branch' }, head, g.items.map(node));
+      })));
+      return out;
+    }
+
+    function render() {
+      analyze();
+      root.replaceChildren(...questions.map((_, i) => i).filter((i) => par[i] < 0).map(node));
+    }
+    render();
+    const el = h('div', {}, root,
+      frozen ? null : h('button', { class: 'btn secondary', onclick: () => {
+        questions.push({ text: '', type: 'scale5', required: true, is_nps: false, options: [], i18n: {}, _k: Math.max(0, ...questions.map((x) => x._k)) + 1 });
+        render();
+      } }, '+ Adicionar pergunta'));
+    return { el, render };
+  }
+
   async function surveyEditor(sid) {
     const s = sid ? await api('/surveys/' + sid) : structuredClone(NEW_SURVEY);
     const ro = me.role !== 'admin';
@@ -726,103 +968,15 @@
       el.value = s[key] ?? ''; el.disabled = ro; f[key] = el;
       return h('label', { class: 'f' }, label, el);
     };
-    const qList = h('div');
-    // Chave interna estável: condições continuam apontando para a pergunta certa mesmo após reordenar.
-    let keySeq = 0;
-    const questions = s.questions.map((q) => ({ ...q, options: [...(q.options || [])], i18n: structuredClone(q.i18n || {}), _k: ++keySeq }));
-    questions.forEach((q) => { if (q.show_if && questions[q.show_if.ref]) q.cond = { k: questions[q.show_if.ref]._k, op: q.show_if.op, value: q.show_if.value }; });
+    // Chave interna estável (_k): condições continuam apontando para a pergunta certa mesmo após mover blocos.
+    const questions = prepareQuestions(s.questions);
     const langs = new Set(s.languages || ['pt']);
     const sI18n = structuredClone(s.i18n || {});
     const extraLangs = () => ['en', 'es'].filter((l) => langs.has(l));
-    const LNAME = { en: 'Inglês', es: 'Espanhol' };
+    const LNAME = TREE_LNAME;
 
-    // Editor de condição: "mostrar somente se a pergunta N ..."
-    const COND_TYPES = ['nps', 'scale5', 'yesno', 'single', 'multi'];
-    function condEditor(q, i) {
-      if (i === 0) return null;
-      const prev = questions.slice(0, i).map((x, j) => ({ x, j })).filter(({ x }) => COND_TYPES.includes(x.type));
-      if (!prev.length) return null;
-      const target = q.cond ? questions.find((x) => x._k === q.cond.k) : null;
-      const valid = target && questions.indexOf(target) < i && COND_TYPES.includes(target.type);
-      const sel = h('select', { disabled: ro, onchange: (e) => {
-        const t = questions.find((x) => String(x._k) === e.target.value);
-        q.cond = t ? { k: t._k, ...defaultCond(t) } : null; renderQuestions();
-      } }, h('option', { value: '' }, 'Mostrar sempre'), prev.map(({ x, j }) => h('option', { value: String(x._k) }, `Mostrar só se a pergunta ${j + 1}…`)));
-      sel.value = valid ? String(target._k) : '';
-      if (!valid) { if (q.cond) q.cond = null; return h('div', { class: 'row cond' }, icon('sliders', 16), sel); }
-      let op; let val;
-      if (target.type === 'nps' || target.type === 'scale5') {
-        op = h('select', { disabled: ro, onchange: (e) => { q.cond.op = e.target.value; } }, [['lte', 'for menor ou igual a'], ['gte', 'for maior ou igual a'], ['eq', 'for igual a']].map(([v, l]) => h('option', { value: v }, l)));
-        val = h('input', { type: 'number', min: target.type === 'nps' ? '0' : '1', max: target.type === 'nps' ? '10' : '5', value: q.cond.value, disabled: ro, oninput: (e) => { q.cond.value = Number(e.target.value); } });
-      } else if (target.type === 'yesno') {
-        op = h('span', { class: 'small muted' }, 'for');
-        val = h('select', { disabled: ro, onchange: (e) => { q.cond.value = e.target.value; } }, h('option', { value: 'sim' }, 'Sim'), h('option', { value: 'nao' }, 'Não'));
-      } else {
-        op = h('span', { class: 'small muted' }, target.type === 'multi' ? 'incluir' : 'for');
-        val = h('select', { disabled: ro, onchange: (e) => { q.cond.value = e.target.value; } }, target.options.map((o) => h('option', { value: o }, o)));
-      }
-      if (op.tagName === 'SELECT') op.value = q.cond.op;
-      val.value = q.cond.value;
-      return h('div', { class: 'row cond' }, icon('sliders', 16), sel, op, val);
-    }
-    function defaultCond(t) {
-      if (t.type === 'nps') return { op: 'lte', value: 6 };
-      if (t.type === 'scale5') return { op: 'lte', value: 2 };
-      if (t.type === 'yesno') return { op: 'eq', value: 'nao' };
-      return { op: t.type === 'multi' ? 'has' : 'eq', value: t.options[0] };
-    }
-
-    // Traduções de uma pergunta (aparece quando a pesquisa tem inglês/espanhol).
-    function translations(q) {
-      const ls = extraLangs();
-      if (!ls.length) return null;
-      return h('details', { class: 'tr' }, h('summary', {}, 'Traduções (' + ls.map((l) => LNAME[l]).join(', ') + ')'),
-        ls.map((l) => {
-          q.i18n[l] = q.i18n[l] || {};
-          const t = q.i18n[l];
-          return h('div', { class: 'form-grid' },
-            h('label', { class: 'f' }, `Pergunta (${LNAME[l]})`, h('input', { value: t.text || '', disabled: ro, maxlength: '300', oninput: (e) => { t.text = e.target.value; } })),
-            h('label', { class: 'f' }, `Apoio (${LNAME[l]})`, h('input', { value: t.help_text || '', disabled: ro, maxlength: '300', oninput: (e) => { t.help_text = e.target.value; } })),
-            ['single', 'multi'].includes(q.type) ? h('label', { class: 'f' }, `Opções (${LNAME[l]}, uma por linha, na mesma ordem)`,
-              h('textarea', { rows: String(q.options.length), disabled: ro, value: (t.options || []).join('\n'), oninput: (e) => { t.options = e.target.value.split('\n').map((x) => x.trim()).filter(Boolean); } })) : null);
-        }));
-    }
-
-    function renderQuestions() {
-      qList.replaceChildren(...questions.map((q, i) => {
-        const text = h('input', { value: q.text, placeholder: 'Texto da pergunta', disabled: ro, oninput: (e) => { q.text = e.target.value; } });
-        const help = h('input', { value: q.help_text || '', placeholder: 'Texto de apoio (opcional)', disabled: ro, oninput: (e) => { q.help_text = e.target.value; } });
-        const type = h('select', { disabled: ro || locked, onchange: (e) => { q.type = e.target.value; if (q.type !== 'nps') q.is_nps = false; if (['single', 'multi'].includes(q.type) && q.options.length < 2) q.options = ['Opção 1', 'Opção 2']; renderQuestions(); } },
-          Object.entries(questionTypes).map(([k, v]) => h('option', { value: k }, v)));
-        type.value = q.type;
-        const req = h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: q.required, disabled: ro, onchange: (e) => { q.required = e.target.checked; } }), 'Obrigatória');
-        const isScale = ['nps', 'scale5'].includes(q.type);
-        const disp = h('select', { disabled: ro, title: 'Como a escala aparece no tablet — o valor gravado é sempre o número',
-          onchange: (e) => { q.display = e.target.value; renderQuestions(); } },
-          Object.entries(displays).map(([k, v]) => h('option', { value: k }, 'Aparência: ' + (k === 'default' ? `${v} (${defaultStyleName()})` : v))));
-        disp.value = q.display || 'default';
-        const iconPick = isScale && q.display === 'icons' ? h('div', { class: 'icon-grid' },
-          h('button', { class: 'icon-choice' + (!q.icon ? ' selected' : ''), title: 'Padrão das configurações', disabled: ro, onclick: () => { q.icon = null; renderQuestions(); } }, h('span', { class: 'small' }, 'Padrão')),
-          window.Icons.RATING_ICONS.map((k) => h('button', { class: 'icon-choice' + (q.icon === k ? ' selected' : ''), title: window.Icons.ICONS[k].label, disabled: ro,
-            onclick: () => { q.icon = k; renderQuestions(); } }, icon(k, 20, { fill: q.icon === k })))) : null;
-        const nps = h('label', { class: 'chk', title: 'Somente perguntas do tipo NPS (0 a 10) entram no cálculo' },
-          h('input', { type: 'checkbox', checked: q.is_nps, disabled: ro || q.type !== 'nps', onchange: (e) => { q.is_nps = e.target.checked; renderQuestions(); } }), icon('star', 16, { fill: q.is_nps }), 'Entra na análise de NPS');
-        const move = (d) => { const j = i + d; if (j < 0 || j >= questions.length) return; [questions[i], questions[j]] = [questions[j], questions[i]]; renderQuestions(); };
-        const opts = ['single', 'multi'].includes(q.type) ? h('div', {},
-          h('div', { class: 'small muted' }, 'Opções (uma por linha)'),
-          h('textarea', { rows: String(Math.max(2, q.options.length)), disabled: ro || locked, value: q.options.join('\n'),
-            oninput: (e) => { q.options = e.target.value.split('\n').map((x) => x.trim()).filter(Boolean); } })) : null;
-        return h('div', { class: 'q-editor' + (q.is_nps ? ' nps-marked' : '') },
-          h('div', { class: 'row' }, h('b', { class: 'q-num' }, String(i + 1)), text,
-            ro ? null : h('button', { class: 'btn secondary sm', disabled: locked, onclick: () => move(-1), title: 'Subir' }, '↑'),
-            ro ? null : h('button', { class: 'btn secondary sm', disabled: locked, onclick: () => move(1), title: 'Descer' }, '↓'),
-            ro ? null : h('button', { class: 'btn danger sm', disabled: locked || questions.length === 1, onclick: () => { questions.splice(i, 1); renderQuestions(); } }, 'Remover')),
-          h('div', { class: 'row', style: null }, help),
-          h('div', { class: 'row' }, type, isScale ? disp : null, req, nps), iconPick ? h('div', { class: 'row' }, iconPick) : null, opts,
-          condEditor(q, i), translations(q));
-      }));
-    }
-    renderQuestions();
+    const tree = questionTree(questions, { ro, locked, extraLangs });
+    const renderQuestions = tree.render;
 
     // mídia de agradecimento
     let mediaId = s.thanks_media_id;
@@ -872,13 +1026,7 @@
         contact_mode: contactSel.value,
         languages: ['pt', ...extraLangs()],
         i18n: cleanI18n(sI18n),
-        questions: questions.map((q, i) => {
-          const target = q.cond ? questions.findIndex((x) => x._k === q.cond.k) : -1;
-          return { id: q.id, text: q.text, help_text: q.help_text || '', type: q.type, required: !!q.required, is_nps: !!q.is_nps, options: q.options,
-            display: ['nps', 'scale5'].includes(q.type) ? (q.display || 'default') : undefined, icon: q.display === 'icons' ? q.icon || null : null,
-            show_if: target >= 0 && target < i ? { ref: target, op: q.cond.op, value: q.cond.value } : null,
-            i18n: cleanI18n(q.i18n) };
-        }),
+        questions: questionsPayload(questions, cleanI18n),
       };
       try {
         if (sid) await api('/surveys/' + sid, { method: 'PUT', body });
@@ -908,9 +1056,8 @@
         field('welcome_title', 'Título', 'text', { maxlength: '120' }), field('welcome_text', 'Subtítulo', 'textarea', { maxlength: '300' }),
         field('idle_seconds', 'Voltar ao início após inatividade (segundos)', 'number', { min: '15', max: '600' }))),
       h('div', { class: 'card' }, h('h2', {}, 'Perguntas'),
-        h('p', { class: 'small muted' }, 'Marque "Entra na análise de NPS" nas perguntas de 0 a 10. A aparência (números, carinhas ou ícones) não muda o cálculo: o tablet sempre grava a nota de 0 a 10.'),
-        qList,
-        ro || locked ? null : h('button', { class: 'btn secondary', onclick: () => { questions.push({ text: '', type: 'scale5', required: true, is_nps: false, options: [], i18n: {}, _k: ++keySeq }); renderQuestions(); } }, '+ Adicionar pergunta')),
+        h('p', { class: 'small muted' }, 'Use "+ Se a resposta for…" para criar uma pergunta que só aparece conforme a resposta. Em "Mais opções" fica o texto de apoio, a aparência e a marcação "Entra na análise de NPS" das perguntas de 0 a 10. A aparência (números, carinhas ou ícones) não muda o cálculo: o tablet sempre grava a nota de 0 a 10.'),
+        tree.el),
       h('div', { class: 'card' }, h('h2', {}, 'Tela de agradecimento'), h('div', { class: 'form-grid' },
         field('thanks_title', 'Título', 'text', { maxlength: '120' }), field('thanks_text', 'Mensagem', 'textarea', { maxlength: '300' }),
         field('thanks_seconds', 'Tempo na tela (segundos)', 'number', { min: '3', max: '60' }),
