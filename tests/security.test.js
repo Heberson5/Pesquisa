@@ -141,9 +141,9 @@ test('gestor não altera nada de outra filial nem acessa áreas de admin', async
   assert.equal((await gestorA.req('POST', `/api/admin/devices/${deviceB.id}/revoke`)).status, 404);
   assert.equal((await gestorA.req('POST', `/api/admin/devices/${deviceB.id}/pairing-code`)).status, 404);
   assert.equal((await gestorA.req('PUT', `/api/admin/branches/${branchB}/survey`, { body: { surveyId: surveyA } })).status, 404);
-  assert.equal((await gestorA.req('GET', '/api/admin/users')).status, 403);
+  assert.ok((await gestorA.req('GET', '/api/admin/users')).json.every((u) => u.role === 'gestor'), 'gestor nunca vê administradores');
   assert.equal((await gestorA.req('GET', '/api/admin/audit')).status, 403);
-  assert.equal((await gestorA.req('POST', '/api/admin/users', { body: { name: 'Eu', email: 'eu@t.local', role: 'admin', password: 'SenhaForte123' } })).status, 403);
+  assert.equal((await gestorA.req('POST', '/api/admin/users', { body: { name: 'Eu', email: 'eu@t.local', role: 'admin', password: 'SenhaForte123', branches: [branchB] } })).status, 403);
   assert.equal((await gestorA.req('POST', '/api/admin/surveys', { body: {} })).status, 403);
   assert.equal((await gestorA.req('POST', '/api/admin/media', { raw: Buffer.from('x') })).status, 403);
   assert.equal(get('SELECT active FROM devices WHERE id = ?', deviceB.id).active, 1);

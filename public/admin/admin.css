@@ -374,3 +374,15 @@ img, svg, video, canvas { max-width: 100%; }
 /* título longo de momento quebra a linha em vez de empurrar a tela */
 .q-editor .row > b:not(.q-num) { flex: 1 1 200px; min-width: 0; overflow-wrap: anywhere; }
 @supports (field-sizing: content) { .q-text-input { field-sizing: content; height: auto !important; } }
+
+/* Permissões */
+.perm-cell { text-align: center; white-space: nowrap; width: 130px; }
+.perm-lock { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 13px; }
+.perm-group td { background: var(--surface-2); padding-top: 9px; padding-bottom: 9px; }
+.perm-table input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--brand); cursor: pointer; }
+.perm-table input[type=checkbox]:disabled { opacity: .4; cursor: default; }
+@media (max-width: 640px) {
+  .perm-table td.perm-cell { width: 100%; text-align: right; }
+  .perm-group td { padding-left: 8px; border-radius: 8px; }
+  .perm-table td:not(.perm-cell) { justify-content: flex-start; text-align: left; font-size: 15px; }
+}

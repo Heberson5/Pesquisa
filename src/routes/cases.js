@@ -3,6 +3,7 @@
 // responsável e histórico. Gestor só vê e altera casos das próprias filiais.
 const express = require('express');
 const zones = require('../zones');
+const { requirePerm } = require('../permissions');
 const { get, all, run, tx, audit } = require('../db');
 const { requireUser } = require('../auth');
 const { HttpError, bad, str, int, id } = require('../validate');
@@ -30,7 +31,7 @@ function caseFilter(user, q) {
   return { sql: where.length ? 'WHERE ' + where.join(' AND ') : '', params };
 }
 
-router.get('/summary', (req, res) => {
+router.get('/summary', requirePerm('cases.view'), (req, res) => {
   const f = caseFilter(req.user, { ...req.query, status: undefined });
   const row = get(`SELECT COUNT(*) AS total,
       SUM(CASE WHEN c.status = 'aberto' THEN 1 ELSE 0 END) AS abertos,
@@ -42,7 +43,7 @@ router.get('/summary', (req, res) => {
   res.json({ ...row, avgHours: row.avg_ms ? Math.round(row.avg_ms / 360_000) / 10 : null });
 });
 
-router.get('/', (req, res) => {
+router.get('/', requirePerm('cases.view'), (req, res) => {
   const page = int(req.query.page || '1', { field: 'página', min: 1, max: 100000 });
   const f = caseFilter(req.user, req.query);
   const total = get(`SELECT COUNT(*) AS n FROM cases c ${f.sql}`, ...f.params).n;
@@ -67,7 +68,7 @@ function loadCase(user, caseId) {
 const assignable = (branchId) => all(`SELECT DISTINCT u.id, u.name FROM users u LEFT JOIN user_branches ub ON ub.user_id = u.id
   WHERE u.active = 1 AND (u.role = 'admin' OR ub.branch_id = ?) ORDER BY u.name`, branchId);
 
-router.get('/:id', (req, res) => {
+router.get('/:id', requirePerm('cases.view'), (req, res) => {
   const c = loadCase(req.user, id(req.params.id));
   const r = get(`SELECT r.*, b.name AS branch, CASE WHEN sp.title IS NULL THEN s.title ELSE sp.title || ' · ' || s.title END AS survey, d.name AS device FROM responses r JOIN branches b ON b.id = r.branch_id
     JOIN surveys s ON s.id = r.survey_id LEFT JOIN surveys sp ON sp.id = s.parent_id LEFT JOIN devices d ON d.id = r.device_id WHERE r.id = ?`, c.response_id);
@@ -87,7 +88,7 @@ router.get('/:id', (req, res) => {
     answers, contact, notes, statuses: STATUS, assignable: assignable(c.branch_id) });
 });
 
-router.put('/:id', (req, res) => {
+router.put('/:id', requirePerm('cases.edit'), (req, res) => {
   const c = loadCase(req.user, id(req.params.id));
   const b = req.body || {};
   const status = b.status === undefined ? c.status : b.status;

@@ -21,6 +21,8 @@ const { encrypt, decrypt, lookup } = require('../vault');
 const { publicUrl, timezone: companyTz } = require('../config');
 const { parseLocal } = require('../time');
 const { branchAgenda } = require('../responses');
+const permissions = require('../permissions');
+const { requirePerm, can } = permissions;
 
 const router = express.Router();
 const { MEDIA_DIR } = require('../db');
@@ -41,7 +43,7 @@ router.post('/logout', (req, res) => {
 
 router.get('/me', (req, res) => {
   const u = get('SELECT totp_enabled, notify_detractors, notify_reports, notify_offline, whatsapp FROM users WHERE id = ?', req.user.id);
-  res.json({ user: { id: req.user.id, name: req.user.name, email: req.user.email, role: req.user.role, mfaEnabled: !!u.totp_enabled, whatsapp: u.whatsapp || '',
+  res.json({ user: { id: req.user.id, name: req.user.name, email: req.user.email, role: req.user.role, perms: permissions.permsFor(req.user), mfaEnabled: !!u.totp_enabled, whatsapp: u.whatsapp || '',
     notify: { detractors: !!u.notify_detractors, reports: !!u.notify_reports, offline: !!u.notify_offline } },
   mfaSetupRequired: req.user.mfaSetupRequired, csrf: req.user.csrf, companyTz,
   questionTypes: QUESTION_TYPES, displays: DISPLAYS, langs: LANG_LABELS, contactModes: CONTACT_MODES, settings: req.user.mfaSetupRequired ? null : settingsFor(req.user) });
@@ -97,7 +99,8 @@ router.get('/branches', (req, res) => {
       (SELECT COUNT(*) FROM responses r WHERE r.branch_id = b.id) AS responses
     FROM branches b LEFT JOIN surveys s ON s.id = b.survey_id ${where} ORDER BY b.name`, ...(s || []));
   // Fuso em uso agora (escolhido ou informado pelo tablet) e as opções do cadastro.
-  res.json(rows.map((b) => ({ ...b, effective_tz: zones.forBranch(b), ...branchAgenda(b) })));
+  const full = can(req.user, 'branches.view');
+  res.json(rows.map((b) => ({ ...b, ...(full ? {} : { alert_emails: '[]', alert_phones: '[]', hours_json: null }), effective_tz: zones.forBranch(b), ...branchAgenda(b) })));
 });
 router.get('/timezones', (req, res) => res.json({ company: companyTz, choices: zones.ZONE_CHOICES }));
 
@@ -148,16 +151,17 @@ function hoursInput(v) {
   return JSON.stringify(out);
 }
 
-router.post('/branches', requireAdmin, (req, res) => {
+router.post('/branches', requirePerm('branches.edit'), (req, res) => {
   const b = branchInput(req.body);
   if (get('SELECT 1 FROM branches WHERE code = ?', b.code)) throw new HttpError(409, 'Já existe uma filial com esse código.');
   const r = run('INSERT INTO branches (code, name, city, active, alert_emails, alert_phones, nps_goal, hours_json, timezone, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)',
     b.code, b.name, b.city, b.active, b.alert_emails, b.alert_phones, b.nps_goal, b.hours_json, b.timezone, Date.now());
+  if (req.user.role !== 'admin') run('INSERT INTO user_branches (user_id, branch_id) VALUES (?,?)', req.user.id, r.lastInsertRowid);
   audit(req.user.id, 'branch.create', { id: r.lastInsertRowid, ...b }, req.ip);
   res.status(201).json({ id: Number(r.lastInsertRowid) });
 });
 
-router.put('/branches/:id', requireAdmin, (req, res) => {
+router.put('/branches/:id', requirePerm('branches.edit'), (req, res) => {
   const bid = id(req.params.id);
   assertBranch(req.user, bid);
   const b = branchInput(req.body);
@@ -169,15 +173,17 @@ router.put('/branches/:id', requireAdmin, (req, res) => {
 });
 
 // Filial com respostas não é apagada: o histórico fica e ela só pode ser desativada.
-router.post('/branches/:id/deactivate', requireAdmin, (req, res) => {
+router.post('/branches/:id/deactivate', requirePerm('branches.delete'), (req, res) => {
   const bid = id(req.params.id);
+  assertBranch(req.user, bid);
   if (!run('UPDATE branches SET active = 0 WHERE id = ?', bid).changes) throw new HttpError(404, 'Filial não encontrada.');
   audit(req.user.id, 'branch.update', { id: bid, active: 0 }, req.ip);
   res.json({ ok: true });
 });
 
-router.delete('/branches/:id', requireAdmin, (req, res) => {
+router.delete('/branches/:id', requirePerm('branches.delete'), (req, res) => {
   const bid = id(req.params.id);
+  assertBranch(req.user, bid);
   const b = get('SELECT id, code, name FROM branches WHERE id = ?', bid);
   if (!b) throw new HttpError(404, 'Filial não encontrada.');
   if (get('SELECT 1 FROM responses WHERE branch_id = ? LIMIT 1', bid) || get('SELECT 1 FROM cases WHERE branch_id = ? LIMIT 1', bid)) throw new HttpError(409, 'Esta filial tem pesquisas respondidas e não pode ser excluída. Desative-a para manter o histórico.');
@@ -192,7 +198,7 @@ router.delete('/branches/:id', requireAdmin, (req, res) => {
 });
 
 // Define qual pesquisa os tablets da filial exibem (admin ou gestor da filial).
-router.put('/branches/:id/survey', (req, res) => {
+router.put('/branches/:id/survey', requirePerm('branches.survey'), (req, res) => {
   const bid = id(req.params.id);
   assertBranch(req.user, bid);
   const sid = req.body?.surveyId === null ? null : id(req.body?.surveyId, 'pesquisa');
@@ -212,14 +218,14 @@ async function linkInfo(b) {
   return { enabled: !!b.public_enabled, url, qr: await QRCode.toDataURL(url, { errorCorrectionLevel: 'M', margin: 2, width: 600 }) };
 }
 
-router.get('/branches/:id/public-link', async (req, res) => {
+router.get('/branches/:id/public-link', requirePerm('branches.view'), async (req, res) => {
   const bid = id(req.params.id);
   assertBranch(req.user, bid);
   res.json(await linkInfo(get('SELECT * FROM branches WHERE id = ?', bid)));
 });
 
 // Ativar/desativar ou gerar um novo link (o anterior deixa de funcionar — útil se um QR vazar).
-router.post('/branches/:id/public-link', requireAdmin, async (req, res) => {
+router.post('/branches/:id/public-link', requirePerm('branches.link'), async (req, res) => {
   const bid = id(req.params.id);
   assertBranch(req.user, bid);
   const b = get('SELECT * FROM branches WHERE id = ?', bid);
@@ -234,7 +240,12 @@ router.post('/branches/:id/public-link', requireAdmin, async (req, res) => {
 });
 
 // ---------------------------------------------------------------- campanhas agendadas
-router.get('/schedules', (req, res) => {
+function assertScheduleScope(user, branchId) {
+  if (branchId !== null) return assertBranch(user, branchId);
+  if (user.role !== 'admin') throw new HttpError(403, 'Agendamento para todas as filiais é exclusivo do administrador.');
+}
+
+router.get('/schedules', requirePerm('surveys.view'), (req, res) => {
   const s = scope(req.user);
   const conds = s ? [`(c.branch_id IS NULL OR c.branch_id IN (${placeholders(s)}))`] : [];
   const params = [...(s || [])];
@@ -246,7 +257,7 @@ router.get('/schedules', (req, res) => {
   res.json(rows.map((c) => ({ ...c, survey: displayTitle(c.survey_id), tz: c.branch_id ? zones.forBranch(get('SELECT id, timezone FROM branches WHERE id = ?', c.branch_id)) : companyTz })));
 });
 
-router.post('/schedules', requireAdmin, (req, res) => {
+router.post('/schedules', requirePerm('schedules.manage'), (req, res) => {
   const surveyId = id(req.body?.surveyId, 'pesquisa');
   const target = get('SELECT parent_id, archived_at FROM surveys WHERE id = ? AND active = 1', surveyId);
   if (!target) throw bad('Pesquisa inexistente ou inativa.');
@@ -256,7 +267,7 @@ router.post('/schedules', requireAdmin, (req, res) => {
   // Só momentos são agendados. Pesquisa antiga sem parent_id que já teve período (ex.: Finados) segue aceita.
   if (target.parent_id === null && !get('SELECT 1 FROM schedules WHERE survey_id = ? LIMIT 1', surveyId)) throw bad('Agende um momento da pesquisa, não a pesquisa principal.');
   const branchId = req.body?.branchId === null || req.body?.branchId === undefined || req.body?.branchId === '' ? null : id(req.body.branchId, 'filial');
-  if (branchId !== null) assertBranch(req.user, branchId);
+  assertScheduleScope(req.user, branchId);
   // Data e hora digitadas valem no fuso da filial escolhida (ou no da empresa, se for para todas).
   const tz = branchId !== null ? zones.forBranch(get('SELECT id, timezone FROM branches WHERE id = ?', branchId)) : companyTz;
   const startsAt = parseLocal(req.body?.startsAt, tz);
@@ -275,10 +286,11 @@ router.post('/schedules', requireAdmin, (req, res) => {
 });
 
 // Futuro: muda filial, início e fim. No ar: só o fim, porque já há tablets usando. Encerrado: fica como está (histórico e respostas offline).
-router.put('/schedules/:id', requireAdmin, (req, res) => {
+router.put('/schedules/:id', requirePerm('schedules.manage'), (req, res) => {
   const sid = id(req.params.id);
   const c = get('SELECT id, survey_id, branch_id, starts_at, ends_at FROM schedules WHERE id = ?', sid);
   if (!c) throw new HttpError(404, 'Campanha não encontrada.');
+  assertScheduleScope(req.user, c.branch_id);
   const now = Date.now();
   if (c.ends_at <= now) throw new HttpError(409, 'Este período já terminou e não pode ser alterado. Crie um novo agendamento.');
   const onAir = c.starts_at <= now;
@@ -300,10 +312,11 @@ router.put('/schedules/:id', requireAdmin, (req, res) => {
 
 // Período futuro: apaga. No ar: encerra agora e mantém a linha. Encerrado há menos de 30 dias: recusa (o tablet ainda pode
 // mandar respostas offline dele). Mais antigo: apaga. Os tablets trocam de pesquisa pelo roteiro de sempre.
-router.delete('/schedules/:id', requireAdmin, (req, res) => {
+router.delete('/schedules/:id', requirePerm('schedules.manage'), (req, res) => {
   const sid = id(req.params.id);
   const c = get('SELECT id, survey_id, branch_id, starts_at, ends_at FROM schedules WHERE id = ?', sid);
   if (!c) throw new HttpError(404, 'Campanha não encontrada.');
+  assertScheduleScope(req.user, c.branch_id);
   const now = Date.now();
   if (c.starts_at <= now && c.ends_at > now) {
     run('UPDATE schedules SET ends_at = ? WHERE id = ?', now, sid);
@@ -340,7 +353,7 @@ router.get('/surveys', (req, res) => {
     .map((x) => ({ ...x, on_air_tz: branchTz.get(x.on_air_branch) || companyTz, next_tz: branchTz.get(x.next_branch) || companyTz })));
 });
 
-router.get('/surveys/:id', (req, res) => {
+router.get('/surveys/:id', requirePerm('surveys.view'), (req, res) => {
   const s = withRefs(loadSurvey(id(req.params.id)) || { questions: [] });
   if (!s.id) throw new HttpError(404, 'Pesquisa não encontrada.');
   s.has_responses = !!get('SELECT 1 FROM responses WHERE survey_id = ? LIMIT 1', s.id);
@@ -416,7 +429,7 @@ function insertSurveyRow(s, parentId, active, now) {
   s.thanks_seconds, s.idle_seconds, active, s.contact_mode, JSON.stringify(s.languages), i18nForDb(s.i18n), parentId, now, now).lastInsertRowid);
 }
 
-router.post('/surveys', requireAdmin, (req, res) => {
+router.post('/surveys', requirePerm('surveys.edit'), (req, res) => {
   const s = surveyInput(req.body);
   const now = Date.now();
   const newId = tx(() => {
@@ -430,7 +443,7 @@ router.post('/surveys', requireAdmin, (req, res) => {
 
 // Momento: pesquisa filha com perguntas próprias. Copia da principal telas, tempos, idiomas, traduções e modo de contato
 // (depois de criado, mudar a principal não altera o momento). Só um nível: momento não tem momentos.
-router.post('/surveys/:id/moments', requireAdmin, (req, res) => {
+router.post('/surveys/:id/moments', requirePerm('surveys.edit'), (req, res) => {
   const parent = loadSurvey(id(req.params.id));
   if (!parent) throw new HttpError(404, 'Pesquisa não encontrada.');
   if (parent.parent_id) throw bad('Um momento não pode ter momentos. Crie o momento na pesquisa principal.');
@@ -451,7 +464,7 @@ router.post('/surveys/:id/moments', requireAdmin, (req, res) => {
   res.status(201).json({ id: newId });
 });
 
-router.put('/surveys/:id', requireAdmin, (req, res) => {
+router.put('/surveys/:id', requirePerm('surveys.edit'), (req, res) => {
   const sid = id(req.params.id);
   const current = loadSurvey(sid);
   if (!current) throw new HttpError(404, 'Pesquisa não encontrada.');
@@ -515,7 +528,7 @@ router.put('/surveys/:id', requireAdmin, (req, res) => {
   res.json({ ok: true });
 });
 
-router.post('/surveys/:id/duplicate', requireAdmin, (req, res) => {
+router.post('/surveys/:id/duplicate', requirePerm('surveys.edit'), (req, res) => {
   const src = loadSurvey(id(req.params.id));
   if (!src) throw new HttpError(404, 'Pesquisa não encontrada.');
   const now = Date.now();
@@ -540,7 +553,7 @@ router.post('/surveys/:id/duplicate', requireAdmin, (req, res) => {
 });
 
 // Exclui a pesquisa (e, se principal, os momentos) com períodos e perguntas. Nunca toca em respostas: canDelete garante que não há nenhuma.
-router.delete('/surveys/:id', requireAdmin, (req, res) => {
+router.delete('/surveys/:id', requirePerm('surveys.delete'), (req, res) => {
   const sid = id(req.params.id);
   const s = get('SELECT id, title, parent_id FROM surveys WHERE id = ?', sid);
   if (!s) throw new HttpError(404, 'Pesquisa não encontrada.');
@@ -555,7 +568,7 @@ router.delete('/surveys/:id', requireAdmin, (req, res) => {
 });
 
 // Arquivar tira da lista e de novos usos sem apagar nada; active não muda e as respostas da fila do tablet continuam sendo aceitas.
-router.post('/surveys/:id/archive', requireAdmin, (req, res) => {
+router.post('/surveys/:id/archive', requirePerm('surveys.delete'), (req, res) => {
   const sid = id(req.params.id);
   const s = get('SELECT id, title, archived_at FROM surveys WHERE id = ?', sid);
   if (!s) throw new HttpError(404, 'Pesquisa não encontrada.');
@@ -584,7 +597,7 @@ function sniffMime(buf) {
   return null; // SVG, HTML, PDF, executáveis etc. são recusados
 }
 
-router.post('/media', requireAdmin, express.raw({ type: () => true, limit: MEDIA_MAX }), (req, res) => {
+router.post('/media', requirePerm('surveys.edit'), express.raw({ type: () => true, limit: MEDIA_MAX }), (req, res) => {
   if (!Buffer.isBuffer(req.body) || req.body.length === 0) throw bad('Arquivo vazio.');
   const mime = sniffMime(req.body);
   if (!mime) throw new HttpError(415, 'Formato não suportado. Use JPG, PNG, WEBP, GIF, MP4 ou WEBM.');
@@ -597,7 +610,7 @@ router.post('/media', requireAdmin, express.raw({ type: () => true, limit: MEDIA
 });
 
 // ---------------------------------------------------------------- dispositivos (tablets)
-router.get('/devices', (req, res) => {
+router.get('/devices', requirePerm('devices.view'), (req, res) => {
   const s = scope(req.user);
   const where = s ? `WHERE d.branch_id IN (${placeholders(s)})` : '';
   const rows = all(`SELECT d.id, d.name, d.branch_id, b.name AS branch_name, d.active, d.paired_at, d.last_seen_at,
@@ -615,7 +628,7 @@ function issuePairingCode(deviceId) {
   return { code, expiresAt: Date.now() + PAIR_TTL_MS };
 }
 
-router.post('/devices', (req, res) => {
+router.post('/devices', requirePerm('devices.manage'), (req, res) => {
   const branchId = id(req.body?.branchId, 'filial');
   assertBranch(req.user, branchId);
   const name = str(req.body?.name, { field: 'nome', min: 2, max: 60 });
@@ -632,14 +645,14 @@ function loadDeviceScoped(user, deviceId) {
   return d;
 }
 
-router.post('/devices/:id/pairing-code', (req, res) => {
+router.post('/devices/:id/pairing-code', requirePerm('devices.manage'), (req, res) => {
   const d = loadDeviceScoped(req.user, id(req.params.id));
   const pairing = issuePairingCode(d.id);
   audit(req.user.id, 'device.new_code', { id: d.id }, req.ip);
   res.json({ ...pairing, tz: zones.branchZones().get(d.branch_id) });
 });
 
-router.post('/devices/:id/revoke', (req, res) => {
+router.post('/devices/:id/revoke', requirePerm('devices.revoke'), (req, res) => {
   const d = loadDeviceScoped(req.user, id(req.params.id));
   run('UPDATE devices SET active = 0, token_hash = NULL, pair_code_hash = NULL, pair_expires_at = NULL WHERE id = ?', d.id);
   audit(req.user.id, 'device.revoke', { id: d.id }, req.ip);
@@ -647,7 +660,7 @@ router.post('/devices/:id/revoke', (req, res) => {
 });
 
 // Excluir tablet: tira o cadastro e o acesso; as respostas ficam na filial, com o nome do tablet.
-router.delete('/devices/:id', requireAdmin, (req, res) => {
+router.delete('/devices/:id', requirePerm('devices.delete'), (req, res) => {
   const d = loadDeviceScoped(req.user, id(req.params.id));
   tx(() => {
     run('UPDATE responses SET device_label = ? WHERE device_id = ? AND device_label IS NULL', d.name, d.id);
@@ -658,9 +671,9 @@ router.delete('/devices/:id', requireAdmin, (req, res) => {
 });
 
 // ---------------------------------------------------------------- relatórios
-router.get('/stats', (req, res) => res.json(computeStats(req.user, req.query)));
+router.get('/stats', requirePerm('dashboard.view'), (req, res) => res.json(computeStats(req.user, req.query)));
 
-router.get('/surveys/:id/breakdown', (req, res) => {
+router.get('/surveys/:id/breakdown', requirePerm('dashboard.view'), (req, res) => {
   const survey = loadSurvey(id(req.params.id));
   if (!survey) throw new HttpError(404, 'Pesquisa não encontrada.');
   res.json(computeBreakdown(req.user, survey, req.query));
@@ -690,24 +703,25 @@ function displayValue(a) {
   return a.value_text ?? String(a.value_num);
 }
 
-router.get('/responses', (req, res) => {
+router.get('/responses', requirePerm('responses.view'), (req, res) => {
   const page = int(req.query.page || '1', { field: 'página', min: 1, max: 100000 });
   res.json({ page, pageSize: 25, ...listResponses(req.user, req.query, 25, (page - 1) * 25) });
 });
 
 // Exclusão de respostas: SOMENTE administrador (gestor nunca apaga). Respostas, casos e
 // anotações ligados a ela saem juntos (ON DELETE CASCADE). Fica registrado na auditoria.
-router.delete('/responses/:id', requireAdmin, (req, res) => {
+router.delete('/responses/:id', requirePerm('responses.delete'), (req, res) => {
   const rid = id(req.params.id);
   const r = get('SELECT id, branch_id, survey_id, submitted_at FROM responses WHERE id = ?', rid);
   if (!r) throw new HttpError(404, 'Resposta não encontrada.');
+  assertBranch(req.user, r.branch_id);
   run('DELETE FROM responses WHERE id = ?', rid);
   audit(req.user.id, 'response.delete', { id: rid, branchId: r.branch_id, surveyId: r.survey_id }, req.ip);
   res.json({ ok: true });
 });
 
 // Exclusão em lote do que está filtrado na tela (útil para limpar os testes). Exige digitar a palavra EXCLUIR.
-router.post('/responses/delete-filtered', requireAdmin, (req, res) => {
+router.post('/responses/delete-filtered', requirePerm('responses.delete'), (req, res) => {
   if (req.body?.confirm !== 'EXCLUIR') throw new HttpError(400, 'Digite EXCLUIR para confirmar.');
   const f = responseFilter(req.user, req.body?.filter && typeof req.body.filter === 'object' ? req.body.filter : {});
   const n = tx(() => run(`DELETE FROM responses WHERE id IN (SELECT r.id FROM responses r ${f.sql})`, ...f.params).changes);
@@ -723,7 +737,7 @@ function csvCell(v) {
   return '"' + s.replace(/"/g, '""') + '"';
 }
 
-router.get('/responses.csv', (req, res) => {
+router.get('/responses.csv', requirePerm('responses.export'), (req, res) => {
   const { rows } = listResponses(req.user, req.query, 100000, 0);
   const questions = [...new Set(rows.flatMap((r) => (r.answers || []).map((a) => a.question)))];
   const lines = [['Data/hora', 'Filial', 'Pesquisa', 'Dispositivo', 'Canal', 'Cidade da loja', 'Cidade (cliente)', 'UF (cliente)', 'Região (cliente)', 'Latitude aprox.', 'Longitude aprox.', ...questions].map(csvCell).join(';')];
@@ -740,10 +754,16 @@ router.get('/responses.csv', (req, res) => {
 });
 
 // ---------------------------------------------------------------- usuários (somente admin)
-router.get('/users', requireAdmin, (req, res) => {
-  const users = all('SELECT id, name, email, role, active, locked_until, created_at, totp_enabled FROM users ORDER BY name');
+router.get('/users', requirePerm('users.view'), (req, res) => {
+  const users = all('SELECT id, name, email, role, active, locked_until, created_at, totp_enabled, created_by FROM users ORDER BY name');
   const links = all('SELECT user_id, branch_id FROM user_branches');
-  res.json(users.map((u) => ({ ...u, branches: links.filter((l) => l.user_id === u.id).map((l) => l.branch_id) })));
+  const branchesOf = (uid) => links.filter((l) => l.user_id === uid).map((l) => l.branch_id);
+  if (req.user.role === 'admin') return res.json(users.map((u) => ({ ...u, branches: branchesOf(u.id), can_edit: true })));
+  // Gestor nunca vê administradores: só gestores que cadastrou ou que dividem filial com ele, e só as filiais dele.
+  const mine = scope(req.user);
+  const seen = (uid) => branchesOf(uid).filter((b) => mine.includes(b));
+  res.json(users.filter((u) => u.role === 'gestor' && (u.created_by === req.user.id || seen(u.id).length))
+    .map((u) => ({ ...u, branches: seen(u.id), can_edit: u.created_by === req.user.id })));
 });
 
 function userInput(body, isNew) {
@@ -763,17 +783,25 @@ function userInput(body, isNew) {
   return u;
 }
 
+// Gestor só dá acesso às filiais dele, e sempre a pelo menos uma.
+function assertGestorBranches(user, branches) {
+  const mine = scope(user);
+  if (!branches.length) throw bad('Escolha ao menos uma filial.');
+  if (branches.some((b) => !mine.includes(b))) throw new HttpError(403, 'Você só pode dar acesso às suas filiais.');
+}
+
 function setUserBranches(userId, branches) {
   run('DELETE FROM user_branches WHERE user_id = ?', userId);
   for (const b of branches) run('INSERT INTO user_branches (user_id, branch_id) VALUES (?,?)', userId, b);
 }
 
-router.post('/users', requireAdmin, (req, res) => {
+router.post('/users', requirePerm('users.create'), (req, res) => {
   const u = userInput(req.body, true);
+  if (req.user.role !== 'admin') { u.role = 'gestor'; assertGestorBranches(req.user, u.branches); }
   if (get('SELECT 1 FROM users WHERE email = ?', u.email)) throw new HttpError(409, 'E-mail já cadastrado.');
   const newId = tx(() => {
-    const r = run('INSERT INTO users (name, email, password_hash, role, active, created_at) VALUES (?,?,?,?,?,?)',
-      u.name, u.email, hashPassword(u.password), u.role, u.active, Date.now());
+    const r = run('INSERT INTO users (name, email, password_hash, role, active, created_at, created_by) VALUES (?,?,?,?,?,?,?)',
+      u.name, u.email, hashPassword(u.password), u.role, u.active, Date.now(), req.user.id);
     setUserBranches(r.lastInsertRowid, u.branches);
     return Number(r.lastInsertRowid);
   });
@@ -781,12 +809,24 @@ router.post('/users', requireAdmin, (req, res) => {
   res.status(201).json({ id: newId });
 });
 
-router.put('/users/:id', requireAdmin, (req, res) => {
+router.put('/users/:id', requirePerm('users.edit'), (req, res) => {
   const uid = id(req.params.id);
   const existing = get('SELECT * FROM users WHERE id = ?', uid);
   if (!existing) throw new HttpError(404, 'Usuário não encontrado.');
   const u = userInput(req.body, false);
+  if (req.user.role !== 'admin') {
+    // Gestor só edita quem ele mesmo cadastrou: nunca a si próprio, quem o criou ou um administrador.
+    if (existing.role !== 'gestor' || existing.created_by !== req.user.id) throw new HttpError(404, 'Usuário não encontrado.');
+    if (req.body?.resetMfa === true) throw new HttpError(403, 'Somente o administrador pode resetar o 2FA.');
+    u.role = 'gestor';
+    assertGestorBranches(req.user, u.branches);
+    // Filiais fora do escopo dele, dadas pelo administrador, são mantidas.
+    const mine = scope(req.user);
+    u.branches = [...u.branches, ...all('SELECT branch_id FROM user_branches WHERE user_id = ?', uid).map((l) => l.branch_id).filter((b) => !mine.includes(b))];
+  }
   if (uid === req.user.id && (u.role !== 'admin' || !u.active)) throw bad('Você não pode remover seu próprio acesso de administrador.');
+  if (existing.role === 'admin' && existing.active && (u.role !== 'admin' || !u.active)
+    && !get("SELECT 1 FROM users WHERE role = 'admin' AND active = 1 AND id <> ? LIMIT 1", uid)) throw bad('Não é possível remover o último administrador ativo.');
   if (get('SELECT 1 FROM users WHERE email = ? AND id <> ?', u.email, uid)) throw new HttpError(409, 'E-mail já cadastrado.');
   tx(() => {
     run('UPDATE users SET name=?, email=?, role=?, active=?, locked_until = CASE WHEN ? THEN NULL ELSE locked_until END WHERE id=?',
@@ -839,7 +879,7 @@ router.put('/settings', requireAdmin, (req, res) => {
 });
 
 // ---------------------------------------------------------------- relatório PowerPoint
-router.get('/report.pptx', async (req, res) => {
+router.get('/report.pptx', requirePerm('dashboard.export'), async (req, res) => {
   const { buffer: buf } = await reportFor(req.user, req.query, req.user.name);
   audit(req.user.id, 'report.pptx', { filter: req.query }, req.ip);
   res.set('Content-Type', 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
@@ -854,6 +894,15 @@ router.get('/audit', requireAdmin, (req, res) => {
 });
 
 // ---------------------------------------------------------------- envio: e-mail (SMTP) e WhatsApp, configurados pelo painel (somente admin)
+// ---------------------------------------------------------------- permissões (somente administrador)
+router.get('/permissions', requireAdmin, (req, res) => res.json({ catalog: permissions.CATALOG, adminOnly: permissions.ADMIN_ONLY, gestor: permissions.gestorValues() }));
+router.put('/permissions', requireAdmin, (req, res) => {
+  const before = permissions.gestorValues();
+  const after = permissions.saveGestorValues(req.body?.gestor);
+  audit(req.user.id, 'permissions.update', { changed: Object.keys(after).filter((k) => after[k] !== before[k]).map((k) => ({ key: k, to: after[k] })) }, req.ip);
+  res.json({ gestor: after });
+});
+
 router.get('/settings/delivery', requireAdmin, (req, res) => res.json(delivery.publicView()));
 router.put('/settings/delivery', requireAdmin, async (req, res) => {
   const b = req.body || {};

@@ -26,6 +26,7 @@
   let companyTz = 'America/Sao_Paulo';
   const fmtDate = (t, tz) => { try { return t ? new Date(t).toLocaleString('pt-BR', { timeZone: tz || companyTz, dateStyle: 'short', timeStyle: 'short' }) : '—'; } catch { return new Date(t).toLocaleString('pt-BR', { timeZone: companyTz, dateStyle: 'short', timeStyle: 'short' }); } };
   const fmtDateTz = fmtDate;
+  const can = (key) => me?.perms?.[key] === true; // a tela só esconde: quem decide é o servidor
   const fmtNps = (n) => (n === null || n === undefined ? '—' : (n > 0 ? '+' : '') + n.toLocaleString('pt-BR'));
   const npsClass = (n) => (n === null ? '' : n >= 50 ? 'good' : n >= 0 ? 'midc' : 'bad');
   const qLabel = (q) => (/[?:!.]$/.test(q) ? q + ' ' : q + ': ');
@@ -236,15 +237,15 @@
   // ------------------------------------------------------------ layout + rotas
   // [rota, rótulo, página, perfil exigido, grupo]
   const PAGES = [
-    ['dashboard', 'Visão geral', pageDashboard, null, 'Análise'],
-    ['casos', 'Casos', pageCases, null, 'Análise'],
-    ['respostas', 'Respostas', pageResponses, null, 'Análise'],
-    ['pesquisas', 'Pesquisas', pageSurveys, null, 'Coleta'],
-    ['filiais', 'Filiais', pageBranches, null, 'Coleta'],
-    ['dispositivos', 'Tablets', pageDevices, null, 'Coleta'],
-    ['usuarios', 'Usuários', pageUsers, 'admin', 'Administração'],
-    ['configuracoes', 'Configurações', pageSettings, 'admin', 'Administração'],
-    ['auditoria', 'Auditoria', pageAudit, 'admin', 'Administração'],
+    ['dashboard', 'Visão geral', pageDashboard, 'dashboard.view', 'Análise'],
+    ['casos', 'Casos', pageCases, 'cases.view', 'Análise'],
+    ['respostas', 'Respostas', pageResponses, 'responses.view', 'Análise'],
+    ['pesquisas', 'Pesquisas', pageSurveys, 'surveys.view', 'Coleta'],
+    ['filiais', 'Filiais', pageBranches, 'branches.view', 'Coleta'],
+    ['dispositivos', 'Tablets', pageDevices, 'devices.view', 'Coleta'],
+    ['usuarios', 'Usuários', pageUsers, 'users.view', 'Administração'],
+    ['configuracoes', 'Configurações', pageSettings, 'admin.settings', 'Administração'],
+    ['auditoria', 'Auditoria', pageAudit, 'admin.audit', 'Administração'],
     ['conta', 'Minha conta', pageAccount, null, 'Administração'],
   ];
   const menuIcon = (id) => settings?.menuIcons?.[id] || window.Icons.MENU_DEFAULTS[id];
@@ -252,7 +253,7 @@
   function layout(active, content) {
     const collapsed = prefs.get('sidebar', 'open') === 'collapsed';
     const shell = h('div', { class: 'layout' + (collapsed ? ' collapsed' : '') });
-    const visible = PAGES.filter((p) => !p[3] || me.role === p[3]);
+    const visible = PAGES.filter((p) => !p[3] || can(p[3]));
     const groups = [...new Set(visible.map((p) => p[4]))];
     const dark = document.documentElement.dataset.theme === 'dark';
     const toggleCollapse = () => {
@@ -308,7 +309,8 @@
       }
     }
     const [, name = 'dashboard', param] = location.hash.split('/');
-    const page = PAGES.find((p) => p[0] === name && (!p[3] || me.role === p[3])) || PAGES[0];
+    const allowed = PAGES.filter((p) => !p[3] || can(p[3]));
+    const page = allowed.find((p) => p[0] === name) || allowed[0];
     const container = h('div', {}, h('p', { class: 'muted' }, 'Carregando…'));
     layout(page[0], container);
     try { container.replaceChildren(await page[2](param)); } catch (e) { if (e.message !== '401') container.replaceChildren(h('div', { class: 'card bad' }, e.message)); }
@@ -397,8 +399,8 @@
 
   function exportButtons() {
     return [
-      h('button', { class: 'btn secondary', onclick: () => { location.href = '/api/admin/responses.csv?' + qs(filterState); } }, icon('download', 18), 'CSV'),
-      h('button', { class: 'btn', onclick: () => { toast('Gerando PowerPoint…'); location.href = '/api/admin/report.pptx?' + qs(filterState); } }, icon('slides', 18), 'Exportar PowerPoint'),
+      !can('responses.export') ? null : h('button', { class: 'btn secondary', onclick: () => { location.href = '/api/admin/responses.csv?' + qs(filterState); } }, icon('download', 18), 'CSV'),
+      !can('dashboard.export') ? null : h('button', { class: 'btn', onclick: () => { toast('Gerando PowerPoint…'); location.href = '/api/admin/report.pptx?' + qs(filterState); } }, icon('slides', 18), 'Exportar PowerPoint'),
     ];
   }
 
@@ -558,9 +560,9 @@
   async function openCase(caseId, reload) {
     let c;
     try { c = await api('/cases/' + caseId); } catch (ex) { toast(ex.message, true); return; }
-    const status = h('select', {}, Object.entries(c.statuses).map(([v, l]) => h('option', { value: v }, l)));
+    const status = h('select', { disabled: !can('cases.edit') }, Object.entries(c.statuses).map(([v, l]) => h('option', { value: v }, l)));
     status.value = c.status;
-    const who = h('select', {}, h('option', { value: '' }, '— ninguém —'), c.assignable.map((u) => h('option', { value: String(u.id) }, u.name)));
+    const who = h('select', { disabled: !can('cases.edit') }, h('option', { value: '' }, '— ninguém —'), c.assignable.map((u) => h('option', { value: String(u.id) }, u.name)));
     who.value = c.assignee_id ? String(c.assignee_id) : '';
     const note = h('textarea', { rows: '3', maxlength: '2000', placeholder: 'O que foi feito? Ex.: liguei para o cliente, ofereci desconto…' });
     const contact = c.contact ? h('div', { class: 'contact-box' },
@@ -578,8 +580,8 @@
         h('div', { class: 'small muted' }, `${fmtDate(n.at, c.tz)} · ${n.user || 'sistema'}${n.status_to ? ` · ${c.statuses[n.status_from] || n.status_from} → ${c.statuses[n.status_to]}` : ''}`),
         n.text ? h('div', {}, n.text) : null))) : h('p', { class: 'small muted' }, 'Nenhuma ação registrada ainda.'),
       h('div', { class: 'form-grid' }, h('label', { class: 'f' }, 'Status', status), h('label', { class: 'f' }, 'Responsável', who)),
-      h('label', { class: 'f' }, 'Anotação', note)),
-    [{ label: 'Salvar', onClick: async (close) => {
+      can('cases.edit') ? h('label', { class: 'f' }, 'Anotação', note) : null),
+    !can('cases.edit') ? [] : [{ label: 'Salvar', onClick: async (close) => {
       try {
         await api('/cases/' + c.id, { method: 'PUT', body: { status: status.value, assigneeId: who.value ? Number(who.value) : null, note: note.value } });
         close(); toast('Caso atualizado.'); if (location.hash !== '#/casos') history.replaceState(null, '', '#/casos'); reload();
@@ -608,7 +610,7 @@
 
   async function pageResponses() {
     await Promise.all([branches(), filterSurveys()]);
-    const isAdmin = me.role === 'admin'; // só administrador exclui respostas (o servidor também confere)
+    const isAdmin = can('responses.delete'); // o servidor também confere
     let page = 1;
     const body = h('div');
     // Apaga tudo o que o filtro atual mostra (limpeza dos testes). Exige digitar EXCLUIR.
@@ -675,7 +677,7 @@
   async function pageSurveys(param) {
     if (param) return surveyEditor(param === 'nova' ? null : Number(param));
     const list = await surveys(true);
-    const admin = me.role === 'admin';
+    const admin = can('surveys.edit');
     return h('div', {},
       pageHead('Pesquisas', 'Cada pesquisa principal reúne as perguntas e os momentos agendados dela',
         admin ? h('a', { class: 'btn', href: '#/pesquisas/nova' }, icon('plus', 18), 'Nova pesquisa') : null),
@@ -691,7 +693,7 @@
             admin ? h('button', { class: 'btn secondary sm', onclick: async () => {
               try { const r = await api(`/surveys/${s.id}/duplicate`, { method: 'POST' }); toast('Pesquisa duplicada.'); location.hash = '#/pesquisas/' + r.id; } catch (ex) { toast(ex.message, true); }
             } }, 'Duplicar') : null,
-            admin ? h('button', { class: 'btn danger sm', onclick: () => retireSurvey(s, route) }, s.responses > 0 ? 'Arquivar' : 'Excluir') : null))))
+            can('surveys.delete') ? h('button', { class: 'btn danger sm', onclick: () => retireSurvey(s, route) }, s.responses > 0 ? 'Arquivar' : 'Excluir') : null))))
           : h('tr', {}, h('td', { colspan: '7', class: 'empty' }, 'Nenhuma pesquisa criada.'))))));
   }
 
@@ -744,10 +746,10 @@
       card.replaceChildren(
         h('div', { class: 'topbar' }, h('div', {}, h('h2', {}, fixed ? 'Agendamentos desta pesquisa' : 'Agendamentos'),
           h('div', { class: 'small muted' }, 'A pesquisa entra e sai do ar sozinha nos horários definidos, sem ninguém precisar trocar. Quem já está respondendo termina a pesquisa que começou.')),
-        me.role === 'admin' && (!fixed || fixed.active) ? h('button', { class: 'btn secondary', onclick: add }, icon('calendar', 16), 'Agendar') : null),
+        can('schedules.manage') && (!fixed || fixed.active) ? h('button', { class: 'btn secondary', onclick: add }, icon('calendar', 16), 'Agendar') : null),
         rows.length ? h('div', { class: 'table-wrap' }, h('table', {}, h('thead', {}, h('tr', {}, fixed ? null : h('th', {}, 'Pesquisa'), h('th', {}, 'Filial'), h('th', {}, 'Período'), h('th', {}, 'Situação'), h('th', {}))),
           h('tbody', {}, rows.map((c) => h('tr', {}, fixed ? null : h('td', {}, c.survey), h('td', {}, c.branch || 'Todas'), h('td', { class: 'small' }, `${fmtDateTz(c.starts_at, c.tz)} → ${fmtDateTz(c.ends_at, c.tz)}`),
-            h('td', {}, status(c)), h('td', {}, me.role === 'admin' && c.ends_at > now ? h('button', { class: 'btn secondary sm', onclick: () => editPeriod(c, brs, draw) }, 'Editar') : null, ' ', me.role === 'admin' ? h('button', { class: 'btn secondary sm', onclick: async () => {
+            h('td', {}, status(c)), h('td', {}, can('schedules.manage') && c.ends_at > now ? h('button', { class: 'btn secondary sm', onclick: () => editPeriod(c, brs, draw) }, 'Editar') : null, ' ', me.role === 'admin' ? h('button', { class: 'btn secondary sm', onclick: async () => {
               const onAir = c.starts_at <= Date.now() && c.ends_at > Date.now();
               if (!confirm(onAir ? 'Encerrar este período agora? A pesquisa sai do ar e os tablets voltam para a pesquisa seguinte.' : 'Excluir este agendamento?')) return;
               try { const r = await api('/schedules/' + c.id, { method: 'DELETE' }); toast(r.action === 'ended' ? 'Período encerrado agora.' : 'Agendamento excluído.'); cache.branches = null; await draw(); } catch (ex) { toast(ex.message, true); }
@@ -1060,7 +1062,7 @@
   async function surveyEditor(sid) {
     const s = sid ? await api('/surveys/' + sid) : structuredClone(NEW_SURVEY);
     const isMoment = !!s.parent;
-    const ro = me.role !== 'admin' || !!s.archived_at;
+    const ro = !can('surveys.edit') || !!s.archived_at;
     const locked = s.has_responses;
     const totalResponses = s.has_responses || (s.moments || []).some((m) => m.responses > 0);
     const noun = isMoment ? 'momento' : 'pesquisa';
@@ -1180,7 +1182,7 @@
                 if (!leaveOk()) return;
                 try { const r = await api(`/surveys/${m.id}/duplicate`, { method: 'POST' }); dirty = false; toast('Momento duplicado, sem períodos.'); location.hash = '#/pesquisas/' + r.id; } catch (ex) { toast(ex.message, true); }
               } }, 'Duplicar'),
-              ro ? null : h('button', { class: 'btn danger sm', onclick: () => retireSurvey({ id: m.id, title: m.title, responses: m.responses }, refresh) }, m.responses > 0 ? 'Arquivar' : 'Excluir')))))
+              ro || !can('surveys.delete') ? null : h('button', { class: 'btn danger sm', onclick: () => retireSurvey({ id: m.id, title: m.title, responses: m.responses }, refresh) }, m.responses > 0 ? 'Arquivar' : 'Excluir')))))
             : h('p', { class: 'muted small' }, 'Nenhum momento criado.'),
           ...[ro ? null : !s.active ? h('p', { class: 'small muted' }, 'Ative a pesquisa e salve para poder criar momentos.')
             : h('form', { class: 'q-new-moment', onsubmit: (e) => { e.preventDefault(); create(); }, oninput: (e) => e.stopPropagation(), onchange: (e) => e.stopPropagation() },
@@ -1218,7 +1220,7 @@
       h('label', { class: 'f' }, 'Imagem ou vídeo curto (até 25 MB)', file, mediaPreview)));
     const fold = (title, ...content) => h('details', { class: 'card' }, h('summary', {}, h('b', {}, title)), ...content);
 
-    const retire = !sid || ro || isMoment ? null
+    const retire = !sid || ro || isMoment || !can('surveys.delete') ? null
       : h('button', { class: 'btn danger', onclick: () => retireSurvey({ id: sid, title: s.title, responses: totalResponses ? 1 : 0, moments: (s.moments || []).length }, () => { dirty = false; location.hash = '#/pesquisas'; }) }, totalResponses ? 'Arquivar' : 'Excluir');
 
     const page = h('div', { class: 'editor-page' },
@@ -1251,7 +1253,7 @@
 
   async function pageBranches() {
     const [list, svs, tzInfo] = await Promise.all([branches(true), surveys(true), api('/timezones')]);
-    const isAdmin = me.role === 'admin';
+    const isAdmin = can('branches.edit');
     const tzName = (tz) => (tzInfo.choices.find((c) => c.value === tz)?.label) || tz;
     const edit = (b = {}) => {
       const tzSel = h('select', {}, h('option', { value: 'auto' }, 'Automático — usar o fuso do tablet'), tzInfo.choices.map((c) => h('option', { value: c.value }, c.label)));
@@ -1301,7 +1303,7 @@
       h('div', { class: 'card table-wrap' }, h('table', {},
         h('thead', {}, h('tr', {}, h('th', {}, 'Código'), h('th', {}, 'Filial'), h('th', {}, 'Pesquisa padrão dos tablets'), h('th', {}, 'Meta'), h('th', {}, 'Tablets'), h('th', {}, 'Status'), h('th', {}))),
         h('tbody', {}, list.length ? list.map((b) => {
-          const sel = h('select', { onchange: async (e) => {
+          const sel = h('select', { disabled: !can('branches.survey'), onchange: async (e) => {
             try { await api(`/branches/${b.id}/survey`, { method: 'PUT', body: { surveyId: e.target.value ? Number(e.target.value) : null } }); toast('Pesquisa da filial atualizada. Os tablets recebem em até 1 minuto.'); cache.branches = null; } catch (ex) { toast(ex.message, true); }
           } }, h('option', { value: '' }, '— nenhuma —'), svs.filter((s) => s.active).map((s) => h('option', { value: String(s.id) }, s.title)));
           sel.value = b.survey_id ? String(b.survey_id) : '';
@@ -1313,12 +1315,12 @@
             h('td', {}, h('div', { class: 'row' },
               h('button', { class: 'btn secondary sm', onclick: () => openLink(b) }, 'QR Code'),
               isAdmin ? h('button', { class: 'btn secondary sm', onclick: () => edit(b) }, 'Editar') : null,
-              isAdmin && !b.responses ? h('button', { class: 'btn danger sm', onclick: async () => {
+              can('branches.delete') && !b.responses ? h('button', { class: 'btn danger sm', onclick: async () => {
                 const extra = b.devices ? ` Os ${b.devices} tablet(s) dela também serão excluídos.` : '';
                 if (!confirm(`Excluir a filial "${b.name}" definitivamente?${extra} Isso não pode ser desfeito.`)) return;
                 try { await api('/branches/' + b.id, { method: 'DELETE' }); cache.branches = null; toast('Filial excluída.'); route(); } catch (ex) { toast(ex.message, true); }
               } }, 'Excluir') : null,
-              isAdmin && b.responses && b.active ? h('button', { class: 'btn danger sm', title: 'Tem pesquisas respondidas: o histórico é mantido', onclick: async () => {
+              can('branches.delete') && b.responses && b.active ? h('button', { class: 'btn danger sm', title: 'Tem pesquisas respondidas: o histórico é mantido', onclick: async () => {
                 if (!confirm(`Desativar a filial "${b.name}"? Ela tem pesquisas respondidas, que continuam nos relatórios. Os tablets dela deixam de coletar.`)) return;
                 try { await api(`/branches/${b.id}/deactivate`, { method: 'POST' }); cache.branches = null; toast('Filial desativada.'); route(); } catch (ex) { toast(ex.message, true); }
               } }, 'Desativar') : null)));
@@ -1328,7 +1330,7 @@
   // Link/QR Code público da filial + cartaz para imprimir.
   async function openLink(b) {
     let info = await api(`/branches/${b.id}/public-link`);
-    const isAdmin = me.role === 'admin';
+    const isAdmin = can('branches.link');
     const box = h('div');
     const draw = () => {
       box.replaceChildren(
@@ -1378,22 +1380,22 @@
     };
     return h('div', {},
       pageHead('Tablets', 'Dispositivos de coleta vinculados às filiais', h('button', { class: 'btn secondary', onclick: showGuide }, icon('file', 18), 'Guia de instalação'),
-        brs.length ? h('button', { class: 'btn', onclick: add }, icon('plus', 18), 'Novo tablet') : null),
+        brs.length && can('devices.manage') ? h('button', { class: 'btn', onclick: add }, icon('plus', 18), 'Novo tablet') : null),
       h('p', { class: 'muted' }, 'Cada tablet é vinculado a uma única filial. As respostas coletadas nele são sempre gravadas nessa filial — o tablet não consegue escolher ou trocar de filial.'),
       h('div', { class: 'card table-wrap' }, h('table', {},
         h('thead', {}, h('tr', {}, h('th', {}, 'Tablet'), h('th', {}, 'Filial'), h('th', {}, 'Status'), h('th', {}, 'Último contato'), h('th', {}))),
         h('tbody', {}, devs.length ? devs.map((d) => h('tr', {},
           h('td', {}, h('b', {}, d.name), h('div', { class: 'small muted' }, d.timezone ? `Fuso do tablet: ${d.timezone}` : 'Fuso ainda não informado')), h('td', {}, d.branch_name), h('td', {}, status(d)), h('td', {}, fmtDate(d.last_seen_at, d.tz)),
           h('td', {}, h('div', { class: 'row' },
-            h('button', { class: 'btn secondary sm', onclick: async () => {
+            !can('devices.manage') ? null : h('button', { class: 'btn secondary sm', onclick: async () => {
               if (d.paired && !confirm('Gerar novo código desconecta o tablet atual até ele ser pareado de novo. Continuar?')) return;
               try { const r = await api(`/devices/${d.id}/pairing-code`, { method: 'POST' }); await route(); showCode(r, d.name); } catch (ex) { toast(ex.message, true); }
             } }, 'Novo código'),
-            d.active ? h('button', { class: 'btn danger sm', onclick: async () => {
+            d.active && can('devices.revoke') ? h('button', { class: 'btn danger sm', onclick: async () => {
               if (!confirm(`Revogar o acesso do tablet "${d.name}"? Ele deixará de coletar respostas imediatamente.`)) return;
               try { await api(`/devices/${d.id}/revoke`, { method: 'POST' }); toast('Tablet revogado.'); route(); } catch (ex) { toast(ex.message, true); }
             } }, 'Revogar') : null,
-            me.role === 'admin' ? h('button', { class: 'btn danger sm', onclick: async () => {
+            can('devices.delete') ? h('button', { class: 'btn danger sm', onclick: async () => {
               if (!confirm(`Excluir o tablet "${d.name}" definitivamente? Ele perde o acesso, e respostas guardadas nele sem internet não poderão mais ser enviadas. As respostas já recebidas continuam na filial.`)) return;
               try { await api('/devices/' + d.id, { method: 'DELETE' }); toast('Tablet excluído.'); route(); } catch (ex) { toast(ex.message, true); }
             } }, 'Excluir') : null))))
@@ -1434,9 +1436,9 @@
       const brBox = h('div', {}, brs.map((b) => h('label', { class: 'chk' },
         h('input', { type: 'checkbox', checked: chosen.has(b.id), onchange: (e) => { e.target.checked ? chosen.add(b.id) : chosen.delete(b.id); } }), b.name)));
       modal(u.id ? 'Editar usuário' : 'Novo usuário', h('div', { class: 'form-grid' },
-        h('label', { class: 'f' }, 'Nome', name), h('label', { class: 'f' }, 'E-mail', email), h('label', { class: 'f' }, 'Perfil', role),
+        h('label', { class: 'f' }, 'Nome', name), h('label', { class: 'f' }, 'E-mail', email), me.role === 'admin' ? h('label', { class: 'f' }, 'Perfil', role) : null,
         h('label', { class: 'f' }, 'Senha', pw), h('label', { class: 'chk' }, active, 'Ativo'),
-        u.id && u.totp_enabled && u.id !== me.id ? h('label', { class: 'chk', title: 'Use quando a pessoa perdeu o celular' }, resetMfa, 'Resetar 2FA (perdeu o celular)') : null,
+        me.role === 'admin' && u.id && u.totp_enabled && u.id !== me.id ? h('label', { class: 'chk', title: 'Use quando a pessoa perdeu o celular' }, resetMfa, 'Resetar 2FA (perdeu o celular)') : null,
         h('div', {}, h('div', { class: 'small muted' }, 'Filiais que o gestor pode ver'), brBox)),
       [{ label: 'Salvar', onClick: async (close) => {
         try {
@@ -1448,7 +1450,7 @@
     };
     const bName = (id) => brs.find((b) => b.id === id)?.name || id;
     return h('div', {},
-      pageHead('Usuários', 'Administradores e gestores de filial', h('button', { class: 'btn', onclick: () => edit() }, icon('plus', 18), 'Novo usuário')),
+      pageHead('Usuários', me.role === 'admin' ? 'Administradores e gestores de filial' : 'Gestores das suas filiais', can('users.create') ? h('button', { class: 'btn', onclick: () => edit() }, icon('plus', 18), 'Novo usuário') : null),
       h('div', { class: 'card table-wrap' }, h('table', {},
         h('thead', {}, h('tr', {}, h('th', {}, 'Nome'), h('th', {}, 'Perfil'), h('th', {}, 'Filiais'), h('th', {}, 'Status'), h('th', {}))),
         h('tbody', {}, users.map((u) => h('tr', {},
@@ -1458,7 +1460,7 @@
           h('td', {}, h('span', { class: 'badge ' + (u.active ? 'ok' : 'off') }, u.active ? 'Ativo' : 'Inativo'),
             u.locked_until && u.locked_until > Date.now() ? h('span', { class: 'badge warn' }, 'Bloqueado') : null,
             u.totp_enabled ? h('span', { class: 'badge ok', title: 'Verificação em duas etapas ativa' }, icon('shield', 12), '2FA') : null),
-          h('td', {}, h('button', { class: 'btn secondary sm', onclick: () => edit(u) }, 'Editar'))))))));
+          h('td', {}, u.can_edit && can('users.edit') ? h('button', { class: 'btn secondary sm', onclick: () => edit(u) }, 'Editar') : null)))))));
   }
 
   // ------------------------------------------------------------ configurações
@@ -1483,15 +1485,17 @@
       } catch (ex) { toast(ex.message, true); }
     };
     const tabs = [['identidade', 'Identidade visual', 'palette'], ['menu', 'Ícones do menu', 'layout'], ['respostas', 'Ícones das respostas', 'star'],
-      ['envios', 'E-mail e WhatsApp', 'mail'], ['alertas', 'Alertas e relatórios', 'bell'], ['seguranca', 'Segurança e LGPD', 'shield']];
-    const TAB = { identidade: identityTab, menu: menuTab, respostas: ratingTab, envios: deliveryTab, alertas: alertsTab, seguranca: securityTab };
+      ['envios', 'E-mail e WhatsApp', 'mail'], ['alertas', 'Alertas e relatórios', 'bell'], ['seguranca', 'Segurança e LGPD', 'shield'], ['permissoes', 'Permissões', 'key']];
+    const TAB = { identidade: identityTab, menu: menuTab, respostas: ratingTab, envios: deliveryTab, alertas: alertsTab, seguranca: securityTab, permissoes: permissionsTab };
+    const saveAll = h('button', { class: 'btn', onclick: save }, 'Salvar configurações');
     const renderTab = async () => {
       const content = await (TAB[settingsTab] || identityTab)(st, renderTab);
+      saveAll.style.display = settingsTab === 'permissoes' ? 'none' : ''; // a guia tem o próprio botão
       body.replaceChildren(h('div', { class: 'tabs' }, tabs.map(([k, label, ic]) => h('button', { class: settingsTab === k ? 'active' : '',
         onclick: () => { settingsTab = k; renderTab(); } }, icon(ic, 16), label))), content);
     };
     await renderTab();
-    return h('div', {}, pageHead('Configurações', 'Marca, ícones, alertas, relatórios, segurança e LGPD', h('button', { class: 'btn', onclick: save }, 'Salvar configurações')), body);
+    return h('div', {}, pageHead('Configurações', 'Marca, ícones, alertas, relatórios, segurança, LGPD e permissões', saveAll), body);
   }
 
   function identityTab(st, rerender) {
@@ -1626,6 +1630,42 @@
           h('div', { class: 'form-grid' }, h('label', { class: 'f' }, 'Meta de NPS padrão (cada filial pode ter a sua)', goal)),
           chk(st.offlineAlert.enabled, (v) => { st.offlineAlert.enabled = v; }, 'Avisar quando um tablet ficar sem sinal no horário de funcionamento'),
           h('div', { class: 'form-grid' }, h('label', { class: 'f' }, 'Minutos sem sinal para avisar', offMin)))));
+  }
+
+  // ------------------------------------------------------------ aba: permissões
+  async function permissionsTab() {
+    const { catalog, adminOnly, gestor } = await api('/permissions');
+    const values = { ...gestor };
+    const items = catalog.flatMap((g) => g.items);
+    const boxes = new Map();
+    // Sem o item de que depende, a ação fica desligada e travada.
+    const sync = () => {
+      for (const it of items) {
+        const box = boxes.get(it.key);
+        const off = it.needs && !values[it.needs];
+        if (off) values[it.key] = false;
+        box.checked = values[it.key]; box.disabled = !!off;
+      }
+    };
+    const lockCell = (txt) => h('td', { class: 'perm-cell' }, h('span', { class: 'perm-lock', title: txt }, icon('lock', 14), txt));
+    const head = (title) => h('tr', { class: 'perm-group' }, h('td', { colspan: '3' }, h('b', {}, title)));
+    const rows = catalog.flatMap((g) => [head(g.menu), ...g.items.map((it) => {
+      const box = h('input', { type: 'checkbox', 'aria-label': `${g.menu}: ${it.label}`, onchange: (e) => { values[it.key] = e.target.checked; sync(); } });
+      boxes.set(it.key, box);
+      return h('tr', {}, h('td', { 'data-label': '' }, it.label), lockCell('Sempre'), h('td', { class: 'perm-cell', 'data-label': 'Gestor' }, box));
+    })]);
+    sync();
+    return h('div', { class: 'card' },
+      h('h2', {}, 'Permissões por perfil'),
+      h('p', { class: 'small muted' }, 'O administrador tem acesso ilimitado, que não pode ser retirado. A tabela do gestor vale para todos os gestores, sempre limitada às filiais de cada um. A mudança vale na hora; quem estiver com o painel aberto vê os menus novos ao recarregar.'),
+      h('div', { class: 'table-wrap perm-table' }, h('table', {},
+        h('thead', {}, h('tr', {}, h('th', {}, 'Menu e ação'), h('th', { class: 'perm-cell' }, 'Administrador'), h('th', { class: 'perm-cell' }, 'Gestor'))),
+        h('tbody', {}, rows,
+          adminOnly.flatMap((a) => [head(a.menu), h('tr', {}, h('td', {}, a.label), lockCell('Sempre'), lockCell('Nunca'))]),
+          head('Minha conta'), h('tr', {}, h('td', {}, 'Senha, 2FA e avisos da própria conta'), lockCell('Sempre'), lockCell('Sempre'))))),
+      h('div', { class: 'row mt' }, h('button', { class: 'btn', onclick: async () => {
+        try { await api('/permissions', { method: 'PUT', body: { gestor: values } }); toast('Permissões salvas.'); } catch (ex) { toast(ex.message, true); }
+      } }, 'Salvar permissões')));
   }
 
   // ------------------------------------------------------------ aba: e-mail (SMTP) e WhatsApp
@@ -1824,6 +1864,7 @@
       case 'settings.delivery': return E('cadastros', 'warn', 'Alterou a configuração de e-mail/WhatsApp', [d.smtp && `E-mail: ${d.smtp}`, d.whatsapp && `WhatsApp: ${d.whatsapp}`].filter(Boolean).join(' · ') + '. (senhas e tokens não são registrados)');
       case 'device.create': return E('tablets', '', `Cadastrou o tablet "${d.name || '#' + d.id}"`, d.branchId ? `Filial: ${brName(d.branchId)}.` : '');
       case 'device.new_code': return E('tablets', 'warn', `Gerou um novo código de pareamento para o tablet "${ctx.devices.get(Number(d.id)) || '#' + d.id}"`, 'O tablet atual perdeu o acesso até ser pareado de novo.');
+      case 'permissions.update': return E('cadastros', 'warn', 'Alterou as permissões do gestor', `${(d.changed || []).length} item(ns) alterado(s).`);
       case 'device.delete': return E('tablets', 'warn', `Excluiu o tablet "${d.name || '#' + d.id}"`, 'As respostas já recebidas continuam na filial.');
       case 'branch.delete': return E('cadastros', 'warn', `Excluiu a filial "${d.name || d.code || '#' + d.id}"`, d.devices ? `${d.devices} tablet(s) excluído(s) junto.` : '');
       case 'device.revoke': return E('tablets', 'warn', `Revogou o acesso do tablet "${ctx.devices.get(Number(d.id)) || '#' + d.id}"`, 'Ele não coleta mais respostas.');

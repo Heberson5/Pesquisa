@@ -227,6 +227,7 @@ for (const [table, column, ddl] of [
   ['users', 'notify_reports', 'notify_reports INTEGER NOT NULL DEFAULT 1'],
   ['users', 'notify_offline', 'notify_offline INTEGER NOT NULL DEFAULT 1'],
   ['users', 'whatsapp', 'whatsapp TEXT'],
+  ['users', 'created_by', 'created_by INTEGER'], // quem cadastrou: gestor só edita quem ele criou
   ['sessions', 'mfa_setup_required', 'mfa_setup_required INTEGER NOT NULL DEFAULT 0'],
   ['responses', 'channel', "channel TEXT NOT NULL DEFAULT 'tablet'"],
   ['responses', 'lang', 'lang TEXT'],
