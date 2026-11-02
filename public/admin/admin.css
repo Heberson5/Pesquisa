@@ -346,3 +346,20 @@ img, svg, video, canvas { max-width: 100%; }
   .q-range { flex: 1 1 100%; }
   .q-range input { flex: 1; width: auto; }
 }
+
+/* ---------- celular: a tela nunca anda para o lado; tudo se ajusta à largura */
+@media (max-width: 900px) {
+  html { overflow-x: hidden; }
+  .layout, .main { overflow-x: clip; }
+  .main input, .main select, .main textarea, .main label, .main .btn, .modal input, .modal select, .modal textarea, .modal label, .modal .btn { max-width: 100%; }
+  label.chk { min-width: 0; white-space: normal; }
+  .main .btn, .modal .btn { white-space: normal; text-align: center; }
+  input[type=date], input[type=time], input[type=datetime-local] { -webkit-appearance: none; appearance: none; min-width: 0; width: 100%; }
+  code, pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+}
+@media (max-width: 640px) {
+  html, body { touch-action: pan-y; }
+}
+
+/* título longo de momento quebra a linha em vez de empurrar a tela */
+.q-editor .row > b:not(.q-num) { flex: 1 1 200px; min-width: 0; overflow-wrap: anywhere; }
