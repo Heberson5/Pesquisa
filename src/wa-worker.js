@@ -16,7 +16,10 @@ const silent = { level: 'silent', trace() {}, debug() {}, info() {}, warn() {}, 
 let lib = null; let sock = null; let attempts = 0; let downNotified = false; let reconnectTimer = null; let busy = false;
 const hasSession = () => fs.existsSync(path.join(AUTH_DIR, 'creds.json'));
 const clearSession = () => fs.rmSync(AUTH_DIR, { recursive: true, force: true });
-const log = (...a) => console.log(new Date().toISOString(), '[whatsapp]', ...a);
+const log = (...a) => process.stdout.write(`${new Date().toISOString()} [whatsapp] ${a.join(' ')}
+`);
+// A biblioteca de criptografia imprime chaves da sessão no console: nada disso pode ir para os logs do servidor.
+for (const level of ['log', 'info', 'warn', 'debug', 'error']) console[level] = () => {};
 
 function closeSocket() {
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
