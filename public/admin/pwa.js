@@ -30,7 +30,9 @@
     document.body.appendChild(bar);
   }
 
-  window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); deferred = e; banner('Instale o painel no seu celular para abrir como aplicativo.', 'Instalar'); });
+  // O convite é para o celular: no computador ele só cobriria a tela.
+  const phone = () => window.matchMedia('(max-width: 900px)').matches;
+  window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); deferred = e; if (phone()) banner('Instale o painel no seu celular para abrir como aplicativo.', 'Instalar'); });
   window.addEventListener('appinstalled', () => { document.getElementById('pwa-banner')?.remove(); });
   // iPhone/iPad (Safari) não tem o evento: mostra o caminho manual.
   const ios = /iphone|ipad|ipod/i.test(navigator.userAgent) && !window.MSStream;

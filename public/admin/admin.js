@@ -22,8 +22,10 @@
     for (const c of children.flat(Infinity)) if (c !== null && c !== undefined && c !== false) el.append(c instanceof Node ? c : String(c));
     return el;
   }
-  const fmtDate = (t) => (t ? new Date(t).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : '—');
-  const fmtDateTz = (t, tz) => { try { return t ? new Date(t).toLocaleString('pt-BR', { timeZone: tz || undefined, dateStyle: 'short', timeStyle: 'short' }) : '—'; } catch { return fmtDate(t); } };
+  // Sempre em um fuso definido: o da filial quando houver; sem filial, o da empresa. Nunca o do aparelho ou do servidor.
+  let companyTz = 'America/Sao_Paulo';
+  const fmtDate = (t, tz) => { try { return t ? new Date(t).toLocaleString('pt-BR', { timeZone: tz || companyTz, dateStyle: 'short', timeStyle: 'short' }) : '—'; } catch { return new Date(t).toLocaleString('pt-BR', { timeZone: companyTz, dateStyle: 'short', timeStyle: 'short' }); } };
+  const fmtDateTz = fmtDate;
   const fmtNps = (n) => (n === null || n === undefined ? '—' : (n > 0 ? '+' : '') + n.toLocaleString('pt-BR'));
   const npsClass = (n) => (n === null ? '' : n >= 50 ? 'good' : n >= 0 ? 'midc' : 'bad');
   const qLabel = (q) => (/[?:!.]$/.test(q) ? q + ' ' : q + ': ');
@@ -226,7 +228,7 @@
       Object.assign(caseState, { status: 'pendentes', branchId: '', mine: '' });
     }
     lastUserId = r.user.id;
-    me = r.user; csrf = r.csrf; questionTypes = r.questionTypes; displays = r.displays; settings = r.settings; contactModes = r.contactModes;
+    me = r.user; csrf = r.csrf; companyTz = r.companyTz || companyTz; questionTypes = r.questionTypes; displays = r.displays; settings = r.settings; contactModes = r.contactModes;
     applyBranding({ companyName: settings.companyName, primaryColor: settings.primaryColor, accentColor: settings.accentColor,
       logoUrl: settings.logoMediaId ? '/media/' + settings.logoMediaId : null });
   }
@@ -447,7 +449,7 @@
         h('div', { class: 'card' }, h('h2', {}, 'NPS por pergunta marcada'), byQuestion),
         h('div', { class: 'card comments-card' }, h('h2', {}, 'Comentários recentes'), s.comments.length ? s.comments.map((c) => h('div', { class: 'comment' },
           h('span', { class: 'comment-icon' }, icon('message', 16)),
-          h('div', {}, h('div', {}, c.comment), h('div', { class: 'small muted' }, `${c.branch} · ${fmtDate(c.submitted_at)}`)))) : h('p', { class: 'muted' }, 'Sem comentários.'))));
+          h('div', {}, h('div', {}, c.comment), h('div', { class: 'small muted' }, `${c.branch} · ${fmtDate(c.submitted_at, c.tz)}`)))) : h('p', { class: 'muted' }, 'Sem comentários.'))));
   }
 
   // De onde vieram as respostas do QR Code (somente quem autorizou a localização).
@@ -525,7 +527,7 @@
       body.replaceChildren(h('div', { class: 'card table-wrap' }, h('table', {},
         h('thead', {}, h('tr', {}, h('th', {}, 'Quando'), h('th', {}, 'Filial'), h('th', {}, 'Nota'), h('th', {}, 'Comentário'), h('th', {}, 'Status'), h('th', {}, 'Responsável'), h('th', {}))),
         h('tbody', {}, r.rows.length ? r.rows.map((c) => h('tr', {},
-          h('td', {}, fmtDate(c.created_at), c.channel === 'link' ? h('div', { class: 'small muted' }, 'via QR Code') : null),
+          h('td', {}, fmtDate(c.created_at, c.tz), c.channel === 'link' ? h('div', { class: 'small muted' }, 'via QR Code') : null),
           h('td', {}, c.branch), h('td', {}, h('b', { class: 'bad' }, c.min_score)),
           h('td', { class: 'small' }, c.comment ? (c.comment.length > 90 ? c.comment.slice(0, 90) + '…' : c.comment) : h('span', { class: 'muted' }, '—'),
             c.has_contact ? h('div', {}, h('span', { class: 'badge ok' }, 'Pediu contato')) : null),
@@ -564,14 +566,14 @@
       c.contact.phone ? h('div', {}, h('a', { href: 'tel:+' + (c.contact.phone.length <= 11 ? '55' : '') + c.contact.phone }, c.contact.phone),
         ' · ', h('a', { href: 'https://wa.me/' + (c.contact.phone.length <= 11 ? '55' : '') + c.contact.phone, target: '_blank', rel: 'noopener noreferrer' }, 'WhatsApp')) : null,
       c.contact.email ? h('div', {}, h('a', { href: 'mailto:' + c.contact.email }, c.contact.email)) : null,
-      h('div', { class: 'small muted' }, 'Consentimento em ' + fmtDate(c.contact.consentAt))) : h('p', { class: 'small muted' }, 'O cliente não deixou contato.');
+      h('div', { class: 'small muted' }, 'Consentimento em ' + fmtDate(c.contact.consentAt, c.tz))) : h('p', { class: 'small muted' }, 'O cliente não deixou contato.');
     modal(`Caso #${c.id} · ${c.branch}`, h('div', {},
-      h('p', { class: 'small muted' }, `${fmtDate(c.submitted_at)} · ${c.survey}${c.channel === 'link' ? ' · via QR Code' : c.device ? ' · ' + c.device : ''}`),
+      h('p', { class: 'small muted' }, `${fmtDate(c.submitted_at, c.tz)} · ${c.survey}${c.channel === 'link' ? ' · via QR Code' : c.device ? ' · ' + c.device : ''}`),
       h('ul', { class: 'answers' }, c.answers.map((a) => h('li', {}, h('b', {}, qLabel(a.question)), a.value))),
       contact,
       h('h2', {}, 'Histórico'),
       c.notes.length ? h('ul', { class: 'timeline' }, c.notes.map((n) => h('li', {},
-        h('div', { class: 'small muted' }, `${fmtDate(n.at)} · ${n.user || 'sistema'}${n.status_to ? ` · ${c.statuses[n.status_from] || n.status_from} → ${c.statuses[n.status_to]}` : ''}`),
+        h('div', { class: 'small muted' }, `${fmtDate(n.at, c.tz)} · ${n.user || 'sistema'}${n.status_to ? ` · ${c.statuses[n.status_from] || n.status_from} → ${c.statuses[n.status_to]}` : ''}`),
         n.text ? h('div', {}, n.text) : null))) : h('p', { class: 'small muted' }, 'Nenhuma ação registrada ainda.'),
       h('div', { class: 'form-grid' }, h('label', { class: 'f' }, 'Status', status), h('label', { class: 'f' }, 'Responsável', who)),
       h('label', { class: 'f' }, 'Anotação', note)),
@@ -630,7 +632,7 @@
         h('div', { class: 'table-wrap' }, h('table', {},
           h('thead', {}, h('tr', {}, h('th', {}, 'Data'), h('th', {}, 'Filial'), h('th', {}, 'Localização'), h('th', {}, 'Dispositivo'), h('th', {}, 'Pesquisa'), h('th', {}, 'Respostas'), isAdmin ? h('th', {}) : null)),
           h('tbody', {}, r.rows.length ? r.rows.map((x) => h('tr', {},
-            h('td', {}, fmtDate(x.submitted_at), x.lang && x.lang !== 'pt' ? h('div', {}, h('span', { class: 'badge' }, x.lang.toUpperCase())) : null),
+            h('td', {}, fmtDate(x.submitted_at, x.tz), x.lang && x.lang !== 'pt' ? h('div', {}, h('span', { class: 'badge' }, x.lang.toUpperCase())) : null),
             h('td', {}, x.branch),
             h('td', {}, locationBadge(x)),
             h('td', {}, deviceBadge(x)), h('td', {}, x.survey),
@@ -681,7 +683,7 @@
           h('td', {}, h('b', {}, s.title), h('div', { class: 'small muted' }, 'Atualizada ' + fmtDate(s.updated_at))),
           h('td', {}, s.questions), h('td', {}, s.moments), h('td', {}, s.responses),
           h('td', {}, h('span', { class: 'badge ' + (s.active ? 'ok' : 'off') }, s.active ? 'Ativa' : 'Inativa')),
-          h('td', { class: 'small' }, s.on_air_until ? h('span', { class: 'badge ok' }, `No ar até ${fmtDate(s.on_air_until)}`) : s.next_start ? h('span', { class: 'badge warn' }, `Entra em ${fmtDate(s.next_start)}`) : h('span', { class: 'muted' }, '—')),
+          h('td', { class: 'small' }, s.on_air_until ? h('span', { class: 'badge ok' }, `No ar até ${fmtDate(s.on_air_until, s.on_air_tz)}`) : s.next_start ? h('span', { class: 'badge warn' }, `Entra em ${fmtDate(s.next_start, s.next_tz)}`) : h('span', { class: 'muted' }, '—')),
           h('td', {}, h('div', { class: 'row' },
             h('a', { class: 'btn secondary sm', href: '#/pesquisas/' + s.id }, admin ? 'Editar' : 'Ver'),
             admin ? h('button', { class: 'btn secondary sm', onclick: async () => {
@@ -706,7 +708,7 @@
     const en = h('input', { type: 'datetime-local', value: toLocalInput(c.ends_at, c.tz) });
     modal('Editar agendamento', h('div', { class: 'form-grid' }, h('label', { class: 'f' }, 'Filial', br),
       h('label', { class: 'f' }, 'Entra no ar', st), h('label', { class: 'f' }, 'Sai do ar', en),
-      h('p', { class: 'small muted' }, onAir ? 'Este período já está no ar: só o horário de saída pode mudar.' : 'O dia e a hora valem no fuso da filial escolhida (ou no da empresa, quando for "Todas as filiais").'),
+      h('p', { class: 'small muted' }, onAir ? 'Este período já está no ar: só o horário de saída pode mudar.' : 'O dia e a hora valem no horário local da filial. Em "Todas as filiais", cada filial segue o próprio relógio.'),
       h('p', { class: 'small muted' }, 'Os tablets com internet recebem a mudança em até 1 minuto. Um tablet sem internet segue o horário anterior até se conectar.')),
     [{ label: 'Salvar', onClick: async (close) => {
       try {
@@ -729,7 +731,7 @@
         const st = h('input', { type: 'datetime-local' }); const en = h('input', { type: 'datetime-local' });
         modal(fixed ? `Agendar "${fixed.title}"` : 'Agendar pesquisa', h('div', { class: 'form-grid' }, sv ? h('label', { class: 'f' }, 'Pesquisa', sv) : null, h('label', { class: 'f' }, 'Filial', br),
           h('label', { class: 'f' }, 'Entra no ar', st), h('label', { class: 'f' }, 'Sai do ar', en),
-          h('p', { class: 'small muted' }, 'O dia e a hora valem no fuso da filial escolhida (ou no da empresa, quando for "Todas as filiais"). A troca é automática nos tablets e no QR Code.')),
+          h('p', { class: 'small muted' }, 'O dia e a hora valem no horário local da filial. Em "Todas as filiais", cada filial segue o próprio relógio. A troca é automática nos tablets e no QR Code.')),
         [{ label: 'Agendar', onClick: async (close) => {
           try {
             await api('/schedules', { method: 'POST', body: { surveyId: fixed ? fixed.id : Number(sv.value), branchId: br.value ? Number(br.value) : null, startsAt: st.value, endsAt: en.value } });
@@ -924,9 +926,9 @@
           const last = out[out.length - 1];
           if (last && last[1] === v - 1) last[1] = v; else out.push([v, v]);
         }
-        return out.map(([a, b]) => (a === b ? `Se ${a}` : `Se ${a} a ${b}`));
+        return out.map(([a, b]) => ({ label: a === b ? `Se ${a}` : `Se ${a} a ${b}`, cond: a === b ? { op: 'eq', value: a } : a === min ? { op: 'lte', value: b } : b === max ? { op: 'gte', value: a } : { op: 'between', value: [a, b] } }));
       }
-      return condPresets(m).filter((p) => !conds.some((c) => condKey(c) === condKey(p) || (c.op === 'in' && c.value.includes(p.value)))).map((p) => condText(p, m));
+      return condPresets(m).filter((p) => !conds.some((c) => condKey(c) === condKey(p) || (c.op === 'in' && c.value.includes(p.value)))).map((p) => ({ label: condText(p, m), cond: p }));
     }
 
     // Traduções de uma pergunta (aparece quando a pesquisa tem inglês/espanhol).
@@ -947,12 +949,13 @@
 
     function card(i) {
       const q = questions[i];
-      // Caixa que cresce com o texto: no celular a pergunta inteira fica visível, sem cortar.
-      const fitText = (el) => { el.style.height = 'auto'; el.style.height = `${el.scrollHeight + 2}px`; };
-      const text = h('textarea', { class: 'q-text-input', rows: '1', value: q.text, placeholder: 'Texto da pergunta', 'aria-label': 'Texto da pergunta', disabled: ro,
+      // Caixa que cresce com o texto. Só mede quando já está na tela: fora dela a altura vem zerada e a caixa sumiria.
+      const fitText = (el) => { if (!el.scrollHeight) return; el.style.height = 'auto'; el.style.height = `${el.scrollHeight + 2}px`; };
+      const text = h('textarea', { class: 'q-text-input', rows: '2', value: q.text, placeholder: 'Texto da pergunta', 'aria-label': 'Texto da pergunta', disabled: ro,
         onkeydown: (e) => { if (e.key === 'Enter') e.preventDefault(); },
         oninput: (e) => { q.text = e.target.value.replace(/\s*\n\s*/g, ' '); if (q.text !== e.target.value) e.target.value = q.text; fitText(e.target); } });
-      requestAnimationFrame(() => fitText(text));
+      let textWidth = -1;
+      new ResizeObserver(() => { if (text.clientWidth !== textWidth) { textWidth = text.clientWidth; fitText(text); } }).observe(text);
       const help = h('input', { value: q.help_text || '', placeholder: 'Texto de apoio (opcional)', disabled: ro, oninput: (e) => { q.help_text = e.target.value; } });
       const type = h('select', { disabled: frozen, 'aria-label': 'Tipo da pergunta', onchange: (e) => {
         if (refsTo(q).length) { e.target.value = q.type; return toast('Esta pergunta tem ramificações. Remova as ramificações antes de mudar o tipo.', true); }
@@ -999,12 +1002,13 @@
         : h('button', { class: 'btn secondary sm q-branch-btn', onclick: () => { open = { kind: 'add', k: q._k }; render(); } }, '+ Se a resposta for…')) : null;
 
       return h('div', { class: 'q-editor' + (q.is_nps ? ' nps-marked' : '') + (lvl[i] ? ' q-child' : '') },
-        h('div', { class: 'row' }, h('b', { class: 'q-num' }, String(i + 1)), text,
+        h('div', { class: 'q-card-head' }, h('b', { class: 'q-num' }, String(i + 1)), h('span', { class: 'q-card-kind small muted' }, questionTypes[q.type] || ''),
           frozen ? null : h('button', { class: 'btn secondary sm', disabled: pos <= 0, onclick: () => move(i, -1), title: 'Subir (leva as ramificações junto)' }, '↑'),
           frozen ? null : h('button', { class: 'btn secondary sm', disabled: pos >= sibs.length - 1, onclick: () => move(i, 1), title: 'Descer (leva as ramificações junto)' }, '↓'),
           frozen ? null : h('button', { class: 'btn danger sm', disabled: blockEnd(i) - i === questions.length, onclick: () => remove(i) }, 'Remover')),
+        h('label', { class: 'f q-text-field' }, 'Pergunta', text),
         legacy,
-        h('div', { class: 'row' }, type, req), opts,
+        h('div', { class: 'row q-card-meta' }, type, req), opts,
         h('details', { class: 'q-more', open: openMore.has(q._k), ontoggle: (e) => { if (e.target.open) openMore.add(q._k); else openMore.delete(q._k); } }, h('summary', {}, 'Mais opções' + (q.is_nps ? ' · NPS' : '')),
           h('div', { class: 'row' }, help), isScale ? h('div', { class: 'row' }, disp) : null, iconPick ? h('div', { class: 'row' }, iconPick) : null,
           h('div', { class: 'row' }, nps), translations(q)),
@@ -1028,11 +1032,13 @@
         const head = editing
           ? condPicker(m, g.cond, (c) => { g.items.forEach((j) => { questions[j].cond = { k: m._k, ...c }; }); open = null; render(); }, () => { open = null; render(); }, 'Aplicar')
           : h('div', { class: 'q-branch-head' }, icon('sliders', 16), h('b', {}, condText(g.cond, m)), h('span', { class: 'small muted' }, `na pergunta ${i + 1}`),
-            frozen ? null : h('button', { class: 'btn secondary sm', onclick: () => { open = { kind: 'edit', k: first }; render(); } }, 'Alterar'),
-            frozen ? null : h('button', { class: 'btn secondary sm', onclick: () => removeGroup(g.items, condText(g.cond, m)) }, 'Não coletar nada'));
+            frozen ? null : h('span', { class: 'q-branch-actions' },
+              h('button', { class: 'btn secondary sm', onclick: () => { open = { kind: 'edit', k: first }; render(); } }, 'Alterar'),
+              h('button', { class: 'btn secondary sm', onclick: () => removeGroup(g.items, condText(g.cond, m)) }, 'Não coletar nada')));
         return h('div', { class: 'q-branch' }, head, g.items.map(node));
       }),
-      uncovered(m, kids).map((label) => h('div', { class: 'q-branch-head q-branch-none small' }, h('b', {}, label), h('span', { class: 'muted' }, 'não coleta nada: segue direto')))));
+      uncovered(m, kids).map(({ label, cond }) => h('div', { class: 'q-branch-head q-branch-none small' }, h('b', {}, label), h('span', { class: 'muted' }, 'não coleta nada: segue direto'),
+        frozen || Math.max(lvl[i], depth[i]) >= MAX_BRANCH_LEVEL ? null : h('span', { class: 'q-branch-actions' }, h('button', { class: 'btn secondary sm', onclick: () => { addChild(i, cond); render(); } }, '+ Adicionar pergunta'))))));
       return out;
     }
 
@@ -1064,7 +1070,8 @@
     };
     // Alteração não salva: qualquer edição marca; salvar zera. Somente leitura não tem aviso.
     let dirty = false;
-    const markDirty = () => { dirty = true; };
+    const saveState = h('span', { class: 'save-state small muted' }, 'Nenhuma alteração');
+    const markDirty = () => { dirty = true; saveState.textContent = 'Alterações não salvas'; saveState.classList.add('pending'); };
     const leaveOk = () => !dirty || confirm('Há alterações não salvas nesta tela. Sair sem salvar?');
     // Chave interna estável (_k): condições continuam apontando para a pergunta certa mesmo após mover blocos.
     const questions = prepareQuestions(s.questions);
@@ -1130,7 +1137,7 @@
       try {
         if (sid) await api('/surveys/' + sid, { method: 'PUT', body });
         else { const r = await api('/surveys', { method: 'POST', body }); dirty = false; location.hash = '#/pesquisas/' + r.id; }
-        dirty = false; toast(isMoment ? 'Momento salvo.' : 'Pesquisa salva.'); cache.surveys = null;
+        dirty = false; saveState.textContent = 'Tudo salvo'; saveState.classList.remove('pending'); toast(isMoment ? 'Momento salvo.' : 'Pesquisa salva.'); cache.surveys = null;
       } catch (ex) {
         if (ex.code === 'HISTORY_CHANGE') { if (confirm(ex.message)) save(true); return; }
         toast(ex.message, true);
@@ -1191,7 +1198,8 @@
       field('title', isMoment ? 'Nome do momento' : 'Título interno', 'text', { maxlength: '120' }),
       h('label', { class: 'chk' }, activeChk, isMoment ? 'Momento ativo' : 'Pesquisa ativa')));
     const questionsCard = h('div', { class: 'card' }, h('h2', {}, 'Perguntas'),
-      h('p', { class: 'small muted' }, 'Use "+ Se a resposta for…" para criar uma pergunta que só aparece conforme a resposta. Em "Mais opções" fica o texto de apoio, a aparência e a marcação "Entra na análise de NPS" das perguntas de 0 a 10. A aparência (números, carinhas ou ícones) não muda o cálculo: o tablet sempre grava a nota de 0 a 10.'),
+      h('p', { class: 'small muted' }, 'Use "+ Se a resposta for…" para criar uma pergunta que só aparece conforme a resposta.'),
+      h('details', { class: 'q-more q-help' }, h('summary', {}, 'Saiba mais'), h('p', { class: 'small muted' }, 'Em "Mais opções" fica o texto de apoio, a aparência e a marcação "Entra na análise de NPS" das perguntas de 0 a 10. A aparência (números, carinhas ou ícones) não muda o cálculo: o tablet sempre grava a nota de 0 a 10.')),
       tree.el);
     const contactBlock = h('div', {}, h('h3', {}, 'Contato e idiomas'),
       h('div', { class: 'form-grid' },
@@ -1211,10 +1219,10 @@
     const retire = !sid || ro || isMoment ? null
       : h('button', { class: 'btn danger', onclick: () => retireSurvey({ id: sid, title: s.title, responses: totalResponses ? 1 : 0, moments: (s.moments || []).length }, () => { dirty = false; location.hash = '#/pesquisas'; }) }, totalResponses ? 'Arquivar' : 'Excluir');
 
-    const page = h('div', {},
+    const page = h('div', { class: 'editor-page' },
       pageHead(isMoment ? 'Editar momento' : sid ? 'Editar pesquisa' : 'Nova pesquisa', isMoment ? `${s.parent.title} · ${s.title}` : s.title || null,
         isMoment ? h('a', { class: 'btn secondary', href: '#/pesquisas/' + s.parent.id }, '‹ Voltar à pesquisa principal') : h('a', { class: 'btn secondary', href: '#/pesquisas' }, 'Voltar'),
-        retire, ro ? null : h('button', { class: 'btn', onclick: () => save() }, 'Salvar ' + noun)),
+        retire),
       s.archived_at ? h('div', { class: 'card small' }, 'Esta pesquisa está arquivada: fica fora da lista e não pode ser editada. As respostas continuam nos relatórios.') : null,
       locked ? h('div', { class: 'card small' }, `🔒 ${isMoment ? 'Este momento' : 'Esta pesquisa'} já possui respostas: mudar o texto de uma pergunta ou a marcação de NPS também afeta as respostas já recebidas e pede confirmação. Não é possível adicionar/remover perguntas nem mudar tipos e ramificações. Para perguntas novas ou com outro sentido, use "Duplicar".`) : null,
       generalCard,
@@ -1223,9 +1231,11 @@
       ownSchedules ? await scheduleCard([], { id: sid, title: s.title, active: !!s.active }) : null,
       !isMoment ? (sid ? momentsCard() : h('div', { class: 'card small muted' }, 'Depois de salvar a pesquisa, você poderá criar aqui os momentos em que ela entra no ar, cada um com perguntas próprias.')) : null,
       isMoment ? fold('Textos da tela e contato', contactBlock, welcomeBlock, thanksBlock)
-        : [fold('Contato e idiomas', contactBlock), fold('Tela inicial do tablet', welcomeBlock), fold('Tela de agradecimento', thanksBlock)]);
+        : [fold('Contato e idiomas', contactBlock), fold('Tela inicial do tablet', welcomeBlock), fold('Tela de agradecimento', thanksBlock)],
+      ro ? null : h('div', { class: 'save-bar' }, saveState, h('button', { class: 'btn', onclick: () => save() }, 'Salvar ' + noun)));
     if (!ro) {
       page.addEventListener('input', markDirty); page.addEventListener('change', markDirty);
+      page.addEventListener('click', (e) => { if (e.target.closest('.q-tree button')) markDirty(); }); // subir, remover e ramificar não disparam "input"
       mediaPreview.addEventListener('click', (e) => { if (e.target.closest('button')) markDirty(); });
       guard = () => dirty;
     }
@@ -1335,7 +1345,7 @@
     modal('Código de pareamento', h('div', {},
       h('p', {}, `Abra no tablet "${deviceName}" o endereço:`), h('p', {}, h('code', {}, location.origin + '/kiosk/')),
       h('p', {}, 'e digite o código abaixo:'), h('div', { class: 'code-box' }, r.code),
-      h('p', { class: 'small muted' }, `Válido até ${fmtDate(r.expiresAt)} (15 minutos) e pode ser usado uma única vez. O código não será exibido novamente.`)));
+      h('p', { class: 'small muted' }, `Válido até ${fmtDate(r.expiresAt, r.tz)} (15 minutos) e pode ser usado uma única vez. O código não será exibido novamente.`)));
   }
 
   async function pageDevices() {
@@ -1362,7 +1372,7 @@
       h('div', { class: 'card table-wrap' }, h('table', {},
         h('thead', {}, h('tr', {}, h('th', {}, 'Tablet'), h('th', {}, 'Filial'), h('th', {}, 'Status'), h('th', {}, 'Último contato'), h('th', {}))),
         h('tbody', {}, devs.length ? devs.map((d) => h('tr', {},
-          h('td', {}, h('b', {}, d.name), h('div', { class: 'small muted' }, d.timezone ? `Fuso do tablet: ${d.timezone}` : 'Fuso ainda não informado')), h('td', {}, d.branch_name), h('td', {}, status(d)), h('td', {}, fmtDate(d.last_seen_at)),
+          h('td', {}, h('b', {}, d.name), h('div', { class: 'small muted' }, d.timezone ? `Fuso do tablet: ${d.timezone}` : 'Fuso ainda não informado')), h('td', {}, d.branch_name), h('td', {}, status(d)), h('td', {}, fmtDate(d.last_seen_at, d.tz)),
           h('td', {}, h('div', { class: 'row' },
             h('button', { class: 'btn secondary sm', onclick: async () => {
               if (d.paired && !confirm('Gerar novo código desconecta o tablet atual até ele ser pareado de novo. Continuar?')) return;
@@ -1706,7 +1716,7 @@
         const r = await api('/privacy/search', { method: 'POST', body: query() });
         results.replaceChildren(r.length ? h('div', {},
           h('p', {}, `${r.length} registro(s) encontrado(s).`),
-          h('ul', { class: 'answers' }, r.map((x) => h('li', {}, `${fmtDate(x.submitted_at)} · ${x.branch} · ${x.name || '(sem nome)'}`))),
+          h('ul', { class: 'answers' }, r.map((x) => h('li', {}, `${fmtDate(x.submitted_at, x.tz)} · ${x.branch} · ${x.name || '(sem nome)'}`))),
           h('div', { class: 'row' },
             h('button', { class: 'btn secondary sm', onclick: async () => {
               const res = await fetch('/api/admin/privacy/export', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf }, body: JSON.stringify(query()), credentials: 'same-origin' });
@@ -1787,8 +1797,8 @@
       case 'branch.update': return E('cadastros', '', `Alterou a filial "${d.name || brName(d.id)}"`, d.active === 0 || d.active === false ? 'Filial DESATIVADA.' : '');
       case 'branch.set_survey': return E('cadastros', '', `Definiu a pesquisa padrão da filial "${brName(d.branchId)}"`, d.surveyId ? `Pesquisa: ${sv(d.surveyId)}.` : 'Sem pesquisa padrão.');
       case 'branch.public_link': return E('cadastros', d.regenerated ? 'warn' : '', `${d.regenerated ? 'Gerou um novo QR Code/link' : d.enabled ? 'Ativou o QR Code/link' : 'Desativou o QR Code/link'} da filial "${brName(d.branchId)}"`, d.regenerated ? 'O QR Code antigo parou de funcionar.' : '');
-      case 'schedule.update': return E('cadastros', '', 'Alterou um agendamento', `Pesquisa: ${sv(d.surveyId)} · de ${d.startsAt ? new Date(d.startsAt).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : '…'} a ${d.endsAt ? new Date(d.endsAt).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : '…'}.`);
-      case 'schedule.create': return E('cadastros', '', `Agendou uma pesquisa${d.branchId ? ' na filial "' + brName(d.branchId) + '"' : ' em todas as filiais'}`, `Pesquisa: ${sv(d.surveyId)} · de ${d.startsAt ? new Date(d.startsAt).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : '…'} a ${d.endsAt ? new Date(d.endsAt).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : '…'}.`);
+      case 'schedule.update': return E('cadastros', '', 'Alterou um agendamento', `Pesquisa: ${sv(d.surveyId)} · de ${d.startsAt ? fmtDate(d.startsAt, d.tz) : '…'} a ${d.endsAt ? fmtDate(d.endsAt, d.tz) : '…'}.`);
+      case 'schedule.create': return E('cadastros', '', `Agendou uma pesquisa${d.branchId ? ' na filial "' + brName(d.branchId) + '"' : ' em todas as filiais'}`, `Pesquisa: ${sv(d.surveyId)} · de ${d.startsAt ? fmtDate(d.startsAt, d.tz) : '…'} a ${d.endsAt ? fmtDate(d.endsAt, d.tz) : '…'}.`);
       case 'schedule.delete': return E('cadastros', '', 'Excluiu um agendamento de pesquisa');
       case 'survey.create': return E('cadastros', '', `Criou a pesquisa "${d.title || sv(d.id)}"`);
       case 'survey.update': return E('cadastros', d.historyChanges?.length ? 'warn' : '', `Alterou a pesquisa "${d.title || sv(d.id)}"`,

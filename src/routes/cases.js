@@ -2,9 +2,10 @@
 // Tratamento de clientes insatisfeitos: cada nota de NPS de 0 a 6 vira um caso com status,
 // responsável e histórico. Gestor só vê e altera casos das próprias filiais.
 const express = require('express');
+const zones = require('../zones');
 const { get, all, run, tx, audit } = require('../db');
 const { requireUser } = require('../auth');
-const { HttpError, bad, str, int, id, dateParam } = require('../validate');
+const { HttpError, bad, str, int, id } = require('../validate');
 const { scope, assertBranch, placeholders } = require('../scope');
 const { decrypt } = require('../vault');
 
@@ -21,9 +22,8 @@ function caseFilter(user, q) {
     if (q.status === 'pendentes') where.push("c.status IN ('aberto','em_contato')"); else { where.push('c.status = ?'); params.push(q.status); }
   }
   if (q.branchId) { const b = id(q.branchId, 'filial'); assertBranch(user, b); where.push('c.branch_id = ?'); params.push(b); }
-  const from = dateParam(q.from, 'de'); const to = dateParam(q.to, 'até');
-  if (from !== null) { where.push('c.created_at >= ?'); params.push(from); }
-  if (to !== null) { where.push('c.created_at < ?'); params.push(to + 86_400_000); }
+  const period = zones.periodSql('c.created_at', 'c.branch_id', q.from, q.to);
+  if (period) { where.push(period.sql); params.push(...period.params); }
   if (q.mine === '1') { where.push('c.assignee_id = ?'); params.push(user.id); }
   const s = scope(user);
   if (s) { where.push(s.length ? `c.branch_id IN (${placeholders(s)})` : '0'); params.push(...s); }
@@ -46,12 +46,13 @@ router.get('/', (req, res) => {
   const page = int(req.query.page || '1', { field: 'página', min: 1, max: 100000 });
   const f = caseFilter(req.user, req.query);
   const total = get(`SELECT COUNT(*) AS n FROM cases c ${f.sql}`, ...f.params).n;
-  const rows = all(`SELECT c.id, c.status, c.min_score, c.created_at, c.updated_at, c.resolved_at, b.name AS branch, u.name AS assignee,
+  const rows = all(`SELECT c.id, c.branch_id, c.status, c.min_score, c.created_at, c.updated_at, c.resolved_at, b.name AS branch, u.name AS assignee,
       (r.contact_consent_at IS NOT NULL AND r.anonymized_at IS NULL) AS has_contact, r.channel,
       (SELECT a.value_text FROM answers a JOIN questions q ON q.id = a.question_id AND q.type = 'text' WHERE a.response_id = r.id AND a.value_text IS NOT NULL LIMIT 1) AS comment
     FROM cases c JOIN branches b ON b.id = c.branch_id JOIN responses r ON r.id = c.response_id LEFT JOIN users u ON u.id = c.assignee_id
     ${f.sql} ORDER BY CASE c.status WHEN 'aberto' THEN 0 WHEN 'em_contato' THEN 1 ELSE 2 END, c.created_at DESC LIMIT 25 OFFSET ?`, ...f.params, (page - 1) * 25);
-  res.json({ page, pageSize: 25, total, rows: rows.map((r) => ({ ...r, has_contact: !!r.has_contact })), statuses: STATUS });
+  const branchTz = zones.branchZones();
+  res.json({ page, pageSize: 25, total, rows: rows.map((r) => ({ ...r, has_contact: !!r.has_contact, tz: branchTz.get(r.branch_id) })), statuses: STATUS });
 });
 
 function loadCase(user, caseId) {
@@ -82,7 +83,7 @@ router.get('/:id', (req, res) => {
   }
   const notes = all(`SELECT n.at, n.text, n.status_from, n.status_to, u.name AS user FROM case_notes n LEFT JOIN users u ON u.id = n.user_id
     WHERE n.case_id = ? ORDER BY n.at`, c.id);
-  res.json({ ...c, branch: r.branch, survey: r.survey, device: r.device, channel: r.channel, submitted_at: r.submitted_at,
+  res.json({ ...c, tz: zones.branchZones().get(c.branch_id), branch: r.branch, survey: r.survey, device: r.device, channel: r.channel, submitted_at: r.submitted_at,
     answers, contact, notes, statuses: STATUS, assignable: assignable(c.branch_id) });
 });
 

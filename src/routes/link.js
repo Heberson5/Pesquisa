@@ -11,6 +11,7 @@ const { rateLimiter } = require('../security');
 const { HttpError, bad } = require('../validate');
 const { lookup, sign } = require('../vault');
 const { buildConfig, saveResponse } = require('../responses');
+const zones = require('../zones');
 const { deviceLabel } = require('../ua');
 
 const router = express.Router();
@@ -36,7 +37,7 @@ router.get('/:token/config', configLimiter, configPerLink, (req, res) => {
   const nonce = crypto.randomBytes(16).toString('base64url');
   const issued = Date.now();
   run('INSERT INTO link_tickets (nonce, branch_id, issued_at) VALUES (?,?,?)', nonce, b.id, issued);
-  const cfg = buildConfig(b, { ticket: `${nonce}.${issued}.${sign(`${b.id}.${nonce}.${issued}`)}` });
+  const cfg = buildConfig(b, { ticket: `${nonce}.${issued}.${sign(`${b.id}.${nonce}.${issued}`)}` }, zones.forBranch(b));
   // O horário de funcionamento vale para o tablet da loja; pelo QR o cliente pode responder depois, em casa.
   cfg.open = true; delete cfg.reopens;
   res.json(cfg);

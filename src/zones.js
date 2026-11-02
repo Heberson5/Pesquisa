@@ -4,7 +4,9 @@
 //   3) fuso da empresa (TZ_EMPRESA) como reserva, inclusive quando o tablet informa algo estranho ou fora do Brasil.
 // O servidor sempre usa o PRÓPRIO relógio (confiável) com o fuso escolhido: relógio errado no tablet não atrapalha.
 const config = require('./config');
-const { get } = require('./db');
+const { get, all } = require('./db');
+const { dateParam } = require('./validate');
+const { parseLocal } = require('./time');
 
 // Fusos do Brasil aceitos (o que vier de fora desta lista é ignorado).
 const BR_ZONES = ['America/Noronha', 'America/Belem', 'America/Fortaleza', 'America/Recife', 'America/Araguaina', 'America/Maceio', 'America/Bahia',
@@ -32,4 +34,29 @@ function forBranch(branch, device = null) {
     || config.timezone;
 }
 
-module.exports = { BR_ZONES, ZONE_CHOICES, clean, usable, forBranch };
+// Fuso de cada filial (id → fuso), para listas e relatórios com várias filiais.
+function branchZones() {
+  return new Map(all('SELECT id, timezone FROM branches').map((b) => [b.id, forBranch(b)]));
+}
+
+// Filtro de período pelo dia LOCAL de cada filial: "02/11" começa e termina à meia-noite do fuso dela.
+function periodSql(column, branchColumn, from, to) {
+  const hasFrom = dateParam(from, 'de') !== null;
+  const hasTo = dateParam(to, 'até') !== null;
+  if (!hasFrom && !hasTo) return null;
+  const byZone = new Map();
+  for (const [branchId, tz] of branchZones()) byZone.set(tz, [...(byZone.get(tz) || []), branchId]);
+  if (!byZone.size) return { sql: '0', params: [] };
+  const nextDay = new Date(`${to}T12:00:00Z`);
+  if (hasTo) nextDay.setUTCDate(nextDay.getUTCDate() + 1);
+  const parts = []; const params = [];
+  for (const [tz, ids] of byZone) {
+    const conds = [`${branchColumn} IN (${ids.map(() => '?').join(',')})`]; params.push(...ids);
+    if (hasFrom) { conds.push(`${column} >= ?`); params.push(parseLocal(`${from}T00:00`, tz)); }
+    if (hasTo) { conds.push(`${column} < ?`); params.push(parseLocal(`${nextDay.toISOString().slice(0, 10)}T00:00`, tz)); }
+    parts.push(`(${conds.join(' AND ')})`);
+  }
+  return { sql: `(${parts.join(' OR ')})`, params };
+}
+
+module.exports = { BR_ZONES, ZONE_CHOICES, clean, usable, forBranch, branchZones, periodSql };

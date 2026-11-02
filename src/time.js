@@ -29,8 +29,18 @@ function localNow(at = Date.now(), tz = timezone) {
   return { weekday: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(p.weekday), hour: +p.hour, date: `${p.year}-${p.month}-${p.day}` };
 }
 
-// Timestamp → 'YYYY-MM-DD' no fuso da empresa.
-const dayFormat = new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' });
-const localDay = (at) => dayFormat.format(new Date(at));
+// Timestamp → 'YYYY-MM-DD' no fuso pedido (padrão: o da empresa).
+const dayFormats = new Map();
+const dayFormat = (tz) => {
+  if (!dayFormats.has(tz)) dayFormats.set(tz, new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }));
+  return dayFormats.get(tz);
+};
+const localDay = (at, tz = timezone) => dayFormat(tz).format(new Date(at));
 
-module.exports = { parseLocal, formatLocal, localNow, localDay, offsetMs };
+// O mesmo horário de relógio em outro fuso: 08:00 de um fuso → 08:00 do outro.
+function sameClock(at, fromTz, toTz) {
+  const c = new Intl.DateTimeFormat('sv-SE', { timeZone: fromTz, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(at)).replace(' ', 'T');
+  return parseLocal(c, toTz) ?? at;
+}
+
+module.exports = { parseLocal, formatLocal, localNow, localDay, offsetMs, sameClock };

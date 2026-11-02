@@ -62,8 +62,7 @@ test('agendamento em andamento vale na hora e o roteiro leva até o retorno', as
 
 test('"todas as filiais" entra no roteiro de cada uma; o agendamento da filial mais recente vence', async () => {
   const t0 = Date.now() + 60 * MIN;
-  const company = (t) => new Date(t + -3 * 60 * MIN).toISOString().slice(0, 16); // "todas" vale no fuso da empresa
-  await agenda({ surveyId: a, branchId: null, startsAt: company(t0), endsAt: company(t0 + 60 * MIN) });
+  await agenda({ surveyId: a, branchId: null, startsAt: local(t0), endsAt: local(t0 + 60 * MIN) }); // "todas" vale no relógio local de cada filial
   await agenda({ surveyId: b, branchId: branch, startsAt: local(t0 + 20 * MIN), endsAt: local(t0 + 40 * MIN) });
   assert.deepEqual((await config()).json.plan.changes.map((c) => c.surveyId), [a, b, a, padrao]);
   assert.deepEqual((await config(otherToken)).json.plan.changes.map((c) => c.surveyId), [a, padrao]);

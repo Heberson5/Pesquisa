@@ -43,7 +43,7 @@ router.get('/me', (req, res) => {
   const u = get('SELECT totp_enabled, notify_detractors, notify_reports, notify_offline, whatsapp FROM users WHERE id = ?', req.user.id);
   res.json({ user: { id: req.user.id, name: req.user.name, email: req.user.email, role: req.user.role, mfaEnabled: !!u.totp_enabled, whatsapp: u.whatsapp || '',
     notify: { detractors: !!u.notify_detractors, reports: !!u.notify_reports, offline: !!u.notify_offline } },
-  mfaSetupRequired: req.user.mfaSetupRequired, csrf: req.user.csrf,
+  mfaSetupRequired: req.user.mfaSetupRequired, csrf: req.user.csrf, companyTz,
   questionTypes: QUESTION_TYPES, displays: DISPLAYS, langs: LANG_LABELS, contactModes: CONTACT_MODES, settings: req.user.mfaSetupRequired ? null : settingsFor(req.user) });
 });
 
@@ -246,7 +246,7 @@ router.post('/schedules', requireAdmin, (req, res) => {
   if (clash) throw new HttpError(409, `Já existe um agendamento nesse horário: "${displayTitle(clash.survey_id)}". Ajuste o período ou exclua o outro.`);
   const r = run('INSERT INTO schedules (survey_id, branch_id, starts_at, ends_at, created_by, created_at) VALUES (?,?,?,?,?,?)',
     surveyId, branchId, startsAt, endsAt, req.user.id, Date.now());
-  audit(req.user.id, 'schedule.create', { id: r.lastInsertRowid, surveyId, branchId, startsAt, endsAt }, req.ip);
+  audit(req.user.id, 'schedule.create', { id: r.lastInsertRowid, surveyId, branchId, startsAt, endsAt, tz }, req.ip);
   res.status(201).json({ id: Number(r.lastInsertRowid) });
 });
 
@@ -270,7 +270,7 @@ router.put('/schedules/:id', requireAdmin, (req, res) => {
   const clash = get('SELECT c.survey_id FROM schedules c WHERE c.id <> ? AND c.branch_id IS ? AND c.starts_at < ? AND c.ends_at > ? LIMIT 1', sid, branchId, endsAt, startsAt);
   if (clash) throw new HttpError(409, `Já existe um agendamento nesse horário: "${displayTitle(clash.survey_id)}". Ajuste o período ou exclua o outro.`);
   run('UPDATE schedules SET branch_id = ?, starts_at = ?, ends_at = ? WHERE id = ?', branchId, startsAt, endsAt, sid);
-  audit(req.user.id, 'schedule.update', { id: sid, surveyId: c.survey_id, branchId, startsAt, endsAt, previous: { branchId: c.branch_id, startsAt: c.starts_at, endsAt: c.ends_at } }, req.ip);
+  audit(req.user.id, 'schedule.update', { id: sid, surveyId: c.survey_id, branchId, startsAt, endsAt, tz, previous: { branchId: c.branch_id, startsAt: c.starts_at, endsAt: c.ends_at } }, req.ip);
   res.json({ ok: true });
 });
 
@@ -299,6 +299,7 @@ router.delete('/schedules/:id', requireAdmin, (req, res) => {
 // ?all=1: todas, inclusive momentos e arquivadas, cada uma com os próprios números (para filtros de relatório e histórico).
 router.get('/surveys', (req, res) => {
   const every = req.query.all === '1';
+  const branchTz = zones.branchZones();
   const family = (col) => (every ? `${col} = s.id` : `${col} IN (SELECT s.id UNION ALL SELECT m.id FROM surveys m WHERE m.parent_id = s.id)`);
   res.json(all(`SELECT s.id, s.title, s.active, s.updated_at, s.parent_id, s.archived_at,
       CASE WHEN p.title IS NULL THEN s.title ELSE p.title || ' · ' || s.title END AS display_title,
@@ -307,9 +308,12 @@ router.get('/surveys', (req, res) => {
       (SELECT COUNT(*) FROM surveys m WHERE m.parent_id = s.id AND m.archived_at IS NULL) AS moments,
       (SELECT COUNT(*) FROM responses r WHERE ${family('r.survey_id')}) AS responses,
       (SELECT MIN(c.ends_at) FROM schedules c WHERE ${family('c.survey_id')} AND c.starts_at <= :now AND c.ends_at > :now) AS on_air_until,
+      (SELECT c.branch_id FROM schedules c WHERE ${family('c.survey_id')} AND c.starts_at <= :now AND c.ends_at > :now ORDER BY c.ends_at LIMIT 1) AS on_air_branch,
+      (SELECT c.branch_id FROM schedules c WHERE ${family('c.survey_id')} AND c.starts_at > :now ORDER BY c.starts_at LIMIT 1) AS next_branch,
       (SELECT MIN(c.starts_at) FROM schedules c WHERE ${family('c.survey_id')} AND c.starts_at > :now) AS next_start
     FROM surveys s LEFT JOIN surveys p ON p.id = s.parent_id
-    ${every ? '' : 'WHERE s.parent_id IS NULL AND s.archived_at IS NULL'} ORDER BY s.active DESC, s.updated_at DESC`.replaceAll(':now', String(Date.now()))));
+    ${every ? '' : 'WHERE s.parent_id IS NULL AND s.archived_at IS NULL'} ORDER BY s.active DESC, s.updated_at DESC`.replaceAll(':now', String(Date.now())))
+    .map((x) => ({ ...x, on_air_tz: branchTz.get(x.on_air_branch) || companyTz, next_tz: branchTz.get(x.next_branch) || companyTz })));
 });
 
 router.get('/surveys/:id', (req, res) => {
@@ -575,7 +579,8 @@ router.get('/devices', (req, res) => {
   const rows = all(`SELECT d.id, d.name, d.branch_id, b.name AS branch_name, d.active, d.paired_at, d.last_seen_at,
       d.pair_expires_at, d.timezone, d.timezone_at, (d.token_hash IS NOT NULL) AS paired
     FROM devices d JOIN branches b ON b.id = d.branch_id ${where} ORDER BY b.name, d.name`, ...(s || []));
-  res.json(rows.map((r) => ({ ...r, paired: !!r.paired, pairing_pending: !!(r.pair_expires_at && r.pair_expires_at > Date.now()) })));
+  const branchTz = zones.branchZones();
+  res.json(rows.map((r) => ({ ...r, tz: branchTz.get(r.branch_id), paired: !!r.paired, pairing_pending: !!(r.pair_expires_at && r.pair_expires_at > Date.now()) })));
 });
 
 function issuePairingCode(deviceId) {
@@ -607,7 +612,7 @@ router.post('/devices/:id/pairing-code', (req, res) => {
   const d = loadDeviceScoped(req.user, id(req.params.id));
   const pairing = issuePairingCode(d.id);
   audit(req.user.id, 'device.new_code', { id: d.id }, req.ip);
-  res.json(pairing);
+  res.json({ ...pairing, tz: zones.branchZones().get(d.branch_id) });
 });
 
 router.post('/devices/:id/revoke', (req, res) => {
@@ -629,10 +634,12 @@ router.get('/surveys/:id/breakdown', (req, res) => {
 function listResponses(user, query, limit, offset) {
   const f = responseFilter(user, query);
   const total = get(`SELECT COUNT(*) AS n FROM responses r ${f.sql}`, ...f.params).n;
-  const rows = all(`SELECT r.id, r.uuid, r.submitted_at, r.started_at, r.channel, r.lang, r.geo_lat, r.geo_lng, r.geo_city, r.geo_uf, r.geo_region, COALESCE(r.device_label, d.name) AS device_label, b.name AS branch, b.city AS branch_city, CASE WHEN sp.title IS NULL THEN s.title ELSE sp.title || ' · ' || s.title END AS survey, d.name AS device
+  const rows = all(`SELECT r.id, r.branch_id, r.uuid, r.submitted_at, r.started_at, r.channel, r.lang, r.geo_lat, r.geo_lng, r.geo_city, r.geo_uf, r.geo_region, COALESCE(r.device_label, d.name) AS device_label, b.name AS branch, b.city AS branch_city, CASE WHEN sp.title IS NULL THEN s.title ELSE sp.title || ' · ' || s.title END AS survey, d.name AS device
       FROM responses r JOIN branches b ON b.id = r.branch_id JOIN surveys s ON s.id = r.survey_id LEFT JOIN surveys sp ON sp.id = s.parent_id
       LEFT JOIN devices d ON d.id = r.device_id ${f.sql} ORDER BY r.submitted_at DESC LIMIT ? OFFSET ?`, ...f.params, limit, offset);
   if (rows.length) {
+    const branchTz = zones.branchZones();
+    for (const r of rows) r.tz = branchTz.get(r.branch_id);
     const ans = all(`SELECT a.response_id, q.text, q.type, q.is_nps, a.value_num, a.value_text FROM answers a
         JOIN questions q ON q.id = a.question_id WHERE a.response_id IN (${placeholders(rows)}) ORDER BY q.position`, ...rows.map((r) => r.id));
     for (const r of rows) r.answers = ans.filter((a) => a.response_id === r.id).map((a) => ({
@@ -687,7 +694,7 @@ router.get('/responses.csv', (req, res) => {
   const lines = [['Data/hora', 'Filial', 'Pesquisa', 'Dispositivo', 'Canal', 'Cidade da loja', 'Cidade (cliente)', 'UF (cliente)', 'Região (cliente)', 'Latitude aprox.', 'Longitude aprox.', ...questions].map(csvCell).join(';')];
   for (const r of rows) {
     const map = Object.fromEntries((r.answers || []).map((a) => [a.question, a.value]));
-    lines.push([new Date(r.submitted_at).toLocaleString('pt-BR'), r.branch, r.survey, r.device_label || r.device, r.channel === 'link' ? 'QR Code' : 'Tablet', r.branch_city,
+    lines.push([new Date(r.submitted_at).toLocaleString('pt-BR', { timeZone: r.tz }), r.branch, r.survey, r.device_label || r.device, r.channel === 'link' ? 'QR Code' : 'Tablet', r.branch_city,
       r.geo_city, r.geo_uf, r.geo_region, r.geo_lat, r.geo_lng, ...questions.map((q) => map[q])]
       .map(csvCell).join(';'));
   }

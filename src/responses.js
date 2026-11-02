@@ -10,6 +10,8 @@ const { isEmail } = require('./notify');
 const { publicBranding } = require('./settings');
 const alerts = require('./alerts');
 const { timezone } = require('./config');
+const zones = require('./zones');
+const { sameClock } = require('./time');
 
 // ---------------------------------------------------------------- pesquisa vigente (com campanhas agendadas)
 // Um momento só vai ao ar com a pesquisa principal ativa (não herda nada dela, só a permissão de estar no ar).
@@ -18,10 +20,19 @@ const AIRABLE = '(v.archived_at IS NULL AND (v.parent_id IS NULL OR EXISTS (SELE
 
 // A campanha mais recente que cobre o momento vence; sem campanha, vale a pesquisa padrão da filial.
 function effectiveSurveyId(branch, at = Date.now()) {
-  const s = get(`SELECT s.survey_id FROM schedules s JOIN surveys v ON v.id = s.survey_id AND v.active = 1 AND ${AIRABLE}
-      WHERE (s.branch_id = ? OR s.branch_id IS NULL) AND s.starts_at <= ? AND s.ends_at > ?
-      ORDER BY s.starts_at DESC, s.id DESC LIMIT 1`, branch.id, at, at);
+  const s = schedulesFor(branch, at, at).filter((x) => x.a <= at && x.b > at).sort((x, y) => y.a - x.a || y.id - x.id)[0];
   return s ? s.survey_id : branch.survey_id;
+}
+
+// Agendamentos da filial no intervalo. "Todas as filiais" vale no relógio local de cada filial, não em um instante único.
+function schedulesFor(branch, from, until) {
+  const margin = 86_400_000; // diferença máxima entre fusos do Brasil, com folga
+  const rows = all(`SELECT s.id, s.survey_id, s.branch_id, s.starts_at, s.ends_at FROM schedules s JOIN surveys v ON v.id = s.survey_id AND v.active = 1 AND ${AIRABLE}
+      WHERE (s.branch_id = ? OR s.branch_id IS NULL) AND s.ends_at > ? AND s.starts_at <= ?`, branch.id, from - margin, until + margin);
+  const tz = rows.some((r) => r.branch_id === null) ? zones.forBranch(branch) : null;
+  return rows.map((r) => (r.branch_id === null
+    ? { ...r, a: sameClock(r.starts_at, timezone, tz), b: sameClock(r.ends_at, timezone, tz) }
+    : { ...r, a: r.starts_at, b: r.ends_at }));
 }
 
 // Aceita a pesquisa vigente agora OU no momento em que o cliente respondeu (fila offline / troca de campanha).
@@ -35,8 +46,7 @@ function surveyAllowed(branch, surveyId, submittedAt) {
 
 // Momentos em que a pesquisa da filial muda (início e fim dos agendamentos), do mais próximo ao mais distante.
 function surveyChanges(branch, now, until) {
-  const times = all(`SELECT s.starts_at AS a, s.ends_at AS b FROM schedules s JOIN surveys v ON v.id = s.survey_id AND v.active = 1 AND ${AIRABLE}
-      WHERE (s.branch_id = ? OR s.branch_id IS NULL) AND s.ends_at > ? AND s.starts_at <= ?`, branch.id, now, until)
+  const times = schedulesFor(branch, now, until)
     .flatMap((r) => [r.a, r.b]).filter((t) => t > now && t <= until);
   let current = effectiveSurveyId(branch, now);
   const changes = [];
