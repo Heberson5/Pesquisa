@@ -72,7 +72,7 @@
 
   // Itens do menu e ícone padrão de cada um.
   const MENU_DEFAULTS = {
-    dashboard: 'layout', casos: 'bell', respostas: 'inbox', pesquisas: 'clipboard', filiais: 'store', dispositivos: 'tablet',
+    dashboard: 'layout', casos: 'bell', respostas: 'inbox', pesquisas: 'clipboard', filiais: 'store', dispositivos: 'tablet', envios: 'message',
     usuarios: 'users', configuracoes: 'settings', auditoria: 'history', conta: 'user_cog',
   };
 

@@ -22,6 +22,8 @@ every('retencao-lgpd', 6 * 3_600_000, () => {
 });
 
 every('relatorio-semanal', 10 * 60_000, () => require('./scheduled').sendWeeklyReport());
+every('relatorios-programados', 60_000, () => require('./report-schedules').runDue());
+every('whatsapp-limpeza', 6 * 3_600_000, () => require('./wa').cleanup());
 every('tablets-sem-sinal', 5 * 60_000, () => require('./scheduled').checkOfflineTablets());
 
 async function tick() {

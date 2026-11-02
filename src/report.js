@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const PptxGenJS = require('pptxgenjs');
 const { timezone } = require('./config');
+const { labels: sendLabels } = require('./sends');
 
 const W = 13.333; // LAYOUT_WIDE
 const H = 7.5;
@@ -83,7 +84,7 @@ const chartBase = () => ({
   titleFontFace: FONT, titleColor: INK, titleFontSize: 14, valAxisMinVal: 0,
 });
 
-async function buildReport({ settings, stats, surveys, filters, mediaDir, generatedBy }) {
+async function buildReport({ settings, stats, surveys, filters, mediaDir, generatedBy, deliveries }) {
   const pres = new PptxGenJS();
   pres.layout = 'LAYOUT_WIDE';
   pres.theme = { headFontFace: FONT, bodyFontFace: FONT };
@@ -281,6 +282,35 @@ async function buildReport({ settings, stats, surveys, filters, mediaDir, genera
         { text: `${c.branch} · ${new Date(c.submitted_at).toLocaleDateString('pt-BR', { timeZone: c.tz || timezone })}`, options: { fontSize: 11, color: MUTED } }],
       { x: x + 0.95, y: y + 0.1, w: cw - 1.2, h: 0.95, valign: 'middle', isTextBox: true, margin: 0 });
     });
+  }
+
+  // ------------------------------------------------ 8. envios e falhas
+  if (deliveries?.rows.length) {
+    pres.addSection({ title: 'Envios' });
+    const t = deliveries.totals;
+    const totals = addContent('Envios e falhas', 'Envios');
+    [['Enviados', t.sent, primary], ['Falhas', t.failed, 'C0392B'], ['Pausados', t.paused, 'B7791F'], ['Na fila', t.queued, MUTED]].forEach(([label, value, color], i) => {
+      const x = M + i * 3.05;
+      card(totals, x, 1.5, 2.85, 1.6, `Total ${label}`);
+      totals.addText(String(value), { x, y: 1.6, w: 2.85, h: 0.9, fontSize: 36, bold: true, align: 'center', color, isTextBox: true, margin: 0 });
+      totals.addText(label, { x, y: 2.5, w: 2.85, h: 0.4, fontSize: 14, align: 'center', color: MUTED, isTextBox: true, margin: 0 });
+    });
+    // Falhas primeiro: é o que pede ação.
+    const order = { failed: 0, paused: 1, queued: 2, sending: 2, sent: 3 };
+    const rows = [...deliveries.rows].sort((a, b) => order[a.status] - order[b.status] || b.at - a.at);
+    const PAGE = 13; const MAX_PAGES = 4;
+    const when = (r) => new Date(r.at).toLocaleString('pt-BR', { timeZone: r.tz, dateStyle: 'short', timeStyle: 'short' });
+    const cell = (text, opts = {}) => ({ text: String(text ?? '—'), options: { fontSize: 10, color: INK, ...opts } });
+    const headerRow = ['Data e hora', 'Canal', 'Destinatário', 'Tipo', 'Situação', 'Motivo'].map((h) => cell(h, { bold: true, color: 'FFFFFF', fill: { color: primary } }));
+    for (let p = 0; p < MAX_PAGES && p * PAGE < rows.length; p++) {
+      const sl = addContent(p ? 'Envios e falhas (continuação)' : 'Detalhe dos envios', 'Envios');
+      const body = rows.slice(p * PAGE, (p + 1) * PAGE).map((r) => {
+        const l = sendLabels(r);
+        return [when(r), l.channel, r.recipient, l.kind, l.status, r.reason || ''].map((x, i) => cell(x, i === 4 && r.status === 'failed' ? { bold: true, color: 'C0392B' } : {}));
+      });
+      sl.addTable([headerRow, ...body], { x: M, y: 1.35, w: W - 2 * M, colW: [1.6, 2.0, 2.1, 1.4, 1.1, W - 2 * M - 8.2], border: { type: 'solid', color: LINE, pt: 0.5 }, rowH: 0.33, objectName: `Tabela de envios ${p + 1}` });
+    }
+    if (rows.length > PAGE * MAX_PAGES) totals.addText(`O detalhe mostra ${PAGE * MAX_PAGES} de ${rows.length} envios, com as falhas primeiro. A lista completa está no menu Envios do painel.`, { x: M, y: 3.4, w: W - 2 * M, h: 0.5, fontSize: 13, color: MUTED, isTextBox: true, margin: 0 });
   }
 
   return pres.write({ outputType: 'nodebuffer' });

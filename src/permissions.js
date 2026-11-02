@@ -40,6 +40,10 @@ const CATALOG = [
     { key: 'devices.revoke', label: 'Revogar o acesso de um tablet', default: true, needs: 'devices.view' },
     { key: 'devices.delete', label: 'Excluir tablets', default: false, needs: 'devices.view' },
   ] },
+  { menu: 'Envios', items: [
+    { key: 'sends.view', label: 'Ver envios e falhas das filiais dele, com os telefones', default: true },
+    { key: 'sends.resend', label: 'Reenviar mensagens pausadas', default: true, needs: 'sends.view' },
+  ] },
   { menu: 'Usuários', items: [
     { key: 'users.view', label: 'Ver gestores das filiais dele (nunca administradores)', default: true },
     { key: 'users.create', label: 'Cadastrar novos gestores nas filiais dele', default: true, needs: 'users.view' },

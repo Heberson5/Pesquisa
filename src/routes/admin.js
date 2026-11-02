@@ -22,6 +22,9 @@ const { publicUrl, timezone: companyTz } = require('../config');
 const { parseLocal } = require('../time');
 const { branchAgenda } = require('../responses');
 const permissions = require('../permissions');
+const wa = require('../wa');
+const { listSends, STATUS_LABEL, CHANNEL_LABEL, KIND_LABEL } = require('../sends');
+const reportSchedules = require('../report-schedules');
 const { requirePerm, can } = permissions;
 
 const router = express.Router();
@@ -592,7 +595,9 @@ function sniffMime(buf) {
   if (buf.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return 'image/png';
   if (buf.subarray(0, 6).toString('ascii') === 'GIF87a' || buf.subarray(0, 6).toString('ascii') === 'GIF89a') return 'image/gif';
   if (buf.subarray(0, 4).toString('ascii') === 'RIFF' && buf.subarray(8, 12).toString('ascii') === 'WEBP') return 'image/webp';
-  if (buf.subarray(4, 8).toString('ascii') === 'ftyp') return 'video/mp4';
+  if (buf.subarray(4, 8).toString('ascii') === 'ftyp') return buf.subarray(8, 11).toString('ascii') === 'M4A' ? 'audio/mp4' : 'video/mp4';
+  if (buf.subarray(0, 4).toString('ascii') === 'OggS') return 'audio/ogg';
+  if (buf.subarray(0, 3).toString('ascii') === 'ID3' || (buf[0] === 0xff && (buf[1] & 0xe0) === 0xe0)) return 'audio/mpeg';
   if (buf.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]))) return 'video/webm';
   return null; // SVG, HTML, PDF, executáveis etc. são recusados
 }
@@ -600,7 +605,7 @@ function sniffMime(buf) {
 router.post('/media', requirePerm('surveys.edit'), express.raw({ type: () => true, limit: MEDIA_MAX }), (req, res) => {
   if (!Buffer.isBuffer(req.body) || req.body.length === 0) throw bad('Arquivo vazio.');
   const mime = sniffMime(req.body);
-  if (!mime) throw new HttpError(415, 'Formato não suportado. Use JPG, PNG, WEBP, GIF, MP4 ou WEBM.');
+  if (!mime) throw new HttpError(415, 'Formato não suportado. Use JPG, PNG, WEBP, GIF, MP4, WEBM, MP3, OGG ou M4A.');
   const mediaId = crypto.randomBytes(16).toString('hex');
   fs.writeFileSync(path.join(MEDIA_DIR, mediaId), req.body, { flag: 'wx', mode: 0o640 });
   const original = str(decodeURIComponent(String(req.get('x-filename') || '')).slice(0, 200), { field: 'nome', max: 200, optional: true });
@@ -894,6 +899,71 @@ router.get('/audit', requireAdmin, (req, res) => {
 });
 
 // ---------------------------------------------------------------- envio: e-mail (SMTP) e WhatsApp, configurados pelo painel (somente admin)
+// ---------------------------------------------------------------- WhatsApp por QR Code (somente administrador)
+function waStatus() {
+  const s = wa.state();
+  return { status: s.status, enabled: !!s.enabled, phone: s.phone, error: s.error, serviceUp: Date.now() - (s.worker_at || 0) < 30_000, connected: wa.isConnected(s), command: s.command, nextSendAt: s.next_send_at };
+}
+router.get('/whatsapp/status', requireAdmin, async (req, res) => {
+  const s = wa.state();
+  res.json({ ...waStatus(), qr: s.status === 'qr' && s.qr ? await QRCode.toDataURL(s.qr, { margin: 1, width: 280 }) : null });
+});
+router.post('/whatsapp/connect', requireAdmin, (req, res) => {
+  if (wa.isConnected()) throw new HttpError(409, 'O WhatsApp já está conectado.');
+  wa.setState({ command: 'connect', error: null });
+  audit(req.user.id, 'whatsapp.connect', {}, req.ip);
+  res.json({ ok: true });
+});
+router.post('/whatsapp/disconnect', requireAdmin, (req, res) => {
+  wa.setState({ command: 'disconnect' });
+  audit(req.user.id, 'whatsapp.disconnect', {}, req.ip);
+  res.json({ ok: true });
+});
+router.post('/whatsapp/test', requireAdmin, testLimiter, (req, res) => {
+  if (!wa.isConnected()) throw new HttpError(409, 'Conecte o WhatsApp antes de testar.');
+  const to = wa.normalizePhone(req.body?.phone);
+  if (!to) throw bad('Telefone inválido. Digite DDD + número.');
+  wa.queue({ kind: 'test', recipient: to, body: 'Mensagem de teste do painel de pesquisa de satisfação.', createdBy: req.user.id });
+  audit(req.user.id, 'whatsapp.test', {}, req.ip);
+  res.json({ ok: true });
+});
+
+// ---------------------------------------------------------------- envios e falhas
+router.get('/sends', requirePerm('sends.view'), (req, res) => res.json({ ...listSends(req.user, req.query), connected: wa.isConnected(), statuses: STATUS_LABEL, channels: CHANNEL_LABEL, kinds: KIND_LABEL }));
+router.post('/sends/resend', requirePerm('sends.resend'), (req, res) => {
+  const ids = Array.isArray(req.body?.ids) ? [...new Set(req.body.ids.map((x) => id(x, 'mensagem')))].slice(0, 1000) : [];
+  if (!ids.length) throw bad('Selecione ao menos uma mensagem.');
+  if (!wa.isConnected()) throw new HttpError(409, 'O WhatsApp está desconectado. Conecte de novo antes de reenviar.');
+  const mine = scope(req.user);
+  const count = wa.resend(ids, (m) => mine === null || (m.branch_id !== null && mine.includes(m.branch_id)));
+  audit(req.user.id, 'sends.resend', { count }, req.ip);
+  res.json({ ok: true, count });
+});
+
+// ---------------------------------------------------------------- envio programado do PowerPoint (somente administrador)
+router.get('/report-schedules', requireAdmin, (req, res) => res.json({ rows: reportSchedules.list(), active: reportSchedules.activeChannels(), channels: reportSchedules.CHANNELS }));
+router.post('/report-schedules', requireAdmin, (req, res) => {
+  const newId = reportSchedules.create(req.body, req.user.id);
+  audit(req.user.id, 'report.schedule_create', { id: newId, name: req.body?.name }, req.ip);
+  res.status(201).json({ id: newId });
+});
+router.put('/report-schedules/:id', requireAdmin, (req, res) => {
+  const sid = id(req.params.id);
+  reportSchedules.update(sid, req.body);
+  audit(req.user.id, 'report.schedule_update', { id: sid, name: req.body?.name }, req.ip);
+  res.json({ ok: true });
+});
+router.delete('/report-schedules/:id', requireAdmin, (req, res) => {
+  const s = reportSchedules.load(id(req.params.id));
+  run('DELETE FROM report_schedules WHERE id = ?', s.id);
+  audit(req.user.id, 'report.schedule_delete', { id: s.id, name: s.name }, req.ip);
+  res.json({ ok: true });
+});
+router.post('/report-schedules/:id/run', requireAdmin, testLimiter, async (req, res) => {
+  const r = await reportSchedules.runSchedule(reportSchedules.load(id(req.params.id)));
+  res.json({ ok: true, ...r });
+});
+
 // ---------------------------------------------------------------- permissões (somente administrador)
 router.get('/permissions', requireAdmin, (req, res) => res.json({ catalog: permissions.CATALOG, adminOnly: permissions.ADMIN_ONLY, gestor: permissions.gestorValues() }));
 router.put('/permissions', requireAdmin, (req, res) => {

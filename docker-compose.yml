@@ -54,5 +54,34 @@ services:
       - ALL
     mem_limit: 256m
 
+  # WhatsApp por QR Code em serviço próprio: se cair, as pesquisas continuam.
+  whatsapp:
+    image: pesquisa-satisfacao:latest
+    depends_on: [app]
+    restart: unless-stopped
+    init: true
+    command: ["node", "src/wa-worker.js"]
+    healthcheck:
+      disable: true
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      DATA_DIR: /data
+      DISABLE_JOBS: "true"
+    volumes:
+      - pesquisa-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 384m
+    pids_limit: 100
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "5" }
+
 volumes:
   pesquisa-data:

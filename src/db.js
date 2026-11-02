@@ -161,6 +161,58 @@ CREATE TABLE IF NOT EXISTS password_resets (
   expires_at INTEGER NOT NULL,
   used_at INTEGER
 );
+CREATE TABLE IF NOT EXISTS wa_state (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  status TEXT NOT NULL DEFAULT 'off',
+  enabled INTEGER NOT NULL DEFAULT 0,
+  qr TEXT,
+  phone TEXT,
+  error TEXT,
+  command TEXT,
+  worker_at INTEGER,
+  next_send_at INTEGER,
+  updated_at INTEGER
+);
+INSERT OR IGNORE INTO wa_state (id) VALUES (1);
+CREATE TABLE IF NOT EXISTS wa_messages (
+  id INTEGER PRIMARY KEY,
+  kind TEXT NOT NULL,
+  priority INTEGER NOT NULL DEFAULT 1,
+  recipient TEXT NOT NULL,
+  body TEXT,
+  media_id TEXT,
+  file_path TEXT,
+  file_name TEXT,
+  branch_id INTEGER REFERENCES branches(id) ON DELETE SET NULL,
+  response_id INTEGER REFERENCES responses(id) ON DELETE SET NULL,
+  status TEXT NOT NULL CHECK (status IN ('queued','sending','sent','failed','paused')),
+  reason TEXT,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  sent_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_wa_messages_queue ON wa_messages(status, priority, id);
+CREATE TABLE IF NOT EXISTS report_schedules (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  active INTEGER NOT NULL DEFAULT 1,
+  frequency TEXT NOT NULL,
+  weekday INTEGER NOT NULL DEFAULT 1,
+  day_of_month INTEGER NOT NULL DEFAULT 1,
+  hour INTEGER NOT NULL DEFAULT 8,
+  minute INTEGER NOT NULL DEFAULT 0,
+  period_mode TEXT NOT NULL DEFAULT 'previous',
+  period_days INTEGER NOT NULL DEFAULT 7,
+  branch_id INTEGER REFERENCES branches(id) ON DELETE CASCADE,
+  channels TEXT NOT NULL,
+  extra_emails TEXT NOT NULL DEFAULT '[]',
+  extra_phones TEXT NOT NULL DEFAULT '[]',
+  last_run_key TEXT,
+  last_run_at INTEGER,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS outbox (
   id INTEGER PRIMARY KEY,
   kind TEXT NOT NULL,

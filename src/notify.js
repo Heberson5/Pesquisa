@@ -37,6 +37,12 @@ function queueWhatsApp(phone, payload, kind) {
     kind, 'whatsapp', phone, JSON.stringify(payload), Date.now(), Date.now());
 }
 
+// PowerPoint pela API oficial: exige modelo aprovado pela Meta com cabeçalho de documento.
+function queueWhatsAppFile(phone, payload, buffer, fileName, kind) {
+  run('INSERT INTO outbox (kind, channel, recipient, payload, attachment, attachment_name, next_attempt_at, created_at) VALUES (?,?,?,?,?,?,?,?)',
+    kind, 'whatsapp', phone, JSON.stringify(payload), buffer, oneLine(fileName, 100), Date.now(), Date.now());
+}
+
 // ------------------------------------------------------------------ modelo de e-mail
 // Todo conteúdo variável é escapado: comentários de clientes nunca viram HTML.
 function renderEmail({ title, intro, rows = [], button = null, footer = '', brand = {} }) {
@@ -150,10 +156,20 @@ async function deliver(item) {
     const wa = delivery.whatsapp();
     if (!wa) throw new Error('WhatsApp não configurado. Configure em Configurações → Alertas e envios.');
     const p = JSON.parse(item.payload);
+    const components = [{ type: 'body', parameters: p.params.map((t) => ({ type: 'text', text: oneLine(t, 300) })) }];
+    if (item.attachment) {
+      const form = new FormData();
+      form.append('messaging_product', 'whatsapp');
+      form.append('type', 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
+      form.append('file', new Blob([item.attachment], { type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' }), item.attachment_name || 'relatorio.pptx');
+      const up = await fetch(`https://graph.facebook.com/v21.0/${wa.phoneId}/media`, { method: 'POST', headers: { Authorization: `Bearer ${wa.token}` }, body: form, signal: AbortSignal.timeout(60_000) });
+      const media = await up.json().catch(() => ({}));
+      if (!up.ok || !media.id) throw new Error(`Falha ao enviar o arquivo para a Meta (${up.status}).`);
+      components.unshift({ type: 'header', parameters: [{ type: 'document', document: { id: media.id, filename: item.attachment_name || 'relatorio.pptx' } }] });
+    }
     const body = JSON.stringify({
       messaging_product: 'whatsapp', to: item.recipient, type: 'template',
-      template: { name: p.template, language: { code: p.language || 'pt_BR' },
-        components: [{ type: 'body', parameters: p.params.map((t) => ({ type: 'text', text: oneLine(t, 300) })) }] },
+      template: { name: p.template, language: { code: p.language || 'pt_BR' }, components },
     });
     await postJson(`https://graph.facebook.com/v21.0/${wa.phoneId}/messages`, body, { Authorization: `Bearer ${wa.token}` });
   }
@@ -213,6 +229,6 @@ const outboxStatus = () => ({
 });
 
 module.exports = {
-  isEmail, escapeHtml, oneLine, renderEmail, queueEmail, queueWebhook, queueWhatsApp, processOutbox, outboxStatus, whatsappCheck,
+  isEmail, escapeHtml, oneLine, renderEmail, queueEmail, queueWebhook, queueWhatsApp, queueWhatsAppFile, processOutbox, outboxStatus, whatsappCheck,
   validateWebhookUrl, isPublicIp, safeLookup, webhookSecret,
 };

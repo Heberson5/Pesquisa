@@ -54,6 +54,7 @@ function anonymize(ids) {
   if (!ids.length) return;
   const ph = ids.map(() => '?').join(',');
   tx(() => {
+    run(`DELETE FROM wa_messages WHERE response_id IN (${ph})`, ...ids); // a mensagem leva nome e telefone
     run(`UPDATE responses SET contact_name_enc = NULL, contact_phone_enc = NULL, contact_email_enc = NULL, contact_phone_lookup = NULL,
       contact_email_lookup = NULL, geo_lat = NULL, geo_lng = NULL, anonymized_at = ? WHERE id IN (${ph})`, Date.now(), ...ids);
     run(`DELETE FROM answers WHERE response_id IN (${ph}) AND question_id IN (SELECT id FROM questions WHERE type = 'text')`, ...ids);

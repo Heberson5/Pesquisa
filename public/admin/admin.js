@@ -243,6 +243,7 @@
     ['pesquisas', 'Pesquisas', pageSurveys, 'surveys.view', 'Coleta'],
     ['filiais', 'Filiais', pageBranches, 'branches.view', 'Coleta'],
     ['dispositivos', 'Tablets', pageDevices, 'devices.view', 'Coleta'],
+    ['envios', 'Envios', pageSends, 'sends.view', 'Coleta'],
     ['usuarios', 'Usuários', pageUsers, 'users.view', 'Administração'],
     ['configuracoes', 'Configurações', pageSettings, 'admin.settings', 'Administração'],
     ['auditoria', 'Auditoria', pageAudit, 'admin.audit', 'Administração'],
@@ -1592,10 +1593,6 @@
     const webhook = h('input', { value: st.alerts.webhookUrl || '', placeholder: 'https://hooks.exemplo.com/...', oninput: (e) => { st.alerts.webhookUrl = e.target.value.trim() || null; } });
     const waTpl = h('input', { value: st.alerts.whatsappTemplate || '', placeholder: 'ex.: alerta_detrator', oninput: (e) => { st.alerts.whatsappTemplate = e.target.value.trim() || null; } });
     const waLang = h('input', { value: st.alerts.whatsappLanguage, oninput: (e) => { st.alerts.whatsappLanguage = e.target.value.trim(); } });
-    const day = h('select', { onchange: (e) => { st.weeklyReport.weekday = Number(e.target.value); } }, DOW.map((d, i) => h('option', { value: String(i) }, d)));
-    day.value = String(st.weeklyReport.weekday);
-    const hour = h('input', { type: 'number', min: '0', max: '23', value: st.weeklyReport.hour, oninput: (e) => { st.weeklyReport.hour = Number(e.target.value); } });
-    const extra = h('textarea', { rows: '2', placeholder: 'diretoria@empresa.com (um por linha)', value: st.weeklyReport.extraEmails.join('\n'), oninput: (e) => { st.weeklyReport.extraEmails = lines(e.target); } });
     const goal = h('input', { type: 'number', min: '-100', max: '100', value: st.defaultNpsGoal ?? '', oninput: (e) => { st.defaultNpsGoal = e.target.value === '' ? null : Number(e.target.value); } });
     const offMin = h('input', { type: 'number', min: '10', max: '1440', value: st.offlineAlert.minutes, oninput: (e) => { st.offlineAlert.minutes = Number(e.target.value); } });
     const dimAfter = h('input', { type: 'number', min: '5', max: '3600', value: st.screen.dimAfterSeconds, oninput: (e) => { st.screen.dimAfterSeconds = Number(e.target.value); } });
@@ -1611,14 +1608,7 @@
           h('p', { class: 'small muted' }, 'Envia filial, nota e link do caso (sem dados pessoais), assinado com HMAC-SHA256 no cabeçalho X-Pesquisa-Signature. Segredo: ', h('code', { class: 'secret' }, n.webhookSecret)),
           h('div', { class: 'form-grid mt' }, h('label', { class: 'f' }, 'Modelo aprovado do WhatsApp (Meta)', waTpl), h('label', { class: 'f' }, 'Idioma do modelo', waLang)),
           h('p', { class: 'small muted' }, 'WhatsApp: ', status(n.whatsappConfigured, 'configurado', 'não configurado — veja a aba "E-mail e WhatsApp"'), ' · parâmetros do modelo: {{1}} filial, {{2}} nota, {{3}} link.')),
-        h('div', { class: 'card' }, h('h2', {}, 'Relatório semanal por e-mail'),
-          chk(st.weeklyReport.enabled, (v) => { st.weeklyReport.enabled = v; }, 'Enviar automaticamente o PowerPoint da semana'),
-          h('div', { class: 'form-grid mt' }, h('label', { class: 'f' }, 'Dia', day), h('label', { class: 'f' }, 'Hora (Brasília)', hour)),
-          h('label', { class: 'f mt' }, 'Destinatários extras (recebem todas as filiais)', extra),
-          h('p', { class: 'small muted' }, 'Administradores e gestores recebem conforme a preferência em Minha conta; cada gestor recebe apenas as filiais dele.'),
-          h('button', { class: 'btn secondary sm', onclick: async () => {
-            try { const r = await api('/settings/weekly-report/send-now', { method: 'POST' }); toast(`Relatório enviado para ${r.sent} destinatário(s).`); renderAgain(); } catch (ex) { toast(ex.message, true); }
-          } }, 'Enviar agora (teste)'))),
+        await scheduleReportsCard(renderAgain)),
       h('div', { class: 'grid c2' },
         h('div', { class: 'card' }, h('h2', {}, 'Tela do tablet e bateria'),
           chk(st.screen.keepAwake, (v) => { st.screen.keepAwake = v; }, 'Manter a tela sempre acesa'),
@@ -1630,6 +1620,160 @@
           h('div', { class: 'form-grid' }, h('label', { class: 'f' }, 'Meta de NPS padrão (cada filial pode ter a sua)', goal)),
           chk(st.offlineAlert.enabled, (v) => { st.offlineAlert.enabled = v; }, 'Avisar quando um tablet ficar sem sinal no horário de funcionamento'),
           h('div', { class: 'form-grid' }, h('label', { class: 'f' }, 'Minutos sem sinal para avisar', offMin)))));
+  }
+
+  // ------------------------------------------------------------ WhatsApp por QR Code
+  let waPoll = null;
+  async function whatsappQrCard() {
+    const box = h('div');
+    const card = h('div', { class: 'card' }, h('h2', {}, 'WhatsApp por QR Code'),
+      h('p', { class: 'small muted' }, 'Envia alertas, agradecimentos e relatórios pelo número conectado, com intervalo de 30 a 80 segundos. Atenção: não é autorizado pelo WhatsApp e o número pode ser banido.'), box);
+    const testPhone = h('input', { placeholder: 'DDD + número', inputmode: 'numeric' });
+    const act = async (path, body) => { try { await api('/whatsapp/' + path, { method: 'POST', body }); await draw(); } catch (ex) { toast(ex.message, true); } };
+    const LABEL = { off: ['off', 'Desconectado'], connecting: ['warn', 'Conectando…'], qr: ['warn', 'Aguardando leitura do QR Code'], connected: ['ok', 'Conectado'], reconnecting: ['warn', 'Reconectando…'] };
+    let lastKey = '';
+    const draw = async () => {
+      if (!card.isConnected && lastKey) { clearInterval(waPoll); waPoll = null; return; }
+      const w = await api('/whatsapp/status');
+      const key = JSON.stringify([w.status, w.qr, w.phone, w.error, w.serviceUp, w.command]);
+      if (key === lastKey) return;
+      lastKey = key;
+      const [cls, text] = LABEL[w.status] || LABEL.off;
+      box.replaceChildren(...[
+        h('p', {}, h('span', { class: 'badge ' + cls }, text), w.phone ? h('span', { class: 'small' }, ` +${w.phone}`) : null),
+        w.serviceUp ? null : h('p', { class: 'small bad' }, 'O serviço do WhatsApp não está respondendo.'),
+        w.error ? h('p', { class: 'small muted' }, w.error) : null,
+        w.qr ? h('div', {}, h('img', { class: 'wa-qr', src: w.qr, alt: 'QR Code do WhatsApp' }), h('p', { class: 'small muted' }, 'No celular: WhatsApp → Aparelhos conectados → Conectar um aparelho, e aponte para este código.')) : null,
+        h('div', { class: 'row mt' },
+          w.status === 'off' && !w.command ? h('button', { class: 'btn', onclick: () => act('connect') }, 'Conectar por QR Code') : null,
+          w.status === 'reconnecting' ? h('button', { class: 'btn secondary', onclick: () => act('connect') }, 'Tentar agora') : null,
+          w.status !== 'off' ? h('button', { class: 'btn danger', onclick: () => { if (confirm('Desconectar este número? Os envios ficam parados até conectar de novo.')) act('disconnect'); } }, 'Desconectar') : null),
+        w.connected ? h('div', { class: 'row mt' }, testPhone, h('button', { class: 'btn secondary', onclick: async () => {
+          try { await api('/whatsapp/test', { method: 'POST', body: { phone: testPhone.value } }); toast('Teste na fila. Veja o resultado no menu Envios.'); } catch (ex) { toast(ex.message, true); }
+        } }, 'Enviar teste')) : null].filter(Boolean));
+    };
+    await draw();
+    if (waPoll) clearInterval(waPoll);
+    waPoll = setInterval(() => draw().catch(() => {}), 3000);
+    return card;
+  }
+
+  function thanksCard(st) {
+    const cfg = st.whatsappThanks;
+    const list = h('div');
+    const draw = () => list.replaceChildren(...cfg.templates.map((t, i) => {
+      const preview = !t.mediaId ? null : h('p', { class: 'small muted' }, 'Mídia anexada. ', h('a', { href: '/media/' + t.mediaId, target: '_blank', rel: 'noopener' }, 'Abrir'), ' · ',
+        h('a', { href: '#', onclick: (e) => { e.preventDefault(); t.mediaId = null; draw(); } }, 'Remover'));
+      const file = h('input', { type: 'file', accept: 'image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm,audio/mpeg,audio/ogg,audio/mp4,.mp3,.ogg,.m4a', onchange: async (e) => {
+        const fl = e.target.files[0]; if (!fl) return;
+        try { const r = await uploadMedia(fl); t.mediaId = r.id; toast('Mídia enviada. Clique em "Salvar configurações".'); draw(); } catch (ex) { toast(ex.message, true); }
+      } });
+      return h('div', { class: 'q-editor' },
+        h('div', { class: 'q-card-head' },
+          h('label', { class: 'chk q-card-kind' }, h('input', { type: 'radio', name: 'wa-thanks', checked: cfg.activeId === t.id, onchange: () => { cfg.activeId = t.id; } }), 'Modelo ativo'),
+          h('button', { class: 'btn danger sm', disabled: cfg.templates.length <= 1, onclick: () => { cfg.templates.splice(i, 1); if (cfg.activeId === t.id) cfg.activeId = cfg.templates[0].id; draw(); } }, 'Remover')),
+        h('label', { class: 'f mt' }, 'Nome', h('input', { value: t.name, maxlength: '60', oninput: (e) => { t.name = e.target.value; } })),
+        h('label', { class: 'f mt' }, 'Mensagem (legenda, quando houver mídia)', h('textarea', { rows: '3', maxlength: '1000', value: t.text, oninput: (e) => { t.text = e.target.value; } })),
+        h('label', { class: 'f mt' }, 'Imagem, vídeo ou áudio (opcional, até 25 MB)', file), preview);
+    }));
+    draw();
+    return h('div', { class: 'card' }, h('h2', {}, 'Agradecimento ao cliente'),
+      h('p', { class: 'small muted' }, 'Vai para quem informou telefone e autorizou o contato, pelo WhatsApp por QR Code, à frente de alertas e relatórios. Use {nome} e {filial} no texto. Áudio não tem legenda: o texto segue em outra mensagem.'),
+      chk(cfg.enabled, (v) => { cfg.enabled = v; }, 'Enviar agradecimento automaticamente'), list,
+      h('button', { class: 'btn secondary sm mt', onclick: () => {
+        const id = 'modelo' + Date.now();
+        cfg.templates.push({ id, name: 'Novo modelo', text: 'Olá, {nome}! Obrigado pela sua avaliação.', mediaId: null });
+        draw();
+      } }, '+ Novo modelo'), h('p', { class: 'small muted' }, 'Clique em "Salvar configurações" para gravar.'));
+  }
+
+  // ------------------------------------------------------------ envios e falhas
+  const sendState = { status: '', channel: '', branchId: '', from: '', to: '' };
+  async function pageSends() {
+    const [r, brs] = await Promise.all([api('/sends?' + qs(sendState)), branches()]);
+    const filter = (key, el) => { el.value = sendState[key]; el.addEventListener('change', () => { sendState[key] = el.value; route(); }); return el; };
+    const selected = new Set();
+    const pausable = r.rows.filter((x) => x.status === 'paused' && x.id);
+    const count = h('span', { class: 'small muted' }, 'Nenhuma selecionada');
+    const boxes = new Map();
+    const refresh = () => { count.textContent = selected.size ? `${selected.size} selecionada(s)` : 'Nenhuma selecionada'; };
+    const kpiBox = (label, value, cls) => h('div', { class: 'card kpi' }, h('div', {}, h('div', { class: 'kpi-label small muted' }, label), h('div', { class: 'value ' + cls }, String(value))));
+    return h('div', {},
+      pageHead('Envios', 'Mensagens enviadas, falhas e o motivo de cada uma'),
+      h('div', { class: 'grid k4' }, kpiBox('Enviados', r.totals.sent, 'good'), kpiBox('Falhas', r.totals.failed, 'bad'), kpiBox('Pausados', r.totals.paused, 'midc'), kpiBox('Na fila', r.totals.queued, '')),
+      h('div', { class: 'card filters' },
+        h('label', { class: 'f' }, 'De', filter('from', h('input', { type: 'date' }))), h('label', { class: 'f' }, 'Até', filter('to', h('input', { type: 'date' }))),
+        h('label', { class: 'f' }, 'Situação', filter('status', h('select', {}, h('option', { value: '' }, 'Todas'), ['sent', 'failed', 'paused', 'queued'].map((k) => h('option', { value: k }, r.statuses[k]))))),
+        h('label', { class: 'f' }, 'Canal', filter('channel', h('select', {}, h('option', { value: '' }, 'Todos'), Object.entries(r.channels).map(([k, v]) => h('option', { value: k }, v))))),
+        h('label', { class: 'f' }, 'Filial', filter('branchId', h('select', {}, h('option', { value: '' }, 'Todas'), brs.map((b) => h('option', { value: String(b.id) }, b.name)))))),
+      pausable.length && can('sends.resend') ? h('div', { class: 'card' },
+        h('p', {}, h('b', {}, `${pausable.length} mensagem(ns) pausada(s).`), r.connected ? ' Selecione e envie: elas saem respeitando o intervalo de 30 a 80 segundos.' : ' O WhatsApp está desconectado: conecte de novo antes de enviar.'),
+        h('div', { class: 'row' },
+          h('button', { class: 'btn secondary', onclick: () => { pausable.forEach((x) => selected.add(x.id)); boxes.forEach((b) => { b.checked = true; }); refresh(); } }, 'Selecionar todos'),
+          h('button', { class: 'btn', disabled: !r.connected, onclick: async () => {
+            if (!selected.size) return toast('Selecione ao menos uma mensagem.', true);
+            try { const res = await api('/sends/resend', { method: 'POST', body: { ids: [...selected] } }); toast(`${res.count} mensagem(ns) de volta à fila.`); route(); } catch (ex) { toast(ex.message, true); }
+          } }, 'Enviar selecionados'), count)) : null,
+      h('div', { class: 'card table-wrap' }, h('table', {},
+        h('thead', {}, h('tr', {}, h('th', {}), h('th', {}, 'Data e hora'), h('th', {}, 'Canal'), h('th', {}, 'Tipo'), h('th', {}, 'Destinatário'), h('th', {}, 'Filial'), h('th', {}, 'Situação'), h('th', {}, 'Motivo'))),
+        h('tbody', {}, r.rows.length ? r.rows.map((x) => {
+          const box = x.status === 'paused' && x.id && can('sends.resend') ? h('input', { type: 'checkbox', 'aria-label': 'Selecionar', onchange: (e) => { if (e.target.checked) selected.add(x.id); else selected.delete(x.id); refresh(); } }) : null;
+          if (box) boxes.set(x.id, box);
+          const cls = { sent: 'ok', failed: 'off', paused: 'warn' }[x.status] || '';
+          return h('tr', {}, h('td', { 'data-label': '' }, box), h('td', { 'data-label': 'Data' }, fmtDate(x.at, x.tz)), h('td', { 'data-label': 'Canal' }, r.channels[x.channel] || x.channel), h('td', { 'data-label': 'Tipo' }, r.kinds[x.kind] || x.kind),
+            h('td', { 'data-label': 'Para' }, x.recipient), h('td', { 'data-label': 'Filial' }, x.branch || '—'), h('td', { 'data-label': 'Situação' }, h('span', { class: 'badge ' + cls }, r.statuses[x.status] || x.status)), h('td', { 'data-label': 'Motivo', class: 'small' }, x.reason || ''));
+        }) : h('tr', {}, h('td', { colspan: '8', class: 'empty' }, 'Nenhum envio encontrado.'))))));
+  }
+
+  // ------------------------------------------------------------ envio programado do PowerPoint
+  async function scheduleReportsCard(rerender) {
+    const [data, brs] = await Promise.all([api('/report-schedules'), branches()]);
+    const FREQ = { daily: 'Diária', weekly: 'Semanal', monthly: 'Mensal (dia fixo)' };
+    const lines = (el) => el.value.split(/[\n,;]+/).map((x) => x.trim()).filter(Boolean);
+    const when = (s) => `${s.frequency === 'weekly' ? DOW[s.weekday] + ', ' : s.frequency === 'monthly' ? 'dia ' + s.day_of_month + ', ' : 'todo dia, '}${String(s.hour).padStart(2, '0')}:${String(s.minute).padStart(2, '0')}`;
+    const edit = (s = {}) => {
+      const name = h('input', { value: s.name || '', maxlength: '80', placeholder: 'Ex.: Relatório mensal da diretoria' });
+      const freq = h('select', { onchange: sync }, Object.entries(FREQ).map(([k, v]) => h('option', { value: k }, v)));
+      freq.value = s.frequency || 'weekly';
+      const weekday = h('select', {}, DOW.map((d, i) => h('option', { value: String(i) }, d)));
+      weekday.value = String(s.weekday ?? 1);
+      const dom = h('input', { type: 'number', min: '1', max: '31', value: s.day_of_month ?? 1 });
+      const time = h('input', { type: 'time', value: `${String(s.hour ?? 8).padStart(2, '0')}:${String(s.minute ?? 0).padStart(2, '0')}` });
+      const mode = h('select', { onchange: sync }, h('option', { value: 'previous' }, 'Desde o envio anterior (dia, semana ou mês)'), h('option', { value: 'days' }, 'Últimos dias, em número fixo'));
+      mode.value = s.period_mode || 'previous';
+      const days = h('input', { type: 'number', min: '1', max: '366', value: s.period_days ?? 7 });
+      const branch = h('select', {}, h('option', { value: '' }, 'Todas as filiais'), brs.map((b) => h('option', { value: String(b.id) }, b.name)));
+      branch.value = s.branch_id ? String(s.branch_id) : '';
+      const emails = h('textarea', { rows: '2', placeholder: 'diretoria@empresa.com (um por linha)', value: (s.extra_emails || []).join('\n') });
+      const phones = h('textarea', { rows: '2', placeholder: '65 99999-0000 (um por linha)', value: (s.extra_phones || []).join('\n') });
+      const active = h('input', { type: 'checkbox', checked: s.id ? s.active : true });
+      const chosen = new Set(s.channels || []);
+      const options = [...data.active, ...(s.channels || []).filter((c) => !data.active.some((a) => a.key === c)).map((key) => ({ key, label: data.channels[key] + ' (inativo)' }))];
+      const wDay = h('label', { class: 'f' }, 'Dia da semana', weekday); const wDom = h('label', { class: 'f' }, 'Dia do mês', dom); const wDays = h('label', { class: 'f' }, 'Quantos dias', days);
+      function sync() { wDay.style.display = freq.value === 'weekly' ? '' : 'none'; wDom.style.display = freq.value === 'monthly' ? '' : 'none'; wDays.style.display = mode.value === 'days' ? '' : 'none'; }
+      sync();
+      modal(s.id ? 'Editar programação' : 'Nova programação', h('div', { class: 'form-grid' },
+        h('label', { class: 'f' }, 'Nome', name), h('label', { class: 'f' }, 'Periodicidade', freq), wDay, wDom, h('label', { class: 'f' }, 'Horário', time),
+        h('label', { class: 'f' }, 'Período do relatório', mode), wDays, h('label', { class: 'f' }, 'Filial', branch),
+        h('div', {}, h('div', { class: 'small muted' }, 'Enviar por (só os canais ativos)'), options.length ? options.map((c) => h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: chosen.has(c.key), onchange: (e) => { if (e.target.checked) chosen.add(c.key); else chosen.delete(c.key); } }), c.label)) : h('p', { class: 'small bad' }, 'Nenhum canal ativo. Configure em "E-mail e WhatsApp".')),
+        h('label', { class: 'f' }, 'E-mails extras', emails), h('label', { class: 'f' }, 'WhatsApp extras', phones), h('label', { class: 'chk' }, active, 'Programação ativa')),
+      [{ label: 'Salvar', onClick: async (close) => {
+        const [hour, minute] = time.value.split(':').map(Number);
+        const body = { name: name.value, frequency: freq.value, weekday: Number(weekday.value), dayOfMonth: Number(dom.value), hour, minute, periodMode: mode.value, periodDays: Number(days.value),
+          branchId: branch.value ? Number(branch.value) : null, channels: [...chosen], extraEmails: lines(emails), extraPhones: lines(phones), active: active.checked };
+        try { await api(s.id ? '/report-schedules/' + s.id : '/report-schedules', { method: s.id ? 'PUT' : 'POST', body }); close(); toast('Programação salva.'); rerender(); } catch (ex) { toast(ex.message, true); }
+      } }]);
+    };
+    return h('div', { class: 'card' }, h('h2', {}, 'Envio programado do PowerPoint'),
+      h('p', { class: 'small muted' }, 'Usuários com relatórios ativos em Minha conta recebem conforme as filiais deles; contatos extras recebem o relatório da programação. O horário segue a filial escolhida ou, em todas, o fuso da empresa.'),
+      data.rows.length ? h('div', { class: 'table-wrap' }, h('table', {}, h('tbody', {}, data.rows.map((s) => h('tr', {},
+        h('td', { 'data-label': '' }, h('b', {}, s.name), h('div', { class: 'small muted' }, `${FREQ[s.frequency]} · ${when(s)} · ${s.branch || 'Todas as filiais'}`), h('div', { class: 'small muted' }, s.channels.map((c) => data.channels[c]).join(', '))),
+        h('td', { 'data-label': '' }, h('span', { class: 'badge ' + (s.active ? 'ok' : 'off') }, s.active ? 'Ativa' : 'Pausada')),
+        h('td', { 'data-label': '' }, h('div', { class: 'row' },
+          h('button', { class: 'btn secondary sm', onclick: () => edit(s) }, 'Editar'),
+          h('button', { class: 'btn secondary sm', onclick: async () => { try { const r = await api(`/report-schedules/${s.id}/run`, { method: 'POST' }); toast(`${r.queued} envio(s) na fila.`); } catch (ex) { toast(ex.message, true); } } }, 'Enviar agora'),
+          h('button', { class: 'btn danger sm', onclick: async () => { if (!confirm(`Excluir a programação "${s.name}"?`)) return; try { await api('/report-schedules/' + s.id, { method: 'DELETE' }); rerender(); } catch (ex) { toast(ex.message, true); } } }, 'Excluir')))))))) : h('p', { class: 'muted' }, 'Nenhuma programação.'),
+      h('button', { class: 'btn secondary mt', onclick: () => edit() }, icon('plus', 16), 'Nova programação'));
   }
 
   // ------------------------------------------------------------ aba: permissões
@@ -1755,7 +1899,15 @@
           h('td', {}, ({ email: 'E-mail', whatsapp: 'WhatsApp', webhook: 'Webhook' })[o.channel] || o.channel),
           h('td', {}, h('span', { class: 'badge ' + (o.status === 'sent' ? 'ok' : o.status === 'failed' ? 'off' : 'warn') }, ({ sent: 'Enviado', failed: 'Falhou', pending: 'Na fila' })[o.status] || o.status)),
           h('td', { class: 'muted' }, o.last_error || '')))))) : h('p', { class: 'muted' }, 'Nenhum envio ainda.'));
-    return h('div', {}, h('div', { class: 'grid c2' }, mailCard, waCard), queue);
+    const qrCard = await whatsappQrCard();
+    const thanks = thanksCard(st);
+    const country = h('input', { value: st.whatsappCountry, maxlength: '3', inputmode: 'numeric', oninput: (e) => { st.whatsappCountry = e.target.value.trim(); } });
+    const reportTpl = h('input', { value: st.alerts.whatsappReportTemplate || '', placeholder: 'ex.: relatorio_pesquisa', oninput: (e) => { st.alerts.whatsappReportTemplate = e.target.value.trim() || null; } });
+    return h('div', {}, h('div', { class: 'grid c2' }, qrCard, thanks),
+      h('div', { class: 'card' }, h('h2', {}, 'Configurações do disparo'), h('div', { class: 'form-grid' },
+        h('label', { class: 'f' }, 'País padrão (Brasil = 55)', country, h('span', { class: 'small muted' }, 'Acrescentado aos números digitados só com DDD.')),
+        h('label', { class: 'f' }, 'Modelo da Meta para enviar o relatório (API oficial)', reportTpl, h('span', { class: 'small muted' }, 'Precisa ser aprovado pela Meta com cabeçalho de documento e um parâmetro {{1}} para o período. Clique em "Salvar configurações".')))),
+      h('div', { class: 'grid c2' }, mailCard, waCard), queue);
   }
   const renderAgain = () => { if (location.hash.startsWith('#/configuracoes')) route(); };
 
@@ -1865,6 +2017,12 @@
       case 'device.create': return E('tablets', '', `Cadastrou o tablet "${d.name || '#' + d.id}"`, d.branchId ? `Filial: ${brName(d.branchId)}.` : '');
       case 'device.new_code': return E('tablets', 'warn', `Gerou um novo código de pareamento para o tablet "${ctx.devices.get(Number(d.id)) || '#' + d.id}"`, 'O tablet atual perdeu o acesso até ser pareado de novo.');
       case 'permissions.update': return E('cadastros', 'warn', 'Alterou as permissões do gestor', `${(d.changed || []).length} item(ns) alterado(s).`);
+      case 'whatsapp.connect': return E('cadastros', '', 'Iniciou a conexão do WhatsApp por QR Code', '');
+      case 'whatsapp.disconnect': return E('cadastros', 'warn', 'Desconectou o WhatsApp por QR Code', '');
+      case 'whatsapp.test': return E('cadastros', '', 'Enviou um teste pelo WhatsApp por QR Code', '');
+      case 'sends.resend': return E('dados', '', `Reenviou ${d.count ?? 0} mensagem(ns) pausada(s)`, '');
+      case 'report.schedule_create': case 'report.schedule_update': case 'report.schedule_delete': return E('cadastros', '', `Alterou a programação de relatório "${d.name || '#' + d.id}"`, '');
+      case 'report.schedule_run': return E('dados', '', `Enviou o relatório programado "${d.name || '#' + d.id}"`, `${d.queued ?? 0} envio(s).`);
       case 'device.delete': return E('tablets', 'warn', `Excluiu o tablet "${d.name || '#' + d.id}"`, 'As respostas já recebidas continuam na filial.');
       case 'branch.delete': return E('cadastros', 'warn', `Excluiu a filial "${d.name || d.code || '#' + d.id}"`, d.devices ? `${d.devices} tablet(s) excluído(s) junto.` : '');
       case 'device.revoke': return E('tablets', 'warn', `Revogou o acesso do tablet "${ctx.devices.get(Number(d.id)) || '#' + d.id}"`, 'Ele não coleta mais respostas.');

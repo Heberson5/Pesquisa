@@ -23,7 +23,14 @@ const DEFAULTS = {
   requireAdminMfa: true, // 2FA obrigatório para administradores
   privacyText: 'Suas respostas são usadas apenas para melhorar nosso atendimento. Dados de contato e localização (cidade e estado aproximados, apenas pelo QR Code) só são coletados com sua autorização, ficam protegidos e podem ser excluídos a qualquer momento a seu pedido.',
   retention: { commentsMonths: 24, contactsMonths: 12, auditMonths: 24 },
-  alerts: { detractorEmail: true, webhookUrl: null, whatsappTemplate: null, whatsappLanguage: 'pt_BR' },
+  alerts: { detractorEmail: true, webhookUrl: null, whatsappTemplate: null, whatsappReportTemplate: null, whatsappLanguage: 'pt_BR' },
+  whatsappCountry: '55', // Brasil: acrescentado a números só com DDD
+  // Mensagem automática a quem deixa telefone. Exemplos: o administrador edita, troca o ativo ou cria outros.
+  whatsappThanks: { enabled: true, activeId: 'exemplo1', templates: [
+    { id: 'exemplo1', name: 'Agradecimento simples', text: 'Olá, {nome}! Obrigado pela sua avaliação sobre {filial}. Sua opinião nos ajuda a melhorar sempre.', mediaId: null },
+    { id: 'exemplo2', name: 'Com retorno da equipe', text: 'Olá, {nome}! Recebemos sua avaliação sobre {filial} e agradecemos por compartilhar. Nossa equipe entrará em contato em breve.', mediaId: null },
+    { id: 'exemplo3', name: 'Acolhedor', text: 'Olá, {nome}! Muito obrigado por dedicar um momento para nos avaliar. Cada opinião é muito importante para nós. Equipe {filial}.', mediaId: null },
+  ] },
   weeklyReport: { enabled: false, weekday: 1, hour: 8, extraEmails: [] },
   defaultNpsGoal: 50,
   offlineAlert: { enabled: true, minutes: 30 },
@@ -31,7 +38,7 @@ const DEFAULTS = {
   screen: { keepAwake: true, dim: true, dimAfterSeconds: 30, dimLevel: 70 },
 };
 
-const OBJECT_KEYS = ['menuIcons', 'retention', 'alerts', 'weeklyReport', 'offlineAlert', 'screen'];
+const OBJECT_KEYS = ['menuIcons', 'retention', 'alerts', 'weeklyReport', 'offlineAlert', 'screen', 'whatsappThanks'];
 
 // Aceita somente texto (recusa listas/objetos que virariam texto por conversão automática).
 function text(v, fallback, field) {
@@ -124,6 +131,11 @@ function saveSettings(input) {
       if (t && !/^[a-z0-9_]{1,512}$/.test(t)) throw bad('Nome do modelo do WhatsApp inválido (use letras minúsculas, números e _).');
       next.alerts.whatsappTemplate = t;
     }
+    if (a.whatsappReportTemplate !== undefined) {
+      const t = a.whatsappReportTemplate ? String(a.whatsappReportTemplate) : null;
+      if (t && !/^[a-z0-9_]{1,512}$/.test(t)) throw bad('Nome do modelo de relatório inválido (use letras minúsculas, números e _).');
+      next.alerts.whatsappReportTemplate = t;
+    }
     if (a.whatsappLanguage !== undefined) {
       if (!/^[a-z]{2}(_[A-Z]{2})?$/.test(String(a.whatsappLanguage))) throw bad('Idioma do modelo do WhatsApp inválido.');
       next.alerts.whatsappLanguage = a.whatsappLanguage;
@@ -154,6 +166,27 @@ function saveSettings(input) {
     if (sc.dim !== undefined) next.screen.dim = flag(sc.dim);
     if (sc.dimAfterSeconds !== undefined) next.screen.dimAfterSeconds = int(sc.dimAfterSeconds, { field: 'segundos para escurecer', min: 5, max: 3600 });
     if (sc.dimLevel !== undefined) next.screen.dimLevel = int(sc.dimLevel, { field: 'nível de escurecimento', min: 20, max: 90 });
+  }
+  if (input.whatsappCountry !== undefined) {
+    if (!/^\d{1,3}$/.test(String(input.whatsappCountry))) throw bad('Código do país inválido.');
+    next.whatsappCountry = String(input.whatsappCountry);
+  }
+  if (input.whatsappThanks !== undefined) {
+    obj(input.whatsappThanks, 'agradecimento');
+    const w = input.whatsappThanks;
+    if (!Array.isArray(w.templates) || w.templates.length > 20) throw bad('Modelos de agradecimento inválidos.');
+    const templates = w.templates.map((t) => {
+      obj(t, 'modelo');
+      if (typeof t.id !== 'string' || !/^[a-z0-9-]{1,40}$/i.test(t.id)) throw bad('Modelo de agradecimento inválido.');
+      const name = text(t.name, '', 'nome do modelo').trim(); const body = text(t.text, '', 'texto do modelo').trim();
+      if (!name || name.length > 60) throw bad('Dê um nome de até 60 letras a cada modelo.');
+      if (!body || body.length > 1000) throw bad(`O modelo "${name}" precisa de um texto de até 1000 letras.`);
+      return { id: t.id, name, text: body, mediaId: mediaRef(t.mediaId, 'mídia do modelo', { imagesOnly: false }) };
+    });
+    if (new Set(templates.map((t) => t.id)).size !== templates.length) throw bad('Modelos de agradecimento repetidos.');
+    const enabled = flag(w.enabled);
+    if (enabled && !templates.some((t) => t.id === w.activeId)) throw bad('Escolha o modelo de agradecimento ativo.');
+    next.whatsappThanks = { enabled, activeId: templates.some((t) => t.id === w.activeId) ? w.activeId : null, templates };
   }
   for (const [k, v] of Object.entries(next)) {
     run('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', k, JSON.stringify(v));

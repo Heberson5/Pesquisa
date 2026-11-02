@@ -386,3 +386,6 @@ img, svg, video, canvas { max-width: 100%; }
   .perm-group td { padding-left: 8px; border-radius: 8px; }
   .perm-table td:not(.perm-cell) { justify-content: flex-start; text-align: left; font-size: 15px; }
 }
+
+/* WhatsApp por QR Code */
+.wa-qr { width: 240px; max-width: 100%; height: auto; background: #fff; padding: 8px; border-radius: 12px; display: block; margin: 8px 0; }

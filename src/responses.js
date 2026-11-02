@@ -11,6 +11,7 @@ const { publicBranding } = require('./settings');
 const alerts = require('./alerts');
 const { timezone } = require('./config');
 const zones = require('./zones');
+const wa = require('./wa');
 const { sameClock } = require('./time');
 
 // ---------------------------------------------------------------- pesquisa vigente (com campanhas agendadas)
@@ -216,7 +217,10 @@ function saveResponse({ branch, deviceId = null, deviceLabel = null, channel, bo
     }
     return { created: true, id: Number(r.lastInsertRowid) };
   });
-  if (result.created) alerts.onResponse(result.id);
+  if (result.created) {
+    alerts.onResponse(result.id);
+    if (contact?.phone) wa.queueThanks({ branch, responseId: result.id, name: contact.name, phone: contact.phone });
+  }
   return result;
 }
 

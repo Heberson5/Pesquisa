@@ -60,12 +60,19 @@ function notifyDetractor(r, score, caseId) {
     queueWebhook(s.alerts.webhookUrl, { event: 'detractor', caseId, branch: r.branch_name, score, channel: r.channel,
       contactRequested: hasContact, submittedAt: new Date(r.submitted_at).toISOString(), url }, 'detractor');
   }
-  if (s.alerts.whatsappTemplate) {
+  const wa = require('./wa');
+  if (s.alerts.whatsappTemplate || wa.isEnabled()) {
     const phones = parseList(get('SELECT alert_phones FROM branches WHERE id = ?', r.branch_id)?.alert_phones);
     // + WhatsApp pessoal dos usuários (gestores da filial e administradores) que quiserem o aviso
     const mine = all(`SELECT DISTINCT u.whatsapp FROM users u LEFT JOIN user_branches ub ON ub.user_id = u.id
         WHERE u.active = 1 AND u.notify_detractors = 1 AND u.whatsapp IS NOT NULL AND (u.role = 'admin' OR ub.branch_id = ?)`, r.branch_id).map((x) => x.whatsapp);
-    for (const p of [...new Set([...phones, ...mine])]) queueWhatsApp(p, { template: s.alerts.whatsappTemplate, language: s.alerts.whatsappLanguage, params: [r.branch_name, String(score), url] }, 'detractor');
+    const targets = [...new Set([...phones, ...mine])];
+    // Com o QR Code conectado, os alertas saem por ele; senão, pela API oficial.
+    if (wa.isEnabled()) {
+      for (const p of targets) wa.queue({ kind: 'alert', recipient: p, body: `Cliente insatisfeito em ${r.branch_name}: nota ${score}.\nCaso: ${url}`, branchId: r.branch_id, responseId: r.id });
+      return;
+    }
+    for (const p of targets) queueWhatsApp(p, { template: s.alerts.whatsappTemplate, language: s.alerts.whatsappLanguage, params: [r.branch_name, String(score), url] }, 'detractor');
   }
 }
 

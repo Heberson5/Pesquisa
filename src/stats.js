@@ -11,6 +11,7 @@ const { buildReport } = require('./report');
 const { MEDIA_DIR } = require('./db');
 const { localDay } = require('./time');
 const zones = require('./zones');
+const { listSends } = require('./sends');
 
 // Monta o filtro comum (período, filial, pesquisa) respeitando o escopo do usuário.
 function responseFilter(user, q) {
@@ -124,7 +125,7 @@ async function reportFor(user, query, generatedBy) {
   const buffer = await buildReport({
     settings: getSettings(), stats, surveys, mediaDir: MEDIA_DIR,
     filters: { from: query.from || null, to: query.to || null, branch: branchName, tz: reportBranch ? zones.forBranch(reportBranch) : null, survey: query.surveyId ? displayTitle(id(query.surveyId, 'pesquisa')) : null },
-    generatedBy,
+    generatedBy, deliveries: listSends(user, { from: query.from, to: query.to, branchId: query.branchId }, 300),
   });
   return { buffer, stats };
 }
