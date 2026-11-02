@@ -93,7 +93,8 @@ router.get('/branches', (req, res) => {
   const s = scope(req.user);
   const where = s ? `WHERE b.id IN (${placeholders(s)})` : '';
   const rows = all(`SELECT b.id, b.code, b.name, b.city, b.active, b.survey_id, s.title AS survey_title, b.alert_emails, b.alert_phones, b.nps_goal, b.hours_json, b.timezone, b.public_enabled,
-      (SELECT COUNT(*) FROM devices d WHERE d.branch_id = b.id AND d.active = 1) AS devices
+      (SELECT COUNT(*) FROM devices d WHERE d.branch_id = b.id AND d.active = 1) AS devices,
+      (SELECT COUNT(*) FROM responses r WHERE r.branch_id = b.id) AS responses
     FROM branches b LEFT JOIN surveys s ON s.id = b.survey_id ${where} ORDER BY b.name`, ...(s || []));
   // Fuso em uso agora (escolhido ou informado pelo tablet) e as opções do cadastro.
   res.json(rows.map((b) => ({ ...b, effective_tz: zones.forBranch(b), ...branchAgenda(b) })));
@@ -164,6 +165,29 @@ router.put('/branches/:id', requireAdmin, (req, res) => {
   run('UPDATE branches SET code = ?, name = ?, city = ?, active = ?, alert_emails = ?, alert_phones = ?, nps_goal = ?, hours_json = ?, timezone = ? WHERE id = ?',
     b.code, b.name, b.city, b.active, b.alert_emails, b.alert_phones, b.nps_goal, b.hours_json, b.timezone, bid);
   audit(req.user.id, 'branch.update', { id: bid, ...b }, req.ip);
+  res.json({ ok: true });
+});
+
+// Filial com respostas não é apagada: o histórico fica e ela só pode ser desativada.
+router.post('/branches/:id/deactivate', requireAdmin, (req, res) => {
+  const bid = id(req.params.id);
+  if (!run('UPDATE branches SET active = 0 WHERE id = ?', bid).changes) throw new HttpError(404, 'Filial não encontrada.');
+  audit(req.user.id, 'branch.update', { id: bid, active: 0 }, req.ip);
+  res.json({ ok: true });
+});
+
+router.delete('/branches/:id', requireAdmin, (req, res) => {
+  const bid = id(req.params.id);
+  const b = get('SELECT id, code, name FROM branches WHERE id = ?', bid);
+  if (!b) throw new HttpError(404, 'Filial não encontrada.');
+  if (get('SELECT 1 FROM responses WHERE branch_id = ? LIMIT 1', bid) || get('SELECT 1 FROM cases WHERE branch_id = ? LIMIT 1', bid)) throw new HttpError(409, 'Esta filial tem pesquisas respondidas e não pode ser excluída. Desative-a para manter o histórico.');
+  if (get('SELECT 1 FROM schedules WHERE branch_id = ? AND ends_at > ? LIMIT 1', bid, Date.now())) throw new HttpError(409, 'Esta filial tem agendamento no ar ou pendente. Exclua os agendamentos antes.');
+  const devices = get('SELECT COUNT(*) AS n FROM devices WHERE branch_id = ?', bid).n;
+  tx(() => {
+    run('DELETE FROM link_tickets WHERE branch_id = ?', bid);
+    run('DELETE FROM branches WHERE id = ?', bid); // tablets, vínculos de gestores e agendamentos encerrados saem juntos
+  });
+  audit(req.user.id, 'branch.delete', { id: bid, code: b.code, name: b.name, devices }, req.ip);
   res.json({ ok: true });
 });
 
@@ -619,6 +643,17 @@ router.post('/devices/:id/revoke', (req, res) => {
   const d = loadDeviceScoped(req.user, id(req.params.id));
   run('UPDATE devices SET active = 0, token_hash = NULL, pair_code_hash = NULL, pair_expires_at = NULL WHERE id = ?', d.id);
   audit(req.user.id, 'device.revoke', { id: d.id }, req.ip);
+  res.json({ ok: true });
+});
+
+// Excluir tablet: tira o cadastro e o acesso; as respostas ficam na filial, com o nome do tablet.
+router.delete('/devices/:id', requireAdmin, (req, res) => {
+  const d = loadDeviceScoped(req.user, id(req.params.id));
+  tx(() => {
+    run('UPDATE responses SET device_label = ? WHERE device_id = ? AND device_label IS NULL', d.name, d.id);
+    run('DELETE FROM devices WHERE id = ?', d.id);
+  });
+  audit(req.user.id, 'device.delete', { id: d.id, name: d.name, branchId: d.branch_id }, req.ip);
   res.json({ ok: true });
 });
 

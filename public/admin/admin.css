@@ -29,7 +29,7 @@ h1 { font-size: 26px; letter-spacing: -.02em; margin: 0; } h2 { font-size: 16px;
 .brand { display: flex; align-items: center; gap: 12px; padding: 4px 8px 18px; min-height: 58px; }
 .brand-logo { height: 36px; max-width: 150px; object-fit: contain; }
 .brand-mark { width: 36px; height: 36px; border-radius: 10px; background: var(--brand); color: #fff; display: grid; place-items: center; font-weight: 800; flex: none; }
-.brand-name { font-weight: 800; font-size: 15px; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.brand-name { flex: 1; min-width: 0; font-weight: 800; font-size: 15px; line-height: 1.2; overflow-wrap: anywhere; }
 .nav-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); padding: 12px 12px 6px; white-space: nowrap; }
 .nav a { display: flex; align-items: center; gap: 12px; color: var(--muted); text-decoration: none; padding: 10px 12px; border-radius: 10px; font-weight: 600; white-space: nowrap; position: relative; }
 .nav a svg { flex: none; }
@@ -45,7 +45,10 @@ h1 { font-size: 26px; letter-spacing: -.02em; margin: 0; } h2 { font-size: 16px;
 .side-btn { display: flex; align-items: center; gap: 12px; background: none; border: 0; color: var(--muted); font: inherit; font-weight: 600; padding: 10px 12px; border-radius: 10px; cursor: pointer; white-space: nowrap; text-align: left; }
 .side-btn:hover { background: var(--surface-2); color: var(--ink); }
 .layout.collapsed .brand-name, .layout.collapsed .nav-label, .layout.collapsed .nav a span, .layout.collapsed .who-text, .layout.collapsed .side-btn span { display: none; }
-.layout.collapsed .brand { justify-content: center; padding-left: 0; padding-right: 0; }
+.collapse-btn { margin-left: auto; flex: none; width: 26px; height: 26px; display: grid; place-items: center; padding: 0; background: none; border: 0; border-radius: 7px; color: var(--muted); opacity: .65; cursor: pointer; }
+.collapse-btn:hover, .collapse-btn:focus-visible { opacity: 1; background: var(--surface-2); color: var(--ink); }
+.layout.collapsed .brand { flex-direction: column; justify-content: center; gap: 6px; padding-left: 0; padding-right: 0; }
+.layout.collapsed .collapse-btn { margin-left: 0; }
 .layout.collapsed .brand-logo { display: none; }
 .layout.collapsed .brand-mark { display: grid !important; }
 .layout.collapsed .nav a, .layout.collapsed .side-btn, .layout.collapsed .who { justify-content: center; }
@@ -83,6 +86,7 @@ input, select, textarea { font: inherit; padding: 9px 12px; border: 1px solid va
 input:focus, select:focus, textarea:focus { outline: 3px solid var(--brand-soft); border-color: var(--brand); }
 input[type=color] { padding: 2px; height: 42px; width: 64px; cursor: pointer; }
 textarea { resize: vertical; }
+.card textarea { width: 100%; }
 table { width: 100%; border-collapse: collapse; }
 th, td { text-align: left; padding: 12px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; }
 tbody tr:hover { background: var(--surface-2); }
@@ -323,7 +327,6 @@ img, svg, video, canvas { max-width: 100%; }
 
 /* Editor de perguntas em árvore */
 /* Editor da pesquisa */
-.editor-page { max-width: 1100px; margin: 0 auto; }
 .q-card-head { display: flex; align-items: center; gap: 8px; }
 .q-card-kind { margin-right: auto; }
 .q-text-field { margin-top: 12px; }

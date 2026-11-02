@@ -259,17 +259,20 @@
       const now = !shell.classList.contains('collapsed');
       shell.classList.toggle('collapsed', now);
       prefs.set('sidebar', now ? 'collapsed' : 'open');
-      collapseBtn.replaceChildren(icon(now ? 'chevrons-right' : 'chevrons-left'), h('span', {}, 'Recolher menu'));
+      collapseBtn.replaceChildren(icon(now ? 'chevrons-right' : 'chevrons-left', 16));
       collapseBtn.title = now ? 'Expandir menu' : 'Recolher menu';
+      collapseBtn.setAttribute('aria-label', collapseBtn.title);
+      collapseBtn.setAttribute('aria-expanded', String(!now));
     };
-    const collapseBtn = h('button', { class: 'side-btn collapse-btn', onclick: toggleCollapse, title: collapsed ? 'Expandir menu' : 'Recolher menu' },
-      icon(collapsed ? 'chevrons-right' : 'chevrons-left'), h('span', {}, 'Recolher menu'));
+    const collapseBtn = h('button', { class: 'collapse-btn', onclick: toggleCollapse, title: collapsed ? 'Expandir menu' : 'Recolher menu', 'aria-label': collapsed ? 'Expandir menu' : 'Recolher menu', 'aria-expanded': String(!collapsed) },
+      icon(collapsed ? 'chevrons-right' : 'chevrons-left', 16));
     shell.append(
       h('nav', { class: 'side', 'aria-label': 'Menu principal' },
         h('div', { class: 'brand' },
           branding.logoUrl ? h('img', { class: 'brand-logo', src: branding.logoUrl, alt: branding.companyName }) : null,
           h('span', { class: 'brand-mark' + (branding.logoUrl ? ' hidden' : '') }, initials(branding.companyName)),
-          branding.logoUrl ? null : h('span', { class: 'brand-name' }, branding.companyName)),
+          branding.logoUrl ? null : h('span', { class: 'brand-name' }, branding.companyName),
+          collapseBtn),
         groups.map((g) => h('div', { class: 'nav' }, h('div', { class: 'nav-label' }, g),
           visible.filter((p) => p[4] === g).map(([id, label]) => h('a', { href: '#/' + id, class: id === active ? 'active' : null, title: label,
             onclick: () => shell.classList.remove('mobile-open') }, icon(menuIcon(id)), h('span', {}, label))))),
@@ -277,7 +280,6 @@
         h('div', { class: 'side-foot' },
           h('button', { class: 'side-btn', title: dark ? 'Tema claro' : 'Tema escuro', onclick: () => { prefs.set('theme', dark ? 'light' : 'dark'); applyTheme(); route(); } },
             icon(dark ? 'sun' : 'moon'), h('span', {}, dark ? 'Tema claro' : 'Tema escuro')),
-          collapseBtn,
           h('div', { class: 'who', title: me.name }, h('span', { class: 'avatar' }, initials(me.name)),
             h('div', { class: 'who-text' }, h('b', {}, me.name), h('span', {}, me.role === 'admin' ? 'Administrador' : 'Gestor de filial'))),
           h('button', { class: 'side-btn', title: 'Sair', onclick: async () => { await api('/logout', { method: 'POST' }).catch(() => {}); me = null; showLogin(); } },
@@ -1310,7 +1312,16 @@
             h('td', {}, h('span', { class: 'badge ' + (b.active ? 'ok' : 'off') }, b.active ? 'Ativa' : 'Inativa'), b.public_enabled ? h('span', { class: 'badge ok' }, 'QR ativo') : null),
             h('td', {}, h('div', { class: 'row' },
               h('button', { class: 'btn secondary sm', onclick: () => openLink(b) }, 'QR Code'),
-              isAdmin ? h('button', { class: 'btn secondary sm', onclick: () => edit(b) }, 'Editar') : null)));
+              isAdmin ? h('button', { class: 'btn secondary sm', onclick: () => edit(b) }, 'Editar') : null,
+              isAdmin && !b.responses ? h('button', { class: 'btn danger sm', onclick: async () => {
+                const extra = b.devices ? ` Os ${b.devices} tablet(s) dela também serão excluídos.` : '';
+                if (!confirm(`Excluir a filial "${b.name}" definitivamente?${extra} Isso não pode ser desfeito.`)) return;
+                try { await api('/branches/' + b.id, { method: 'DELETE' }); cache.branches = null; toast('Filial excluída.'); route(); } catch (ex) { toast(ex.message, true); }
+              } }, 'Excluir') : null,
+              isAdmin && b.responses && b.active ? h('button', { class: 'btn danger sm', title: 'Tem pesquisas respondidas: o histórico é mantido', onclick: async () => {
+                if (!confirm(`Desativar a filial "${b.name}"? Ela tem pesquisas respondidas, que continuam nos relatórios. Os tablets dela deixam de coletar.`)) return;
+                try { await api(`/branches/${b.id}/deactivate`, { method: 'POST' }); cache.branches = null; toast('Filial desativada.'); route(); } catch (ex) { toast(ex.message, true); }
+              } }, 'Desativar') : null)));
         }) : h('tr', {}, h('td', { colspan: '7', class: 'empty' }, 'Nenhuma filial cadastrada.'))))));
   }
 
@@ -1381,7 +1392,11 @@
             d.active ? h('button', { class: 'btn danger sm', onclick: async () => {
               if (!confirm(`Revogar o acesso do tablet "${d.name}"? Ele deixará de coletar respostas imediatamente.`)) return;
               try { await api(`/devices/${d.id}/revoke`, { method: 'POST' }); toast('Tablet revogado.'); route(); } catch (ex) { toast(ex.message, true); }
-            } }, 'Revogar') : null))))
+            } }, 'Revogar') : null,
+            me.role === 'admin' ? h('button', { class: 'btn danger sm', onclick: async () => {
+              if (!confirm(`Excluir o tablet "${d.name}" definitivamente? Ele perde o acesso, e respostas guardadas nele sem internet não poderão mais ser enviadas. As respostas já recebidas continuam na filial.`)) return;
+              try { await api('/devices/' + d.id, { method: 'DELETE' }); toast('Tablet excluído.'); route(); } catch (ex) { toast(ex.message, true); }
+            } }, 'Excluir') : null))))
           : h('tr', {}, h('td', { colspan: '5', class: 'empty' }, 'Nenhum tablet cadastrado.'))))));
   }
 
@@ -1809,6 +1824,8 @@
       case 'settings.delivery': return E('cadastros', 'warn', 'Alterou a configuração de e-mail/WhatsApp', [d.smtp && `E-mail: ${d.smtp}`, d.whatsapp && `WhatsApp: ${d.whatsapp}`].filter(Boolean).join(' · ') + '. (senhas e tokens não são registrados)');
       case 'device.create': return E('tablets', '', `Cadastrou o tablet "${d.name || '#' + d.id}"`, d.branchId ? `Filial: ${brName(d.branchId)}.` : '');
       case 'device.new_code': return E('tablets', 'warn', `Gerou um novo código de pareamento para o tablet "${ctx.devices.get(Number(d.id)) || '#' + d.id}"`, 'O tablet atual perdeu o acesso até ser pareado de novo.');
+      case 'device.delete': return E('tablets', 'warn', `Excluiu o tablet "${d.name || '#' + d.id}"`, 'As respostas já recebidas continuam na filial.');
+      case 'branch.delete': return E('cadastros', 'warn', `Excluiu a filial "${d.name || d.code || '#' + d.id}"`, d.devices ? `${d.devices} tablet(s) excluído(s) junto.` : '');
       case 'device.revoke': return E('tablets', 'warn', `Revogou o acesso do tablet "${ctx.devices.get(Number(d.id)) || '#' + d.id}"`, 'Ele não coleta mais respostas.');
       case 'device.paired': return E('tablets', 'ok', `Um tablet foi pareado${d.deviceId ? ': "' + (ctx.devices.get(Number(d.deviceId)) || '#' + d.deviceId) + '"' : ''}`);
       case 'device.pair_failed': return E('tablets', 'warn', 'Tentativa de parear tablet com código errado ou vencido');
