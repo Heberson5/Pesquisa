@@ -1,0 +1,1359 @@
+<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"></head><body style="margin:0">
+<title>Sauberlich System — Plataformas</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap">
+<style>
+/* Layout: palco 16:9 fixo (1280x720) escalado ao espaço livre, entre barra de sistemas (topo) e barra de telas (base).
+   Visual único e deliberado: moldura escura de apresentação, slides claros. */
+:root{
+  --shell:#0B1522; --shell-2:#13213A; --shell-line:#22314A; --shell-fg:#E7EDF5; --shell-mut:#93A3B8;
+  --paper:#F3F6F9; --white:#FFFFFF; --ink:#0E1A2B; --mut:#5D6B7C; --line:#DCE3EB; --soft:#EEF2F6;
+  --brand:#0E2A47; --teal:#13A3B4;
+  --red:#DC2626; --amb:#D97706; --grn:#16A34A; --blu:#2563EB;
+  --display:"Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --body:"Plus Jakarta Sans", "Segoe UI", system-ui, -apple-system, sans-serif;
+  color-scheme:dark;
+}
+html,body{height:100%}
+body{background:var(--shell);color:var(--shell-fg);font-family:var(--body);overflow:hidden}
+*{box-sizing:border-box}
+button{font-family:inherit;cursor:pointer}
+a{color:inherit}
+:focus-visible{outline:2px solid var(--teal);outline-offset:2px}
+
+/* ---------- moldura ---------- */
+.shell{height:100%;display:grid;grid-template-rows:auto 1fr auto}
+.topbar{display:flex;align-items:center;gap:18px;padding-block:10px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));border-bottom:1px solid var(--shell-line);background:var(--shell);min-width:0}
+.brand{display:flex;align-items:center;gap:10px;flex-shrink:0}
+.mark{width:30px;height:30px;border-radius:8px;background:var(--teal);display:grid;place-items:center;font-family:var(--display);font-weight:800;color:#06222A;font-size:18px}
+.brand b{font-family:var(--display);font-weight:700;font-size:16px;letter-spacing:.2px;white-space:nowrap}
+.brand b span{color:var(--teal)}
+.secnav{display:flex;gap:4px;overflow-x:auto;scrollbar-width:none;min-width:0;flex:1}
+.secnav::-webkit-scrollbar{display:none}
+.secnav button{background:transparent;border:1px solid transparent;color:var(--shell-mut);padding:7px 13px;border-radius:999px;font-size:13px;font-weight:600;white-space:nowrap;display:flex;align-items:center;gap:7px}
+.secnav button i{width:8px;height:8px;border-radius:50%;background:var(--c,var(--teal));display:inline-block}
+.secnav button:hover{color:var(--shell-fg);background:var(--shell-2)}
+.secnav button[aria-current="true"]{color:var(--shell-fg);background:var(--shell-2);border-color:var(--shell-line)}
+.tools{display:flex;gap:6px;flex-shrink:0}
+.ibtn{background:var(--shell-2);border:1px solid var(--shell-line);color:var(--shell-fg);width:34px;height:34px;border-radius:9px;display:grid;place-items:center}
+.ibtn:hover{border-color:var(--teal)}
+.ibtn svg{width:16px;height:16px}
+
+.viewport{position:relative;overflow:hidden;min-height:0}
+.stage{position:absolute;left:50%;top:50%;width:1280px;height:720px;transform-origin:center center}
+.slide{position:absolute;inset:0;background:var(--paper);color:var(--ink);border-radius:14px;overflow:hidden;box-shadow:0 30px 80px rgba(0,0,0,.45);opacity:0;visibility:hidden;transition:opacity .35s ease,transform .35s ease;transform:translateX(18px)}
+.slide.on{opacity:1;visibility:visible;transform:none}
+.slide.prev{transform:translateX(-18px)}
+@media (prefers-reduced-motion:reduce){.slide{transition:none}}
+
+.bottombar{display:flex;align-items:center;gap:12px;padding-block:10px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));border-top:1px solid var(--shell-line);min-width:0}
+.navbtn{background:var(--shell-2);border:1px solid var(--shell-line);color:var(--shell-fg);height:36px;padding:0 14px;border-radius:9px;font-weight:700;font-size:13px;display:flex;align-items:center;gap:6px;flex-shrink:0}
+.navbtn:hover:not(:disabled){border-color:var(--teal)}
+.navbtn:disabled{opacity:.35;cursor:default}
+.navbtn.next{background:var(--teal);border-color:var(--teal);color:#06222A}
+.screens{display:flex;gap:6px;overflow-x:auto;flex:1;min-width:0;scrollbar-width:thin}
+.screens .lbl{color:var(--shell-mut);font-size:11px;text-transform:uppercase;letter-spacing:1px;font-weight:700;align-self:center;white-space:nowrap;padding-right:4px}
+.screens button{background:transparent;border:1px solid var(--shell-line);color:var(--shell-mut);padding:7px 12px;border-radius:8px;font-size:12.5px;font-weight:600;white-space:nowrap}
+.screens button:hover{color:var(--shell-fg)}
+.screens button[aria-current="true"]{background:var(--shell-fg);color:var(--shell);border-color:var(--shell-fg)}
+.counter{font-variant-numeric:tabular-nums;color:var(--shell-mut);font-size:12.5px;white-space:nowrap;flex-shrink:0}
+@media (max-width:640px){.brand b,.counter,.screens .lbl{display:none}.navbtn span{display:none}}
+
+/* ---------- conteúdo dos slides ---------- */
+.slide[data-sec="chamados"]{--ac:#5B4BF0;--ac-soft:#ECEAFE}
+.slide[data-sec="treinamentos"]{--ac:#7C3AED;--ac-soft:#F1E9FE}
+.slide[data-sec="atendimento"]{--ac:#0E9F6E;--ac-soft:#E2F6EE}
+.slide[data-sec="pesquisa"]{--ac:#E8590C;--ac-soft:#FDEBDD}
+.slide[data-sec="inicio"],.slide[data-sec="encerramento"]{--ac:var(--teal);--ac-soft:#DDF3F5}
+
+.sfoot{position:absolute;left:44px;right:44px;bottom:18px;display:flex;justify-content:space-between;font-size:11.5px;color:var(--mut);font-weight:600}
+.sfoot .fb{display:flex;align-items:center;gap:7px}
+.sfoot .fb i{width:14px;height:14px;border-radius:4px;background:var(--brand);display:inline-block}
+
+/* slide de tela: legenda à esquerda, tela à direita */
+.screen-slide{display:grid;grid-template-columns:318px 1fr;gap:34px;padding:44px 44px 54px}
+.cap{display:flex;flex-direction:column;gap:14px;padding-top:6px}
+.eyebrow{font-size:11.5px;font-weight:800;letter-spacing:1.6px;text-transform:uppercase;color:var(--ac);display:flex;align-items:center;gap:8px}
+.eyebrow::before{content:"";width:18px;height:2px;background:var(--ac)}
+.cap h2{font-family:var(--display);font-size:34px;line-height:1.05;margin:0;font-weight:800;letter-spacing:-.6px;text-wrap:balance}
+.cap p{margin:0;font-size:14.5px;line-height:1.55;color:var(--mut)}
+.cap ul{list-style:none;margin:6px 0 0;padding:0;display:flex;flex-direction:column;gap:10px}
+.cap li{font-size:13.5px;line-height:1.45;display:grid;grid-template-columns:20px 1fr;gap:8px}
+.cap li::before{content:"";width:18px;height:18px;border-radius:6px;background:var(--ac-soft) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23334155' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12l5 5 9-10'/%3E%3C/svg%3E") center/11px no-repeat;margin-top:1px}
+.cap .site{margin-top:auto;display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:700;color:var(--ink);background:var(--white);border:1px solid var(--line);padding:9px 12px;border-radius:10px;text-decoration:none;width:max-content;max-width:100%}
+.live{display:inline-flex;align-items:center;gap:6px;font-size:10.5px;font-weight:800;letter-spacing:.8px;text-transform:uppercase;color:var(--grn)}
+.live::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--grn);box-shadow:0 0 0 3px #16A34A33}
+
+/* navegador */
+.br{background:var(--white);border-radius:12px;overflow:hidden;box-shadow:0 18px 50px rgba(14,26,43,.16),0 0 0 1px rgba(14,26,43,.06);height:100%;display:flex;flex-direction:column;min-width:0}
+.br-top{height:34px;flex-shrink:0;display:flex;align-items:center;gap:12px;padding:0 12px;background:#E9EEF3;border-bottom:1px solid var(--line)}
+.dots{display:flex;gap:5px}.dots i{width:9px;height:9px;border-radius:50%;background:#C9D2DC;display:block}
+.url{flex:1;background:var(--white);border-radius:6px;height:22px;display:flex;align-items:center;gap:6px;padding:0 10px;font-size:11px;color:var(--mut);font-weight:500;max-width:520px}
+.url svg{width:10px;height:10px;color:var(--grn)}
+.url b{color:var(--ink);font-weight:600}
+
+/* app genérico */
+.app{flex:1;display:grid;grid-template-columns:150px 1fr;min-height:0;font-size:11px;color:var(--ink)}
+.sd{border-right:1px solid var(--line);padding:12px 9px;display:flex;flex-direction:column;gap:2px;background:var(--white)}
+.sd .lg{display:flex;align-items:center;gap:7px;font-weight:800;font-size:11.5px;padding:2px 6px 12px}
+.sd .lg i{width:20px;height:20px;border-radius:6px;background:var(--ac);display:block}
+.sd .gp{font-size:8.5px;font-weight:800;letter-spacing:1px;color:#8A97A8;padding:8px 7px 3px;text-transform:uppercase}
+.ni{padding:6px 8px;border-radius:7px;color:#4A5768;font-weight:600;display:flex;align-items:center;gap:7px}
+.ni::before{content:"";width:10px;height:10px;border-radius:3px;border:1.5px solid currentColor;opacity:.6}
+.ni.on{background:var(--ac-soft);color:var(--ac)}
+.ni .ct{margin-left:auto;background:var(--ac);color:#fff;border-radius:99px;font-size:8.5px;padding:1px 6px}
+.sd .me{margin-top:auto;display:flex;align-items:center;gap:7px;padding:8px 6px 0;border-top:1px solid var(--line)}
+.mn{background:#F6F8FB;padding:14px 16px;overflow:hidden;display:flex;flex-direction:column;gap:11px;min-width:0}
+.ph{display:flex;align-items:flex-end;justify-content:space-between;gap:10px}
+.ph h3{margin:0;font-size:16px;font-weight:800;letter-spacing:-.2px}
+.ph small{display:block;color:var(--mut);font-size:10.5px;margin-top:2px}
+.btn{background:var(--ac);color:#fff;border-radius:7px;padding:6px 10px;font-weight:700;font-size:10.5px;white-space:nowrap;display:inline-flex;align-items:center;gap:5px}
+.btn.gh{background:var(--white);color:var(--ink);border:1px solid var(--line)}
+.btn.rd{background:#FEE2E2;color:var(--red)}
+.row{display:flex;gap:6px;align-items:center}
+.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:9px}
+.kp{background:var(--white);border:1px solid var(--line);border-radius:10px;padding:10px 11px}
+.kp span{display:block;color:var(--mut);font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.5px}
+.kp b{display:block;font-size:21px;font-weight:800;margin-top:3px;letter-spacing:-.4px;font-variant-numeric:tabular-nums}
+.kp em{font-style:normal;font-size:9.5px;color:var(--mut)}
+.kp em.up{color:var(--grn);font-weight:700}
+.cd{background:var(--white);border:1px solid var(--line);border-radius:10px;padding:11px 12px;min-width:0}
+.cd h4{margin:0 0 9px;font-size:11.5px;font-weight:800;display:flex;justify-content:space-between;align-items:center}
+.cd h4 small{font-weight:600;color:var(--mut);font-size:9.5px}
+.g2{display:grid;grid-template-columns:1.5fr 1fr;gap:9px}
+.g2e{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+.tb{width:100%;border-collapse:collapse;font-size:10.5px}
+.tb th{text-align:left;color:#7B889A;font-weight:700;font-size:9px;text-transform:uppercase;letter-spacing:.5px;padding:6px 8px;border-bottom:1px solid var(--line)}
+.tb td{padding:7px 8px;border-bottom:1px solid #EDF1F5;white-space:nowrap}
+.tb tr:last-child td{border-bottom:0}
+.tb .pr{color:var(--mut);font-variant-numeric:tabular-nums;font-weight:600}
+.num{font-variant-numeric:tabular-nums}
+.pl{display:inline-flex;align-items:center;gap:4px;padding:2px 7px;border-radius:99px;font-size:9px;font-weight:700;white-space:nowrap}
+.pl.r{background:#FEE2E2;color:#B91C1C}.pl.a{background:#FEF3C7;color:#B45309}.pl.g{background:#DCFCE7;color:#15803D}
+.pl.b{background:#DBEAFE;color:#1D4ED8}.pl.n{background:#EEF2F6;color:#475569}.pl.p{background:var(--ac-soft);color:var(--ac)}
+.av{width:22px;height:22px;border-radius:50%;display:inline-grid;place-items:center;font-size:8.5px;font-weight:800;color:#fff;flex-shrink:0;background:#64748B}
+.av.c1{background:#5B4BF0}.av.c2{background:#0E9F6E}.av.c3{background:#E8590C}.av.c4{background:#2563EB}.av.c5{background:#DB2777}.av.c6{background:#0891B2}
+.who{display:flex;align-items:center;gap:6px}
+.inp{background:var(--white);border:1px solid var(--line);border-radius:7px;padding:6px 9px;color:var(--mut);font-size:10.5px;white-space:nowrap}
+.bars{display:flex;align-items:flex-end;gap:5px;height:120px;padding-top:6px;border-bottom:1px solid var(--line)}
+.bars .c{flex:1;display:flex;gap:2px;align-items:flex-end;height:100%}
+.bars .c i{flex:1;border-radius:3px 3px 0 0;display:block;background:var(--ac)}
+.bars .c i.s{background:#C7D0DB}
+.axis{display:flex;gap:5px;font-size:8.5px;color:#8A97A8;margin-top:4px}.axis span{flex:1;text-align:center}
+.hb{display:grid;grid-template-columns:78px 1fr 34px;gap:7px;align-items:center;font-size:10px;margin-bottom:7px}
+.hb .t{height:8px;background:#EDF1F5;border-radius:99px;overflow:hidden}
+.hb .t i{display:block;height:100%;background:var(--ac);border-radius:99px}
+.hb b{text-align:right;font-variant-numeric:tabular-nums}
+.legend{display:flex;gap:12px;font-size:9.5px;color:var(--mut);margin-top:8px}
+.legend i{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:4px;vertical-align:-1px}
+
+/* ---------- capas ---------- */
+.cover{display:grid;grid-template-columns:1.15fr 1fr;gap:40px;padding:56px 56px 60px}
+.cover .l{display:flex;flex-direction:column;gap:16px;min-width:0}
+.cover h1{font-family:var(--display);font-size:60px;line-height:.98;margin:0;font-weight:800;letter-spacing:-1.6px;text-wrap:balance}
+.cover h1 em{font-style:normal;color:var(--ac)}
+.cover .lead{font-size:17px;line-height:1.55;color:var(--mut);margin:0;max-width:34em}
+.feat{display:grid;grid-template-columns:1fr 1fr;gap:10px 22px;margin-top:6px}
+.feat div{font-size:13.5px;line-height:1.4;padding-left:14px;border-left:2px solid var(--ac)}
+.feat b{display:block;font-size:13.5px}
+.feat span{color:var(--mut);font-size:12.5px}
+.urlcard{margin-top:auto;display:flex;align-items:center;gap:14px;background:var(--white);border:1px solid var(--line);border-radius:14px;padding:14px 18px;width:max-content;max-width:100%;text-decoration:none}
+.urlcard .u{font-size:19px;font-weight:800;letter-spacing:-.2px;color:var(--ink)}
+.urlcard small{display:block;color:var(--mut);font-size:11.5px;font-weight:600}
+.urlcard .go{width:34px;height:34px;border-radius:10px;background:var(--ac);display:grid;place-items:center;color:#fff}
+.urlcard .go svg{width:16px;height:16px}
+.tel{background:var(--white);border:1px solid var(--line);border-radius:18px;padding:22px;display:flex;flex-direction:column;gap:8px;align-self:start}
+.tel h3{margin:0 0 6px;font-size:12px;letter-spacing:1.4px;text-transform:uppercase;color:var(--mut);font-weight:800}
+.tel button{display:grid;grid-template-columns:32px 1fr auto;gap:12px;align-items:center;text-align:left;background:var(--paper);border:1px solid transparent;border-radius:11px;padding:11px 13px;color:var(--ink)}
+.tel button:hover{border-color:var(--ac);background:var(--ac-soft)}
+.tel button .n{width:32px;height:32px;border-radius:9px;background:var(--ac);color:#fff;display:grid;place-items:center;font-weight:800;font-size:13px;font-variant-numeric:tabular-nums}
+.tel button b{display:block;font-size:14px}
+.tel button small{color:var(--mut);font-size:11.5px}
+.tel button svg{width:16px;height:16px;color:var(--mut)}
+.badge-sec{display:inline-flex;align-items:center;gap:8px;background:var(--ac-soft);color:var(--ac);font-weight:800;font-size:12px;letter-spacing:1.2px;text-transform:uppercase;padding:7px 12px;border-radius:99px;width:max-content}
+
+/* ---------- abertura ---------- */
+.opening{background:var(--brand);color:#E9F1F8;padding:60px 64px;display:grid;grid-template-rows:auto 1fr auto;gap:30px}
+.opening .top{display:flex;align-items:center;gap:14px}
+.opening .top .mark{width:46px;height:46px;font-size:27px;border-radius:12px}
+.opening .top b{font-family:var(--display);font-size:22px;font-weight:700}
+.opening h1{font-family:var(--display);font-size:78px;line-height:.95;letter-spacing:-2.4px;margin:0;font-weight:800;max-width:11em}
+.opening h1 span{color:#5CD3DF}
+.opening p{font-size:18px;line-height:1.55;color:#AFC3D6;max-width:40em;margin:18px 0 0}
+.plat4{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+.plat4 button{background:#123659;border:1px solid #21507A;border-radius:14px;padding:16px;text-align:left;color:#E9F1F8;display:flex;flex-direction:column;gap:6px}
+.plat4 button:hover{border-color:#5CD3DF}
+.plat4 .k{width:10px;height:10px;border-radius:3px}
+.plat4 b{font-size:16px}
+.plat4 small{color:#9FB6CC;font-size:12px;line-height:1.4}
+.plat4 .u{font-size:11.5px;color:#5CD3DF;font-weight:700;margin-top:4px}
+.plat4 .live{color:#4ADE80}
+
+.pillars{padding:52px 56px 60px;display:grid;grid-template-rows:auto 1fr;gap:28px}
+.pillars h2{font-family:var(--display);font-size:42px;margin:8px 0 0;letter-spacing:-1px;font-weight:800;max-width:18em;line-height:1.05}
+.pgrid{display:grid;grid-template-columns:repeat(3,1fr);grid-template-rows:1fr 1fr;gap:14px}
+.pgrid div{background:var(--white);border:1px solid var(--line);border-radius:14px;padding:20px;display:flex;flex-direction:column;gap:8px}
+.pgrid svg{width:26px;height:26px;color:var(--teal)}
+.pgrid b{font-size:16px}
+.pgrid span{font-size:13px;color:var(--mut);line-height:1.5}
+
+/* ---------- chamados: kanban/detalhe ---------- */
+.kb{display:grid;grid-template-columns:repeat(4,1fr);gap:9px;flex:1;min-height:0}
+.kc{background:#EDF1F6;border-radius:10px;padding:8px;display:flex;flex-direction:column;gap:7px;min-width:0}
+.kc h5{margin:0;font-size:10.5px;display:flex;justify-content:space-between;align-items:center;padding:2px 3px}
+.kc h5 span{background:var(--white);border-radius:99px;padding:1px 7px;font-size:9px;color:var(--mut)}
+.kk{background:var(--white);border-radius:8px;padding:8px;border:1px solid var(--line);display:flex;flex-direction:column;gap:5px}
+.kk b{font-size:10.5px;line-height:1.3;font-weight:700;white-space:normal}
+.kk .m{display:flex;justify-content:space-between;align-items:center;color:var(--mut);font-size:9px}
+.kk.drag{transform:rotate(-2deg);box-shadow:0 10px 24px rgba(14,26,43,.18);border-color:var(--ac)}
+.det{display:grid;grid-template-columns:1fr 210px;gap:10px;flex:1;min-height:0}
+.tl{display:flex;flex-direction:column;gap:8px}
+.msg{display:grid;grid-template-columns:22px 1fr;gap:8px}
+.msg .bx{background:var(--white);border:1px solid var(--line);border-radius:9px;padding:8px 10px;line-height:1.45;font-size:10.5px}
+.msg .bx .hd{display:flex;justify-content:space-between;font-size:9.5px;color:var(--mut);margin-bottom:3px}
+.msg .bx .hd b{color:var(--ink)}
+.msg.int .bx{background:#FFFBEB;border-color:#FDE68A}
+.att{display:inline-flex;align-items:center;gap:6px;margin-top:6px;background:var(--soft);border-radius:6px;padding:4px 8px;font-size:9.5px;font-weight:600}
+.side-info{display:flex;flex-direction:column;gap:8px}
+.kv{display:flex;justify-content:space-between;font-size:10px;padding:5px 0;border-bottom:1px solid #EDF1F5}
+.kv span{color:var(--mut)}.kv b{font-weight:700}
+.sla{height:7px;border-radius:99px;background:#EDF1F5;overflow:hidden;margin-top:5px}.sla i{display:block;height:100%;width:64%;background:var(--amb)}
+.acts{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.acts .btn{justify-content:center}
+.tg{width:26px;height:15px;border-radius:99px;background:#CBD5E1;position:relative;display:inline-block;flex-shrink:0}
+.tg::after{content:"";position:absolute;top:2px;left:2px;width:11px;height:11px;border-radius:50%;background:#fff}
+.tg.on{background:var(--ac)}.tg.on::after{left:13px}
+.tg.lock{background:#E2E8F0}.tg.lock::after{background:#F8FAFC}
+.ptabs{display:flex;gap:4px;background:var(--soft);padding:3px;border-radius:9px;width:max-content}
+.ptabs span{padding:5px 11px;border-radius:7px;font-weight:700;font-size:10.5px;color:var(--mut)}
+.ptabs span.on{background:var(--white);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.08)}
+.perm{display:grid;grid-template-columns:1fr 1fr;gap:0 18px}
+.perm div{display:flex;justify-content:space-between;align-items:center;padding:7px 2px;border-bottom:1px solid #EDF1F5;font-size:10.5px}
+.perm div small{display:block;color:var(--mut);font-size:9px}
+.stars{color:#F59E0B;letter-spacing:1px;font-size:13px}
+
+/* ---------- treinamentos ---------- */
+.courses{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.course{background:var(--white);border:1px solid var(--line);border-radius:11px;overflow:hidden;display:flex;flex-direction:column}
+.course .cv{height:70px;position:relative;display:flex;align-items:flex-end;padding:8px}
+.course .cv span{background:rgba(255,255,255,.92);border-radius:99px;font-size:8.5px;font-weight:800;padding:2px 7px;color:var(--ink)}
+.course .bd{padding:9px 10px;display:flex;flex-direction:column;gap:5px}
+.course b{font-size:11px;line-height:1.3}
+.course .m{display:flex;justify-content:space-between;color:var(--mut);font-size:9.5px}
+.prog{height:5px;background:#EDF1F5;border-radius:99px;overflow:hidden}.prog i{display:block;height:100%;background:var(--ac)}
+.player{background:#0F172A;border-radius:10px;flex:1;position:relative;display:grid;place-items:center;min-height:0;overflow:hidden}
+.player .play{width:52px;height:52px;border-radius:50%;background:rgba(255,255,255,.95);display:grid;place-items:center}
+.player .play::after{content:"";border-left:16px solid var(--ac);border-top:10px solid transparent;border-bottom:10px solid transparent;margin-left:4px}
+.player .ttl{position:absolute;left:14px;top:12px;color:#E2E8F0;font-size:11px;font-weight:700}
+.player .ctl{position:absolute;left:14px;right:14px;bottom:12px;display:flex;align-items:center;gap:9px;color:#CBD5E1;font-size:9.5px}
+.player .ctl .tr{flex:1;height:4px;background:#334155;border-radius:9px;overflow:hidden}.player .ctl .tr i{display:block;width:41%;height:100%;background:var(--ac)}
+.mods{display:flex;flex-direction:column;gap:5px}
+.mod{display:grid;grid-template-columns:18px 1fr auto;gap:7px;align-items:center;padding:7px 8px;border-radius:8px;font-size:10.5px;background:var(--white);border:1px solid var(--line)}
+.mod .ck{width:16px;height:16px;border-radius:50%;border:1.5px solid #CBD5E1}
+.mod.done .ck{background:var(--grn);border-color:var(--grn)}
+.mod.now{border-color:var(--ac);background:var(--ac-soft)}
+.mod.now .ck{border-color:var(--ac);border-width:4px}
+.mod small{color:var(--mut);font-size:9px}
+.quiz{background:var(--white);border:1px solid var(--line);border-radius:12px;padding:18px 20px;display:flex;flex-direction:column;gap:11px}
+.quiz .q{font-size:15px;font-weight:800;line-height:1.35;letter-spacing:-.2px}
+.opt{display:grid;grid-template-columns:24px 1fr;gap:10px;align-items:center;border:1.5px solid var(--line);border-radius:9px;padding:9px 11px;font-size:11.5px}
+.opt span{width:24px;height:24px;border-radius:7px;background:var(--soft);display:grid;place-items:center;font-weight:800;font-size:10.5px}
+.opt.sel{border-color:var(--ac);background:var(--ac-soft)}
+.opt.sel span{background:var(--ac);color:#fff}
+.qnav{display:flex;gap:4px}.qnav i{width:20px;height:6px;border-radius:9px;background:#E2E8F0;display:block}.qnav i.d{background:var(--ac)}.qnav i.c{background:var(--ink)}
+.cert{flex:1;background:var(--white);border-radius:6px;position:relative;padding:30px 44px;display:grid;grid-template-columns:1fr 150px;gap:30px;align-items:center;border:1px solid var(--line);min-height:0}
+.cert::before{content:"";position:absolute;inset:8px;border:2px solid var(--ac);border-radius:3px;opacity:.35;pointer-events:none}
+.cert .t1{font-size:10px;letter-spacing:3px;text-transform:uppercase;color:var(--ac);font-weight:800}
+.cert h5{font-family:var(--display);font-size:40px;margin:8px 0 22px;font-weight:800;letter-spacing:-.6px}
+.cert .nm{font-family:var(--display);font-size:32px;font-weight:700;border-bottom:1px solid var(--line);padding-bottom:6px;margin-bottom:8px}
+.cert p{margin:0;font-size:12.5px;line-height:1.7;color:#334155}
+.cert .sig{display:flex;gap:40px;margin-top:34px}
+.cert .sig div{border-top:1px solid #94A3B8;padding-top:4px;font-size:9.5px;color:var(--mut);width:140px}
+.qr{display:block;width:100%;aspect-ratio:1;max-width:100%}
+.qrbox{display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center;font-size:9.5px;color:var(--mut);min-width:0;overflow-wrap:anywhere}
+
+/* ---------- atendimento ---------- */
+.wa{flex:1;display:grid;grid-template-columns:44px 230px 1fr;min-height:0;font-size:11px}
+.rail{background:#0B3B2E;display:flex;flex-direction:column;align-items:center;gap:10px;padding:12px 0}
+.rail i{width:24px;height:24px;border-radius:7px;background:#14523F;display:block}
+.rail i.on{background:#22C55E}
+.rail i.lg{background:#fff;border-radius:7px}
+.cl{border-right:1px solid var(--line);display:flex;flex-direction:column;background:var(--white);min-width:0}
+.cl .tabs{display:flex;border-bottom:1px solid var(--line)}
+.cl .tabs span{flex:1;text-align:center;padding:9px 0;font-weight:700;color:var(--mut);font-size:10.5px}
+.cl .tabs span.on{color:var(--ac);box-shadow:inset 0 -2px 0 var(--ac)}
+.cl .sr{padding:8px}
+.ci{display:grid;grid-template-columns:28px 1fr auto;gap:8px;align-items:center;padding:8px 10px;border-bottom:1px solid #F0F3F6}
+.ci .av{width:28px;height:28px;font-size:9.5px}
+.ci b{font-size:10.5px;display:block}
+.ci small{color:var(--mut);font-size:9.5px;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:120px}
+.ci .r{display:flex;flex-direction:column;align-items:flex-end;gap:3px;font-size:8.5px;color:var(--mut)}
+.ci.on{background:var(--ac-soft)}
+.acc{background:var(--ac);color:#fff;font-weight:800;font-size:8.5px;padding:4px 7px;border-radius:6px;letter-spacing:.4px}
+.unr{background:var(--ac);color:#fff;border-radius:99px;font-weight:800;padding:1px 6px}
+.chat{display:flex;flex-direction:column;min-width:0;min-height:0;position:relative}
+.chat .hd{display:flex;align-items:center;gap:9px;padding:9px 12px;background:var(--white);border-bottom:1px solid var(--line)}
+.chat .hd b{font-size:11.5px}.chat .hd small{display:block;color:var(--mut);font-size:9.5px}
+.chat .hd .row{margin-left:auto}
+.bub{flex:1;background:#EFEAE2;padding:12px 16px;display:flex;flex-direction:column;gap:6px;overflow:hidden}
+.bb{max-width:68%;padding:6px 9px 4px;border-radius:9px;font-size:10.5px;line-height:1.45;background:var(--white);box-shadow:0 1px 1px rgba(0,0,0,.06)}
+.bb small{display:block;text-align:right;color:#8696A0;font-size:8.5px}
+.bb.me{align-self:flex-end;background:#D9FDD3}
+.bb .ag{display:block;font-size:9px;font-weight:800;color:var(--ac)}
+.sysm{align-self:center;background:#E1F3FB;color:#35627A;font-size:9px;padding:3px 9px;border-radius:7px;font-weight:600}
+.cmp{display:flex;gap:8px;align-items:center;padding:8px 12px;background:#F0F2F5}
+.cmp .inp{flex:1}
+.overlay{position:absolute;inset:0;background:rgba(14,26,43,.45);display:grid;place-items:center}
+.modal{background:var(--white);border-radius:12px;width:330px;padding:16px;display:flex;flex-direction:column;gap:9px;box-shadow:0 20px 50px rgba(0,0,0,.25)}
+.modal h5{margin:0;font-size:13px}
+.modal .op{display:grid;grid-template-columns:22px 1fr auto;gap:8px;align-items:center;padding:7px 8px;border:1px solid var(--line);border-radius:8px}
+.modal .op.sel{border-color:var(--ac);background:var(--ac-soft)}
+.on-dot{width:7px;height:7px;border-radius:50%;background:var(--grn);display:inline-block;margin-right:4px}
+.off-dot{width:7px;height:7px;border-radius:50%;background:#CBD5E1;display:inline-block;margin-right:4px}
+.agents{display:grid;grid-template-columns:repeat(3,1fr);gap:9px}
+.ag-c{background:var(--white);border:1px solid var(--line);border-radius:10px;padding:10px;display:flex;flex-direction:column;gap:7px}
+.ag-c .t{display:flex;align-items:center;gap:7px}
+.ag-c .t b{font-size:11px;display:block}.ag-c .t small{color:var(--mut);font-size:9px}
+.ag-c .s{display:grid;grid-template-columns:repeat(3,1fr);text-align:center;background:var(--soft);border-radius:7px;padding:5px 0}
+.ag-c .s b{display:block;font-size:13px;font-variant-numeric:tabular-nums}.ag-c .s span{font-size:8.5px;color:var(--mut)}
+.ag-c .cv{display:flex;justify-content:space-between;font-size:9.5px;color:#334155;padding:3px 0;border-top:1px dashed #E2E8F0}
+.ag-c .cv span{color:var(--mut)}
+.ro{display:inline-flex;align-items:center;gap:5px;background:#FEF3C7;color:#92400E;font-weight:700;font-size:9.5px;border-radius:99px;padding:3px 9px}
+.qr-list{display:flex;flex-direction:column;gap:7px}
+.qr-it{display:grid;grid-template-columns:90px 1fr auto;gap:10px;align-items:center;background:var(--white);border:1px solid var(--line);border-radius:9px;padding:9px 11px}
+.qr-it code{font-family:ui-monospace,Consolas,monospace;font-size:10.5px;background:var(--ac-soft);color:var(--ac);padding:3px 7px;border-radius:6px;font-weight:700;width:max-content}
+.qr-it p{margin:0;font-size:10.5px;line-height:1.45;color:#334155;white-space:normal}
+
+/* ---------- pesquisa ---------- */
+.devices{display:flex;align-items:center;justify-content:center;gap:28px;height:100%}
+.tablet{width:640px;height:440px;background:#111827;border-radius:28px;padding:16px;box-shadow:0 24px 60px rgba(14,26,43,.3)}
+.tablet .scr{background:#fff;border-radius:14px;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:20px 26px;position:relative}
+.tablet .lang{position:absolute;top:12px;right:14px;display:flex;gap:5px;font-size:10px;font-weight:800}
+.tablet .lang span{padding:3px 7px;border-radius:6px;background:#F1F5F9;color:#64748B}.tablet .lang span.on{background:#13324F;color:#fff}
+.tablet .lgo{position:absolute;top:14px;left:18px;display:flex;align-items:center;gap:7px;font-weight:800;font-size:12px;color:#13324F}
+.tablet .lgo i{width:22px;height:22px;border-radius:6px;background:#13324F;display:block}
+.tablet h5{margin:0;font-size:19px;text-align:center;line-height:1.3;color:#13324F;max-width:26em;font-weight:800;letter-spacing:-.2px}
+.nps{display:grid;grid-template-columns:repeat(11,1fr);gap:6px;width:100%}
+.nps span{aspect-ratio:1;border-radius:10px;display:grid;place-items:center;color:#fff;font-weight:800;font-size:16px}
+.nps-l{display:flex;justify-content:space-between;width:100%;font-size:10.5px;color:#64748B;font-weight:600}
+.faces{display:flex;gap:12px}
+.face{width:52px;height:52px;border-radius:50%;display:grid;place-items:center}
+.face svg{width:34px;height:34px}
+.tablet .ft{font-size:9.5px;color:#94A3B8;position:absolute;bottom:10px}
+.phone{width:200px;height:400px;background:#111827;border-radius:30px;padding:10px;box-shadow:0 24px 60px rgba(14,26,43,.3);flex-shrink:0}
+.phone .scr{background:#fff;border-radius:22px;height:100%;padding:28px 14px 14px;display:flex;flex-direction:column;gap:11px;align-items:center;text-align:center;overflow:hidden}
+.phone h6{margin:0;font-size:12.5px;color:#13324F;line-height:1.35;font-weight:800}
+.poster{width:300px;background:#13324F;color:#fff;border-radius:16px;padding:22px;display:flex;flex-direction:column;gap:12px;align-items:center;text-align:center;box-shadow:0 24px 60px rgba(14,26,43,.25)}
+.poster h6{margin:0;font-family:var(--display);font-size:24px;line-height:1.1;font-weight:800}
+.poster .qw{background:#fff;padding:12px;border-radius:12px;width:170px}
+.poster small{color:#AFC3D6;font-size:11px}
+.cases{display:grid;grid-template-columns:1.25fr 1fr;gap:10px;flex:1;min-height:0}
+.case{display:grid;grid-template-columns:30px 1fr auto;gap:9px;align-items:center;padding:8px 10px;border-bottom:1px solid #EDF1F5}
+.case .sc{width:30px;height:30px;border-radius:8px;display:grid;place-items:center;color:#fff;font-weight:800;font-size:13px}
+.case b{font-size:10.5px;display:block}
+.case small{color:var(--mut);font-size:9.5px;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:230px}
+.case.on{background:var(--ac-soft);border-radius:8px}
+.comp{display:flex;height:8px;border-radius:99px;overflow:hidden;width:100%}
+.comp i{display:block;height:100%}
+.goal{display:grid;grid-template-columns:20px 140px 1fr 46px 60px;gap:9px;align-items:center;padding:7px 4px;border-bottom:1px solid #EDF1F5;font-size:10.5px}
+.goal .rk{font-weight:800;color:var(--mut)}
+.goal .gt{position:relative;height:9px;background:#EDF1F5;border-radius:99px}
+.goal .gt i{position:absolute;left:0;top:0;bottom:0;border-radius:99px}
+.goal .gt u{position:absolute;top:-3px;bottom:-3px;width:2px;background:var(--ink);text-decoration:none}
+
+/* ---------- encerramento ---------- */
+.closing{background:var(--brand);color:#E9F1F8;padding:58px 64px;display:grid;grid-template-columns:1fr 1.1fr;gap:48px;align-items:center}
+.closing h2{font-family:var(--display);font-size:58px;line-height:1;letter-spacing:-1.6px;margin:0 0 18px;font-weight:800}
+.closing h2 span{color:#5CD3DF}
+.closing p{color:#AFC3D6;font-size:17px;line-height:1.55;margin:0}
+.links{display:flex;flex-direction:column;gap:12px}
+.links a{display:grid;grid-template-columns:12px 1fr auto;gap:16px;align-items:center;background:#123659;border:1px solid #21507A;border-radius:14px;padding:16px 20px;text-decoration:none}
+.links a:hover{border-color:#5CD3DF}
+.links a i{width:12px;height:40px;border-radius:4px;display:block}
+.links b{display:block;font-size:17px;color:#fff}
+.links small{display:block;font-size:13px;color:#5CD3DF;font-weight:700;margin-top:2px}
+.links .live{color:#4ADE80}
+</style>
+
+<div class="shell">
+  <header class="topbar">
+    <div class="brand"><div class="mark">S</div><b>Sauberlich <span>System</span></b></div>
+    <nav class="secnav" id="secnav" aria-label="Sistemas"></nav>
+    <div class="tools">
+      <button class="ibtn" id="fsBtn" title="Tela cheia (F)" aria-label="Tela cheia"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+    </div>
+  </header>
+
+  <main class="viewport" id="viewport">
+    <div class="stage" id="stage">
+
+<!-- =================== INÍCIO =================== -->
+<section class="slide opening" data-sec="inicio" data-name="Capa" id="capa">
+  <div class="top"><div class="mark">S</div><b>Sauberlich System</b></div>
+  <div>
+    <h1>Quatro plataformas de gestão, <span>no ar e em uso.</span></h1>
+    <p>Sistemas web desenvolvidos pela Sauberlich System para organizar o atendimento, capacitar equipes e ouvir o cliente. Todos rodam em produção, com acesso pelo navegador do computador, tablet ou celular.</p>
+  </div>
+  <div class="plat4">
+    <button data-to="c-capa"><i class="k" style="background:#7E72F5"></i><b>Chamados</b><small>Help desk com SLA, Kanban e permissões por perfil</small><span class="u" data-site="chamados"></span><span class="live">No ar</span></button>
+    <button data-to="t-capa"><i class="k" style="background:#A57BF2"></i><b>Treinamentos</b><small>Cursos, avaliações e certificados com validação</small><span class="u" data-site="treinamentos"></span><span class="live">No ar</span></button>
+    <button data-to="w-capa"><i class="k" style="background:#2BC48D"></i><b>Atendimento WhatsApp</b><small>Um número, vários atendentes, fila e indicadores</small><span class="u" data-site="atendimento"></span><span class="live">No ar</span></button>
+    <button data-to="p-capa"><i class="k" style="background:#F2843F"></i><b>Pesquisa de Satisfação</b><small>NPS por tablet e QR Code, com painel por filial</small><span class="u" data-site="pesquisa"></span><span class="live">No ar</span></button>
+  </div>
+</section>
+
+<section class="slide pillars" data-sec="inicio" data-name="Base comum" id="base">
+  <div>
+    <span class="badge-sec">O que as quatro têm em comum</span>
+    <h2>A mesma base de segurança e gestão em cada plataforma</h2>
+  </div>
+  <div class="pgrid">
+    <div><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18M5 21V7l7-4 7 4v14M9 21v-6h6v6"/></svg><b>Várias empresas e filiais</b><span>Cada unidade com seus dados, departamentos e usuários, separados no banco.</span></div>
+    <div><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="4"/><path d="M2 21c0-4 3-6 7-6s7 2 7 6M17 11l2 2 4-4"/></svg><b>Perfis e permissões</b><span>Master, Administrador, Gestor, Técnico ou Atendente e Usuário, cada um vendo só o que deve.</span></div>
+    <div><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg><b>Login seguro</b><span>Verificação em duas etapas (2FA), recuperação de senha por e-mail e sessões controladas.</span></div>
+    <div><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/></svg><b>LGPD</b><span>Consentimento, anexos privados, exportação e anonimização dos dados do titular, retenção.</span></div>
+    <div><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v16H4zM8 9h8M8 13h8M8 17h5"/></svg><b>Auditoria</b><span>Registro de quem fez o quê e quando, com filtros e busca.</span></div>
+    <div><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="13" height="10" rx="1.5"/><rect x="15" y="9" width="6" height="11" rx="1.5"/><path d="M7 18h5"/></svg><b>Qualquer tela</b><span>Funciona no navegador do computador, do tablet e do celular, sem instalar nada.</span></div>
+  </div>
+  <div class="sfoot"><span class="fb"><i></i>Sauberlich System</span><span>Plataformas em produção</span></div>
+</section>
+
+<!-- =================== CHAMADOS =================== -->
+<section class="slide cover" data-sec="chamados" data-name="Visão geral" id="c-capa">
+  <div class="l">
+    <span class="badge-sec">Plataforma 1 · Chamados</span>
+    <h1>Help desk com <em>SLA e controle</em> de ponta a ponta</h1>
+    <p class="lead">Os colaboradores abrem chamados em segundos. A equipe técnica atende por fila, Kanban ou lista, com prazos de SLA, histórico completo e relatórios por departamento.</p>
+    <div class="feat">
+      <div><b>SLA por prioridade</b><span>Prazo visível em cada chamado</span></div>
+      <div><b>Kanban e lista</b><span>Arrastar, filtrar e agir em massa</span></div>
+      <div><b>Nota interna</b><span>Conversa da equipe que o usuário não vê</span></div>
+      <div><b>Avaliação do atendimento</b><span>Nota do usuário ao encerrar</span></div>
+    </div>
+    <a class="urlcard" data-href="chamados" target="_blank" rel="noopener"><div><small><span class="live">No ar</span></small><span class="u" data-site="chamados"></span></div><span class="go"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M7 17L17 7M9 7h8v8"/></svg></span></a>
+  </div>
+  <div class="tel" data-telas="chamados"><h3>Telas do sistema</h3></div>
+</section>
+
+<section class="slide screen-slide" data-sec="chamados" data-name="Dashboard" id="c-dash" data-desc="Indicadores do dia e do mês">
+  <div class="cap">
+    <span class="eyebrow">Chamados · Dashboard</span>
+    <h2>O panorama do suporte em uma tela</h2>
+    <p>Gestores acompanham volume, SLA e gargalos por departamento sem montar planilha.</p>
+    <ul><li>Chamados abertos, em atendimento e resolvidos</li><li>Percentual de SLA cumprido no mês</li><li>Abertos x resolvidos por dia</li><li>Distribuição por departamento</li></ul>
+    <a class="site" data-href="chamados" target="_blank" rel="noopener"><span class="live">No ar</span><span data-site="chamados"></span></a>
+  </div>
+  <div class="br"><div class="br-top"><div class="dots"><i></i><i></i><i></i></div><div class="url" data-url="chamados:/dashboard"></div></div>
+    <div class="app">
+      <div class="sd"><div class="lg"><i></i>Chamados</div><div class="ni on">Dashboard</div><div class="ni">Chamados <span class="ct">38</span></div><div class="ni">Acompanhamento</div><div class="ni">Relatórios</div><div class="gp">Gestão</div><div class="ni">Usuários</div><div class="ni">Departamentos</div><div class="ni">Permissões</div><div class="ni">Auditoria</div><div class="ni">Configurações</div><div class="me"><span class="av c1">RM</span><div><b>Renata Melo</b><br><span style="color:var(--mut);font-size:9px">Administradora</span></div></div></div>
+      <div class="mn">
+        <div class="ph"><div><h3>Dashboard</h3><small>Novembro de 2026 · todas as unidades</small></div><div class="row"><span class="inp">01/11 – 06/11</span><span class="btn">+ Novo chamado</span></div></div>
+        <div class="kpis">
+          <div class="kp"><span>Abertos</span><b>38</b><em class="up">+5 hoje</em></div>
+          <div class="kp"><span>Em atendimento</span><b>21</b><em>6 técnicos ativos</em></div>
+          <div class="kp"><span>Resolvidos no mês</span><b>412</b><em class="up">+12% x outubro</em></div>
+          <div class="kp"><span>SLA cumprido</span><b style="color:var(--grn)">94,6%</b><em>meta 92%</em></div>
+        </div>
+        <div class="g2">
+          <div class="cd"><h4>Abertos x resolvidos por dia <small>últimos 14 dias</small></h4>
+            <div class="bars" id="c-bars"></div><div class="axis" id="c-axis"></div>
+            <div class="legend"><span><i style="background:var(--ac)"></i>Abertos</span><span><i style="background:#C7D0DB"></i>Resolvidos</span></div></div>
+          <div class="cd"><h4>Por departamento</h4>
+            <div class="hb"><span>TI</span><div class="t"><i style="width:46%"></i></div><b>46%</b></div>
+            <div class="hb"><span>Manutenção</span><div class="t"><i style="width:22%"></i></div><b>22%</b></div>
+            <div class="hb"><span>Financeiro</span><div class="t"><i style="width:14%"></i></div><b>14%</b></div>
+            <div class="hb"><span>RH</span><div class="t"><i style="width:10%"></i></div><b>10%</b></div>
+            <div class="hb"><span>Comercial</span><div class="t"><i style="width:8%"></i></div><b>8%</b></div>
+            <div style="margin-top:10px;display:flex;justify-content:space-between;font-size:10px;color:var(--mut)"><span>Avaliação média</span><span><span class="stars">★★★★★</span> <b style="color:var(--ink)">4,8</b></span></div>
+          </div>
+        </div>
+        <div class="cd"><h4>Precisam de atenção <small>SLA perto do fim</small></h4>
+          <table class="tb"><tr><td class="pr">#CH-1184</td><td>Sistema de ponto fora do ar na unidade Centro</td><td><span class="pl r">Crítica</span></td><td><span class="pl a">Vence em 25 min</span></td><td><span class="who"><span class="av c4">DS</span>Diego Santos</span></td></tr>
+          <tr><td class="pr">#CH-1179</td><td>Ar-condicionado da sala de reuniões 2</td><td><span class="pl a">Alta</span></td><td><span class="pl a">Vence em 1h40</span></td><td><span class="who"><span class="av c3">PL</span>Paulo Lima</span></td></tr></table></div>
+      </div>
+    </div></div>
+</section>
+
+<section class="slide screen-slide" data-sec="chamados" data-name="Lista de chamados" id="c-lista" data-desc="Filtros, prioridade e ações rápidas">
+  <div class="cap">
+    <span class="eyebrow">Chamados · Lista</span>
+    <h2>Todos os chamados, filtrados do jeito certo</h2>
+    <p>Busca por protocolo, solicitante ou assunto. Ações rápidas direto na linha, conforme o perfil de cada um.</p>
+    <ul><li>Filtros por status, prioridade e departamento</li><li>SLA restante em cada linha</li><li>Atender, transferir e encerrar sem abrir o chamado</li><li>Seleção em massa para atribuir ou mudar prioridade</li></ul>
+    <a class="site" data-href="chamados" target="_blank" rel="noopener"><span class="live">No ar</span><span data-site="chamados"></span></a>
+  </div>
+  <div class="br"><div class="br-top"><div class="dots"><i></i><i></i><i></i></div><div class="url" data-url="chamados:/chamados"></div></div>
+    <div class="app">
+      <div class="sd"><div class="lg"><i></i>Chamados</div><div class="ni">Dashboard</div><div class="ni on">Chamados <span class="ct">38</span></div><div class="ni">Acompanhamento</div><div class="ni">Relatórios</div><div class="gp">Gestão</div><div class="ni">Usuários</div><div class="ni">Departamentos</div><div class="ni">Permissões</div><div class="ni">Auditoria</div><div class="ni">Configurações</div><div class="me"><span class="av c4">DS</span><div><b>Diego Santos</b><br><span style="color:var(--mut);font-size:9px">Técnico</span></div></div></div>
+      <div class="mn">
+        <div class="ph"><div><h3>Chamados</h3><small>38 abertos · 21 em atendimento · 4 aguardando usuário</small></div><div class="row"><span class="btn gh">Lista</span><span class="btn gh">Kanban</span><span class="btn">+ Novo chamado</span></div></div>
+        <div class="row"><span class="inp" style="flex:1">Buscar por protocolo, assunto ou solicitante…</span><span class="inp">Status: Abertos ▾</span><span class="inp">Prioridade: Todas ▾</span><span class="inp">Departamento: Todos ▾</span></div>
+        <div class="cd" style="padding:4px 6px">
+          <table class="tb">
+            <tr><th>Protocolo</th><th>Assunto</th><th>Solicitante</th><th>Prioridade</th><th>Status</th><th>SLA</th><th>Responsável</th></tr>
+            <tr><td class="pr">#CH-1184</td><td>Sistema de ponto fora do ar</td><td>Larissa Prado</td><td><span class="pl r">Crítica</span></td><td><span class="pl b">Em atendimento</span></td><td><span class="pl a">25 min</span></td><td><span class="who"><span class="av c4">DS</span>Diego</span></td></tr>
+            <tr><td class="pr">#CH-1183</td><td>Novo acesso ao ERP — admissão</td><td>Fábio Nunes</td><td><span class="pl n">Média</span></td><td><span class="pl p">Aberto</span></td><td><span class="pl g">6h 10</span></td><td style="color:var(--mut)">—</td></tr>
+            <tr><td class="pr">#CH-1182</td><td>Impressora do Financeiro sem rede</td><td>Camila Torres</td><td><span class="pl a">Alta</span></td><td><span class="pl b">Em atendimento</span></td><td><span class="pl g">2h 05</span></td><td><span class="who"><span class="av c2">JV</span>Júlia</span></td></tr>
+            <tr><td class="pr">#CH-1179</td><td>Ar-condicionado sala de reuniões 2</td><td>Marcos Reis</td><td><span class="pl a">Alta</span></td><td><span class="pl b">Em atendimento</span></td><td><span class="pl a">1h 40</span></td><td><span class="who"><span class="av c3">PL</span>Paulo</span></td></tr>
+            <tr><td class="pr">#CH-1176</td><td>Troca de mouse e teclado</td><td>Beatriz Alves</td><td><span class="pl n">Baixa</span></td><td><span class="pl a">Aguardando usuário</span></td><td><span class="pl n">Pausado</span></td><td><span class="who"><span class="av c4">DS</span>Diego</span></td></tr>
+            <tr><td class="pr">#CH-1174</td><td>Erro ao emitir nota fiscal</td><td>Rafael Costa</td><td><span class="pl a">Alta</span></td><td><span class="pl p">Aberto</span></td><td><span class="pl g">3h 30</span></td><td style="color:var(--mut)">—</td></tr>
+            <tr><td class="pr">#CH-1171</td><td>Vazamento no banheiro do 2º andar</td><td>Sônia Martins</td><td><span class="pl n">Média</span></td><td><span class="pl b">Em atendimento</span></td><td><span class="pl g">5h 15</span></td><td><span class="who"><span class="av c3">PL</span>Paulo</span></td></tr>
+            <tr><td class="pr">#CH-1168</td><td>Ajuste de férias no sistema de RH</td><td>Tiago Moura</td><td><span class="pl n">Média</span></td><td><span class="pl g">Resolvido</span></td><td><span class="pl g">No prazo</span></td><td><span class="who"><span class="av c5">AF</span>Aline</span></td></tr>
+          </table>
+        </div>
+      </div>
+    </div></div>
+</section>
+
+<section class="slide screen-slide" data-sec="chamados" data-name="Kanban" id="c-kanban" data-desc="Arrastar entre etapas">
+  <div class="cap">
+    <span class="eyebrow">Chamados · Kanban</span>
+    <h2>O fluxo do suporte em colunas</h2>
+    <p>A equipe arrasta o cartão para a próxima etapa e o solicitante é avisado da mudança.</p>
+    <ul><li>Colunas por status, com contagem</li><li>Prioridade e SLA visíveis no cartão</li><li>Mudança registrada no histórico</li><li>Mesmas regras de permissão da lista</li></ul>
+    <a class="site" data-href="chamados" target="_blank" rel="noopener"><span class="live">No ar</span><span data-site="chamados"></span></a>
+  </div>
+  <div class="br"><div class="br-top"><div class="dots"><i></i><i></i><i></i></div><div class="url" data-url="chamados:/chamados?modo=kanban"></div></div>
+    <div class="app">
+      <div class="sd"><div class="lg"><i></i>Chamados</div><div class="ni">Dashboard</div><div class="ni on">Chamados <span class="ct">38</span></div><div class="ni">Acompanhamento</div><div class="ni">Relatórios</div><div class="gp">Gestão</div><div class="ni">Usuários</div><div class="ni">Departamentos</div><div class="ni">Permissões</div><div class="ni">Auditoria</div><div class="ni">Configurações</div><div class="me"><span class="av c4">DS</span><div><b>Diego Santos</b><br><span style="color:var(--mut);font-size:9px">Técnico</span></div></div></div>
+      <div class="mn">
+        <div class="ph"><div><h3>Kanban</h3><small>Departamento: TI e Manutenção</small></div><div class="row"><span class="btn gh">Lista</span><span class="btn">Kanban</span></div></div>
+        <div class="kb">
+          <div class="kc"><h5>Aberto <span>6</span></h5>
+            <div class="kk"><b>Novo acesso ao ERP — admissão</b><div class="m"><span class="pl n">Média</span><span>#CH-1183</span></div></div>
+            <div class="kk"><b>Erro ao emitir nota fiscal</b><div class="m"><span class="pl a">Alta</span><span>#CH-1174</span></div></div>
+            <div class="kk"><b>Instalar projetor no auditório</b><div class="m"><span class="pl n">Baixa</span><span>#CH-1170</span></div></div>
+          </div>
+          <div class="kc"><h5>Em atendimento <span>5</span></h5>
+            <div class="kk"><b>Sistema de ponto fora do ar</b><div class="m"><span class="pl r">Crítica</span><span class="who"><span class="av c4">DS</span></span></div></div>
+            <div class="kk drag"><b>Impressora do Financeiro sem rede</b><div class="m"><span class="pl a">Alta</span><span class="who"><span class="av c2">JV</span></span></div></div>
+            <div class="kk"><b>Ar-condicionado sala de reuniões 2</b><div class="m"><span class="pl a">Alta</span><span class="who"><span class="av c3">PL</span></span></div></div>
+          </div>
+          <div class="kc"><h5>Aguardando <span>3</span></h5>
+            <div class="kk"><b>Troca de mouse e teclado</b><div class="m"><span class="pl n">Baixa</span><span class="who"><span class="av c4">DS</span></span></div></div>
+            <div class="kk"><b>Liberação de pasta na rede</b><div class="m"><span class="pl n">Média</span><span class="who"><span class="av c2">JV</span></span></div></div>
+          </div>
+          <div class="kc"><h5>Resolvido <span>9</span></h5>
+            <div class="kk"><b>Ajuste de férias no sistema de RH</b><div class="m"><span class="stars" style="font-size:10px">★★★★★</span><span>#CH-1168</span></div></div>
+            <div class="kk"><b>Troca de lâmpadas — estoque</b><div class="m"><span class="stars" style="font-size:10px">★★★★☆</span><span>#CH-1165</span></div></div>
+            <div class="kk"><b>Senha do e-mail bloqueada</b><div class="m"><span class="stars" style="font-size:10px">★★★★★</span><span>#CH-1161</span></div></div>
+          </div>
+        </div>
+      </div>
+    </div></div>
+</section>
+
+<section class="slide screen-slide" data-sec="chamados" data-name="Detalhe do chamado" id="c-det" data-desc="Conversa, anexos e nota interna">
+  <div class="cap">
+    <span class="eyebrow">Chamados · Detalhe</span>
+    <h2>Toda a história do chamado em um lugar</h2>
+    <p>Conversa com o solicitante, anexos protegidos e notas internas que só a equipe técnica lê.</p>
+    <ul><li>Linha do tempo com cada interação</li><li>Nota interna destacada, invisível ao usuário</li><li>Anexos privados, abertos por link temporário</li><li>Atender, transferir, encerrar ou reabrir</li></ul>
+    <a class="site" data-href="chamados" target="_blank" rel="noopener"><span class="live">No ar</span><span data-site="chamados"></span></a>
+  </div>
+  <div class="br"><div class="br-top"><div class="dots"><i></i><i></i><i></i></div><div class="url" data-url="chamados:/chamados/CH-1182"></div></div>
+    <div class="app">
+      <div class="sd"><div class="lg"><i></i>Chamados</div><div class="ni">Dashboard</div><div class="ni on">Chamados <span class="ct">38</span></div><div class="ni">Acompanhamento</div><div class="ni">Relatórios</div><div class="gp">Gestão</div><div class="ni">Usuários</div><div class="ni">Departamentos</div><div class="ni">Permissões</div><div class="ni">Auditoria</div><div class="ni">Configurações</div><div class="me"><span class="av c2">JV</span><div><b>Júlia Vieira</b><br><span style="color:var(--mut);font-size:9px">Técnica</span></div></div></div>
+      <div class="mn">
+        <div class="ph"><div><h3>#CH-1182 · Impressora do Financeiro sem rede</h3><small>Aberto por Camila Torres em 06/11/2026 às 08:12</small></div><div class="row"><span class="pl a">Alta</span><span class="pl b">Em atendimento</span></div></div>
+        <div class="det">
+          <div class="tl">
+            <div class="msg"><span class="av c5">CT</span><div class="bx"><div class="hd"><b>Camila Torres</b><span>08:12</span></div>A impressora HP do Financeiro parou de aparecer na rede desde ontem à tarde. Já reiniciei, mas não voltou. Segue foto do painel.<div class="att">📎 painel-impressora.jpg · 1,2 MB</div></div></div>
+            <div class="msg"><span class="av c2">JV</span><div class="bx"><div class="hd"><b>Júlia Vieira</b><span>08:31</span></div>Bom dia, Camila! Assumi o chamado. Vou verificar o IP fixo dela no switch e retorno até 10h.</div></div>
+            <div class="msg int"><span class="av c4">DS</span><div class="bx"><div class="hd"><b>Diego Santos · Nota interna</b><span>08:44</span></div>Júlia, a porta 14 do switch do 2º andar foi trocada na manutenção de ontem. Provável causa.</div></div>
+            <div class="msg"><span class="av c2">JV</span><div class="bx"><div class="hd"><b>Júlia Vieira</b><span>09:20</span></div>Porta reconfigurada. Pode testar uma impressão, por favor?</div></div>
+            <div class="row"><span class="inp" style="flex:1">Responder ao solicitante…</span><span class="btn gh">Nota interna</span><span class="btn">Enviar</span></div>
+          </div>
+          <div class="side-info">
+            <div class="cd"><h4>Informações</h4>
+              <div class="kv"><span>Solicitante</span><b>Camila Torres</b></div>
+              <div class="kv"><span>Departamento</span><b>Financeiro</b></div>
+              <div class="kv"><span>Categoria</span><b>Impressoras</b></div>
+              <div class="kv"><span>Responsável</span><b>Júlia Vieira</b></div>
+              <div style="margin-top:7px;font-size:10px;display:flex;justify-content:space-between"><span style="color:var(--mut)">SLA de solução</span><b>2h 05 restantes</b></div><div class="sla"><i></i></div>
+            </div>
+            <div class="cd"><h4>Ações</h4><div class="acts"><span class="btn">Encerrar</span><span class="btn gh">Transferir</span><span class="btn gh">Prioridade</span><span class="btn gh">Favoritar</span></div></div>
+          </div>
+        </div>
+      </div>
+    </div></div>
+</section>
+
+<section class="slide screen-slide" data-sec="chamados" data-name="Permissões" id="c-perm" data-desc="O que cada perfil pode fazer">
+  <div class="cap">
+    <span class="eyebrow">Chamados · Permissões</span>
+    <h2>Cada perfil faz só o que deve</h2>
+    <p>O administrador liga e desliga ações por perfil. Ações sensíveis ficam travadas para quem não tem nível para elas.</p>
+    <ul><li>Perfis Master, Administrador, Técnico e Usuário</li><li>Liberar uma ação para um perfil específico</li><li>Excluir em massa e cadastro retroativo só para Master</li><li>Toda alteração fica na auditoria</li></ul>
+    <a class="site" data-href="chamados" target="_blank" rel="noopener"><span class="live">No ar</span><span data-site="chamados"></span></a>
+  </div>
+  <div class="br"><div class="br-top"><div class="dots"><i></i><i></i><i></i></div><div class="url" data-url="chamados:/permissions"></div></div>
+    <div class="app">
+      <div class="sd"><div class="lg"><i></i>Chamados</div><div class="ni">Dashboard</div><div class="ni">Chamados</div><div class="ni">Acompanhamento</div><div class="ni">Relatórios</div><div class="gp">Gestão</div><div class="ni">Usuários</div><div class="ni">Departamentos</div><div class="ni on">Permissões</div><div class="ni">Auditoria</div><div class="ni">Configurações</div><div class="me"><span class="av c1">RM</span><div><b>Renata Melo</b><br><span style="color:var(--mut);font-size:9px">Administradora</span></div></div></div>
+      <div class="mn">
+        <div class="ph"><div><h3>Permissões</h3><small>Defina o que cada perfil pode ver e fazer</small></div><span class="btn">Salvar alterações</span></div>
+        <div class="ptabs"><span>Master</span><span>Administrador</span><span class="on">Técnico</span><span>Usuário</span></div>
+        <div class="cd"><h4>Menu Chamados <small>14 de 16 ações liberadas</small></h4>
+          <div class="perm">
+            <div><span>Visualizar<small>Ver chamados do seu escopo</small></span><i class="tg on"></i></div>
+            <div><span>Criar<small>Abrir novos chamados</small></span><i class="tg on"></i></div>
+            <div><span>Atender<small>Assumir um chamado aberto</small></span><i class="tg on"></i></div>
+            <div><span>Transferir<small>Passar para outro técnico</small></span><i class="tg on"></i></div>
+            <div><span>Editar prioridade<small>Mudar Baixa → Crítica</small></span><i class="tg on"></i></div>
+            <div><span>Encerrar<small>Concluir o atendimento</small></span><i class="tg on"></i></div>
+            <div><span>Reabrir<small>Voltar um chamado encerrado</small></span><i class="tg on"></i></div>
+            <div><span>Nota interna<small>Comentário só da equipe</small></span><i class="tg on"></i></div>
+            <div><span>Cancelar<small>Somente Admin e Master</small></span><i class="tg lock"></i></div>
+            <div><span>Excluir em massa<small>Somente Master</small></span><i class="tg lock"></i></div>
+          </div>
+        </div>
+        <div class="cd"><h4>Outros menus</h4>
+          <div class="perm"><div><span>Dashboard</span><i class="tg on"></i></div><div><span>Relatórios</span><i class="tg on"></i></div><div><span>Usuários</span><i class="tg"></i></div><div><span>Configurações</span><i class="tg"></i></div></div>
+        </div>
+      </div>
+    </div></div>
+</section>
+
+<section class="slide screen-slide" data-sec="chamados" data-name="Relatórios" id="c-rel" data-desc="SLA e satisfação por departamento">
+  <div class="cap">
+    <span class="eyebrow">Chamados · Relatórios</span>
+    <h2>Números para decidir onde investir</h2>
+    <p>SLA, tempo de resposta e satisfação por departamento e por técnico, prontos para exportar.</p>
+    <ul><li>Tempo médio de primeira resposta e de solução</li><li>SLA cumprido por departamento</li><li>Avaliação dos usuários por técnico</li><li>Exportação em planilha e PDF</li></ul>
+    <a class="site" data-href="chamados" target="_blank" rel="noopener"><span class="live">No ar</span><span data-site="chamados"></span></a>
+  </div>
+  <div class="br"><div class="br-top"><div class="dots"><i></i><i></i><i></i></div><div class="url" data-url="chamados:/reports"></div></div>
+    <div class="app">
+      <div class="sd"><div class="lg"><i></i>Chamados</div><div class="ni">Dashboard</div><div class="ni">Chamados</div><div class="ni">Acompanhamento</div><div class="ni on">Relatórios</div><div class="gp">Gestão</div><div class="ni">Usuários</div><div class="ni">Departamentos</div><div class="ni">Permissões</div><div class="ni">Auditoria</div><div class="ni">Configurações</div><div class="me"><span class="av c1">RM</span><div><b>Renata Melo</b><br><span style="color:var(--mut);font-size:9px">Administradora</span></div></div></div>
+      <div class="mn">
+        <div class="ph"><div><h3>Relatórios</h3><small>Outubro de 2026</small></div><div class="row"><span class="btn gh">Excel</span><span class="btn gh">PDF</span></div></div>
+        <div class="kpis">
+          <div class="kp"><span>Chamados no mês</span><b>468</b><em>412 resolvidos</em></div>
+          <div class="kp"><span>1ª resposta</span><b>18 min</b><em class="up">−6 min x set.</em></div>
+          <div class="kp"><span>Tempo de solução</span><b>4h 12</b><em>mediana 2h 50</em></div>
+          <div class="kp"><span>Satisfação</span><b>4,8 / 5</b><em>327 avaliações</em></div>
+        </div>
+        <div class="g2e">
+          <div class="cd"><h4>SLA cumprido por departamento</h4>
+            <div class="hb"><span>RH</span><div class="t"><i style="width:98%;background:var(--grn)"></i></div><b>98%</b></div>
+            <div class="hb"><span>Financeiro</span><div class="t"><i style="width:96%;background:var(--grn)"></i></div><b>96%</b></div>
+            <div class="hb"><span>TI</span><div class="t"><i style="width:94%;background:var(--grn)"></i></div><b>94%</b></div>
+            <div class="hb"><span>Comercial</span><div class="t"><i style="width:93%;background:var(--grn)"></i></div><b>93%</b></div>
+            <div class="hb"><span>Manutenção</span><div class="t"><i style="width:88%;background:var(--amb)"></i></div><b>88%</b></div>
+            <div class="legend"><span>Meta: 92%</span></div>
+          </div>
+          <div class="cd"><h4>Desempenho por técnico</h4>
+            <table class="tb"><tr><th>Técnico</th><th>Resolvidos</th><th>Nota</th></tr>
+            <tr><td><span class="who"><span class="av c2">JV</span>Júlia Vieira</span></td><td class="num">134</td><td>4,9</td></tr>
+            <tr><td><span class="who"><span class="av c4">DS</span>Diego Santos</span></td><td class="num">121</td><td>4,8</td></tr>
+            <tr><td><span class="who"><span class="av c3">PL</span>Paulo Lima</span></td><td class="num">96</td><td>4,6</td></tr>
+            <tr><td><span class="who"><span class="av c5">AF</span>Aline Freitas</span></td><td class="num">61</td><td>4,9</td></tr></table>
+          </div>
+        </div>
+      </div>
+    </div></div>
+</section>
+
+<!-- =================== TREINAMENTOS =================== -->
+<section class="slide cover" data-sec="treinamentos" data-name="Visão geral" id="t-capa">
+  <div class="l">
+    <span class="badge-sec">Plataforma 2 · Treinamentos</span>
+    <h1>Capacitação com <em>prova e certificado</em> válidos</h1>
+    <p class="lead">Catálogo de cursos com vídeo e material, avaliação ao final e certificado com QR Code que qualquer pessoa confere online. O gestor acompanha quem concluiu e quem está atrasado.</p>
+    <div class="feat">
+      <div><b>Cursos em módulos</b><span>Vídeo, texto e arquivos</span></div>
+      <div><b>Avaliações com IA</b><span>Questões geradas do conteúdo</span></div>
+      <div><b>Certificado com QR</b><span>Validação pública e imediata</span></div>
+      <div><b>Trilhas obrigatórias</b><span>Por cargo e departamento, com prazo</span></div>
+    </div>
+    <a class="urlcard" data-href="treinamentos" target="_blank" rel="noopener"><div><small><span class="live">No ar</span></small><span class="u" data-site="treinamentos"></span></div><span class="go"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M7 17L17 7M9 7h8v8"/></svg></span></a>
+  </div>
+  <div class="tel" data-telas="treinamentos"><h3>Telas do sistema</h3></div>
+</section>
+
+<section class="slide screen-slide" data-sec="treinamentos" data-name="Catálogo" id="t-cat" data-desc="Cursos disponíveis e progresso">
+  <div class="cap">
+    <span class="eyebrow">Treinamentos · Catálogo</span>
+    <h2>Os cursos da empresa, organizados por categoria</h2>
+    <p>Cada colaborador vê o que é obrigatório para o seu cargo e o progresso de cada curso.</p>
+    <ul><li>Categorias e busca</li><li>Carga horária e prazo de conclusão</li><li>Progresso salvo automaticamente</li><li>Cursos obrigatórios em destaque</li></ul>
+    <a class="site" data-href="treinamentos" target="_blank" rel="noopener"><span class="live">No ar</span><span data-site="treinamentos"></span></a>
+  </div>
+  <div class="br"><div class="br-top"><div class="dots"><i></i><i></i><i></i></div><div class="url" data-url="treinamentos:/catalogo"></div></div>
+    <div class="app">
+      <div class="sd"><div class="lg"><i></i>Treinamentos</div><div class="ni">Meus treinamentos</div><div class="ni on">Catálogo</div><div class="ni">Calendário</div><div class="ni">Ajuda</div><div class="gp">Gestão</div><div class="ni">Dashboard</div><div class="ni">Acompanhamento</div><div class="ni">Relatórios</div><div class="ni">Treinamentos</div><div class="ni">Usuários</div><div class="me"><span class="av c5">AR</span><div><b>Ana Ribeiro</b><br><span style="color:var(--mut);font-size:9px">Analista financeira</span></div></div></div>
+      <div class="mn">
+        <div class="ph"><div><h3>Catálogo de treinamentos</h3><small>24 cursos disponíveis · 3 obrigatórios para você</small></div><div class="row"><span class="inp">Buscar curso…</span><span class="inp">Categoria: Todas ▾</span></div></div>
+        <div class="courses">
+          <div class="course"><div class="cv" style="background:linear-gradient(135deg,#7C3AED,#C084FC)"><span>Obrigatório</span></div><div class="bd"><b>Integração de novos colaboradores</b><div class="m"><span>Institucional</span><span>2h</span></div><div class="prog"><i style="width:100%;background:var(--grn)"></i></div><div class="m"><span style="color:var(--grn);font-weight:700">Concluído</span><span>Certificado</span></div></div></div>
+          <div class="course"><div class="cv" style="background:linear-gradient(135deg,#0F766E,#5EEAD4)"><span>Obrigatório</span></div><div class="bd"><b>LGPD na prática</b><div class="m"><span>Compliance</span><span>8h</span></div><div class="prog"><i style="width:62%"></i></div><div class="m"><span>62% concluído</span><span>Prazo 30/11</span></div></div></div>
+          <div class="course"><div class="cv" style="background:linear-gradient(135deg,#B45309,#FCD34D)"><span>Obrigatório</span></div><div class="bd"><b>Segurança do trabalho — NR-35</b><div class="m"><span>Segurança</span><span>8h</span></div><div class="prog"><i style="width:0"></i></div><div class="m"><span>Não iniciado</span><span>Prazo 15/12</span></div></div></div>
+          <div class="course"><div class="cv" style="background:linear-gradient(135deg,#1D4ED8,#93C5FD)"><span>Comportamental</span></div><div class="bd"><b>Atendimento ao cliente de excelência</b><div class="m"><span>Atendimento</span><span>4h</span></div><div class="prog"><i style="width:25%"></i></div><div class="m"><span>25% concluído</span><span>Livre</span></div></div></div>
+          <div class="course"><div class="cv" style="background:linear-gradient(135deg,#15803D,#86EFAC)"><span>Ferramentas</span></div><div class="bd"><b>Excel para gestão</b><div class="m"><span>Ferramentas</span><span>6h</span></div><div class="prog"><i style="width:0"></i></div><div class="m"><span>Não iniciado</span><span>Livre</span></div></div></div>
+          <div class="course"><div class="cv" style="background:linear-gradient(135deg,#BE185D,#F9A8D4)"><span>Liderança</span></div><div class="bd"><b>Liderança e feedback</b><div class="m"><span>Gestão de pessoas</span><span>5h</span></div><div class="prog"><i style="width:0"></i></div><div class="m"><span>Não iniciado</span><span>Livre</span></div></div></div>
+        </div>
+      </div>
+    </div></div>
+</section>
+
+<section class="slide screen-slide" data-sec="treinamentos" data-name="Assistindo a aula" id="t-aula" data-desc="Vídeo e módulos do curso">
+  <div class="cap">
+    <span class="eyebrow">Treinamentos · Aula</span>
+    <h2>Aulas em módulos, no ritmo de cada um</h2>
+    <p>O colaborador assiste no computador ou no celular e continua de onde parou.</p>
+    <ul><li>Vídeo, texto e material para baixar</li><li>Módulos liberados em sequência</li><li>Progresso registrado por módulo</li><li>Avaliação ao final do curso</li></ul>
+    <a class="site" data-href="treinamentos" target="_blank" rel="noopener"><span class="live">No ar</span><span data-site="treinamentos"></span></a>
+  </div>
+  <div class="br"><div class="br-top"><div class="dots"><i></i><i></i><i></i></div><div class="url" data-url="treinamentos:/executar-treinamento/lgpd-na-pratica"></div></div>
+    <div class="app" style="grid-template-columns:1fr 230px">
+      <div class="mn" style="background:var(--white)">
+        <div class="ph"><div><h3>LGPD na prática</h3><small>Módulo 4 de 6 · Direitos do titular</small></div><span class="pl p">62% concluído</span></div>
+        <div class="player"><span class="ttl">4.2 · Como atender um pedido de acesso aos dados</span><div class="play"></div><div class="ctl"><span>05:48</span><div class="tr"><i></i></div><span>14:10</span></div></div>
+        <div class="cd"><h4>Material de apoio</h4><div class="row"><span class="att" style="margin:0">📄 Checklist de atendimento ao titular.pdf</span><span class="att" style="margin:0">📄 Modelo de resposta.docx</span></div></div>
+      </div>
+      <div class="mn" style="border-left:1px solid var(--line)">
+        <b style="font-size:11.5px">Conteúdo do curso</b>
+        <div class="mods">
+          <div class="mod done"><i class="ck"></i><span>1 · O que é a LGPD<br><small>18 min</small></span><span></span></div>
+          <div class="mod done"><i class="ck"></i><span>2 · Dados pessoais e sensíveis<br><small>22 min</small></span><span></span></div>
+          <div class="mod done"><i class="ck"></i><span>3 · Bases legais<br><small>25 min</small></span><span></span></div>
+          <div class="mod now"><i class="ck"></i><span>4 · Direitos do titular<br><small>2 de 3 aulas</small></span><span></span></div>
+          <div class="mod"><i class="ck"></i><span>5 · Incidentes de segurança<br><small>20 min</small></span><span></span></div>
+          <div class="mod"><i class="ck"></i><span>6 · Avaliação final<br><small>10 questões</small></span><span></span></div>
+        </div>
+      </div>
+    </div></div>
+</section>
+
+<section class="slide screen-slide" data-sec="treinamentos" data-name="Avaliação" id="t-quiz" data-desc="Prova ao final do curso">
+  <div class="cap">
+    <span class="eyebrow">Treinamentos · Avaliação</span>
+    <h2>Prova no fim do curso, corrigida na hora</h2>
+    <p>O instrutor pode gerar as questões com IA a partir do conteúdo e revisar antes de publicar.</p>
+    <ul><li>Nota mínima e número de tentativas</li><li>Questões geradas e revisadas pelo instrutor</li><li>Resultado e gabarito ao terminar</li><li>Certificado emitido ao ser aprovado</li></ul>
+    <a class="site" data-href="treinamentos" target="_blank" rel="noopener"><span class="live">No ar</span><span data-site="treinamentos"></span></a>
+  </div>
+  <div class="br"><div class="br-top"><div class="dots"><i></i><i></i><i></i></div><div class="url" data-url="treinamentos:/executar-treinamento/lgpd-na-pratica/avaliacao"></div></div>
+    <div class="app" style="grid-template-columns:1fr">
+      <div class="mn" style="padding:22px 60px;gap:14px">
+        <div class="ph"><div><h3>Avaliação final · LGPD na prática</h3><small>Nota mínima 7,0 · 2 tentativas</small></div><div class="row"><span class="pl p">Questão 3 de 10</span><span class="pl n">⏱ 12:40</span></div></div>
+        <div class="qnav"><i class="d"></i><i class="d"></i><i class="c"></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+        <div class="quiz">
+          <div class="q">Um cliente pede uma cópia de todos os dados pessoais que a empresa guarda sobre ele. Qual é a conduta correta?</div>
+          <div class="opt"><span>A</span>Negar o pedido, pois os dados pertencem à empresa.</div>
+          <div class="opt sel"><span>B</span>Confirmar a identidade do titular e enviar os dados dentro do prazo legal.</div>
+          <div class="opt"><span>C</span>Enviar os dados imediatamente por e-mail, sem confirmar quem pediu.</div>
+          <div class="opt"><span>D</span>Encaminhar ao jurídico e aguardar que o cliente desista.</div>
+        </div>
+        <div class="row" style="justify-content:space-between"><span class="btn gh">← Anterior</span><span class="btn">Próxima questão →</span></div>
+      </div>
+    </div></div>
+</section>
+
+<section class="slide screen-slide" data-sec="treinamentos" data-name="Certificado" id="t-cert" data-desc="Certificado com QR Code">
+  <div class="cap">
+    <span class="eyebrow">Treinamentos · Certificado</span>
+    <h2>Certificado que se confere em segundos</h2>
+    <p>Qualquer pessoa aponta a câmera para o QR Code e vê, na página de validação, se o certificado é verdadeiro.</p>
+    <ul><li>Emitido automaticamente ao ser aprovado</li><li>Código único e QR Code de validação</li><li>Logo, cores e assinaturas da empresa</li><li>Histórico de certificados por colaborador</li></ul>
+    <a class="site" data-href="treinamentos" target="_blank" rel="noopener"><span class="live">No ar</span><span data-site="treinamentos"></span></a>
+  </div>
+  <div class="br"><div class="br-top"><div class="dots"><i></i><i></i><i></i></div><div class="url" data-url="treinamentos:/validar/SAU-7F3K-92QD"></div></div>
+    <div class="app" style="grid-template-columns:1fr">
+      <div class="mn" style="padding:20px 26px">
+        <div class="row" style="justify-content:space-between"><span class="pl g" style="font-size:10.5px;padding:4px 10px">✓ Certificado válido · emitido em 04/11/2026</span><span class="btn gh">Baixar PDF</span></div>
+        <div class="cert">
+          <div>
+            <div class="t1">Certificado de conclusão</div>
+            <h5>LGPD na prática</h5>
+            <p>Certificamos que</p>
+            <div class="nm">Ana Paula Ribeiro</div>
+            <p>concluiu o treinamento <b>LGPD na prática</b>, com carga horária de <b>8 horas</b>, no período de 20/10/2026 a 04/11/2026, obtendo aproveitamento de <b>9,0</b> na avaliação final.</p>
+            <div class="sig"><div>Carla Monteiro<br>Recursos Humanos</div><div>Eduardo Pires<br>Instrutor</div></div>
+          </div>
+          <div class="qrbox"><svg class="qr" id="qr1" viewBox="0 0 29 29" shape-rendering="crispEdges"></svg><span>Valide em<br><b data-site="treinamentos"></b>/validar</span><b style="color:var(--ink);font-size:10px">SAU-7F3K-92QD</b></div>
+        </div>
+      </div>
+    </div></div>
+</section>
+
+<section class="slide screen-slide" data-sec="treinamentos" data-name="Acompanhamento" id="t-acomp" data-desc="Conclusão por departamento">
+  <div class="cap">
+    <span class="eyebrow">Treinamentos · Acompanhamento</span>
+    <h2>Quem concluiu, quem está atrasado</h2>
+    <p>RH e gestores enxergam a adesão de cada área e cobram só quem precisa.</p>
+    <ul><li>Taxa de conclusão por departamento</li><li>Pendências com prazo vencido</li><li>Horas de capacitação no período</li><li>Lembretes automáticos por e-mail</li></ul>
+    <a class="site" data-href="treinamentos" target="_blank" rel="noopener"><span class="live">No ar</span><span data-site="treinamentos"></span></a>
+  </div>
+  <div class="br"><div class="br-top"><div class="dots"><i></i><i></i><i></i></div><div class="url" data-url="treinamentos:/acompanhamento"></div></div>
+    <div class="app">
+      <div class="sd"><div class="lg"><i></i>Treinamentos</div><div class="ni">Meus treinamentos</div><div class="ni">Catálogo</div><div class="ni">Calendário</div><div class="ni">Ajuda</div><div class="gp">Gestão</div><div class="ni">Dashboard</div><div class="ni on">Acompanhamento</div><div class="ni">Relatórios</div><div class="ni">Treinamentos</div><div class="ni">Usuários</div><div class="me"><span class="av c6">CM</span><div><b>Carla Monteiro</b><br><span style="color:var(--mut);font-size:9px">Administradora</span></div></div></div>
+      <div class="mn">
+        <div class="ph"><div><h3>Acompanhamento</h3><small>Ano de 2026 · todos os departamentos</small></div><span class="btn">Enviar lembrete aos atrasados</span></div>
+        <div class="kpis">
+          <div class="kp"><span>Colaboradores</span><b>248</b><em>em 6 departamentos</em></div>
+          <div class="kp"><span>Conclusão</span><b style="color:var(--grn)">87%</b><em class="up">+9 p.p. no trimestre</em></div>
+          <div class="kp"><span>Certificados</span><b>1.392</b><em>emitidos em 2026</em></div>
+          <div class="kp"><span>Horas</span><b>3.140 h</b><em>de capacitação</em></div>
+        </div>
+        <div class="g2e">
+          <div class="cd"><h4>Conclusão por departamento</h4>
+            <div class="hb"><span>RH</span><div class="t"><i style="width:97%"></i></div><b>97%</b></div>
+            <div class="hb"><span>Financeiro</span><div class="t"><i style="width:93%"></i></div><b>93%</b></div>
+            <div class="hb"><span>Comercial</span><div class="t"><i style="width:89%"></i></div><b>89%</b></div>
+            <div class="hb"><span>Administrativo</span><div class="t"><i style="width:86%"></i></div><b>86%</b></div>
+            <div class="hb"><span>Logística</span><div class="t"><i style="width:78%"></i></div><b>78%</b></div>
+            <div class="hb"><span>Produção</span><div class="t"><i style="width:71%;background:var(--amb)"></i></div><b>71%</b></div>
+          </div>
+          <div class="cd"><h4>Pendências vencidas <small>12 pessoas</small></h4>
+            <table class="tb"><tr><th>Colaborador</th><th>Curso</th><th>Venceu</th></tr>
+            <tr><td><span class="who"><span class="av c3">LG</span>Lucas Gomes</span></td><td>NR-35</td><td><span class="pl r">há 8 dias</span></td></tr>
+            <tr><td><span class="who"><span class="av c4">MF</span>Marina Faria</span></td><td>LGPD na prática</td><td><span class="pl r">há 5 dias</span></td></tr>
+            <tr><td><span class="who"><span class="av c2">RS</span>Rodrigo Sá</span></td><td>Integração</td><td><span class="pl a">há 2 dias</span></td></tr>
+            <tr><td><span class="who"><span class="av c6">EB</span>Elisa Barros</span></td><td>NR-35</td><td><span class="pl a">ontem</span></td></tr></table>
+          </div>
+        </div>
+      </div>
+    </div></div>
+</section>
+
+<!-- =================== ATENDIMENTO =================== -->
+<section class="slide cover" data-sec="atendimento" data-name="Visão geral" id="w-capa">
+  <div class="l">
+    <span class="badge-sec">Plataforma 3 · Atendimento WhatsApp</span>
+    <h1>Um número de WhatsApp, <em>vários atendentes</em></h1>
+    <p class="lead">As conversas chegam numa fila comum. O primeiro atendente que aceita passa a ser o dono da conversa, e o gestor acompanha tudo em tempo real, com indicadores de tempo de resposta.</p>
+    <div class="feat">
+      <div><b>Fila com aceite exclusivo</b><span>Garantido no banco de dados</span></div>
+      <div><b>Transferência</b><span>Entre atendentes, com histórico</span></div>
+      <div><b>Gestão em tempo real</b><span>Supervisão sem interferir</span></div>
+      <div><b>Respostas rápidas</b><span>Atalhos para mensagens frequentes</span></div>
+    </div>
+    <a class="urlcard" data-href="atendimento" target="_blank" rel="noopener"><div><small><span class="live">No ar</span></small><span class="u" data-site="atendimento"></span></div><span class="go"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M7 17L17 7M9 7h8v8"/></svg></span></a>
+  </div>
+  <div class="tel" data-telas="atendimento"><h3>Telas do sistema</h3></div>
+</section>
+
+<section class="slide screen-slide" data-sec="atendimento" data-name="Fila e conversa" id="w-chat" data-desc="Aceitar e responder clientes">
+  <div class="cap">
+    <span class="eyebrow">Atendimento · Conversa</span>
+    <h2>Parece o WhatsApp, funciona como central</h2>
+    <p>Cada atendente entra com o próprio login e só vê as conversas que aceitou. Novas conversas esperam na fila.</p>
+    <ul><li>Fila com botão ACEITAR</li><li>Nome do atendente em cada mensagem enviada</li><li>Fotos, áudios e documentos</li><li>Encerrar com histórico salvo</li></ul>
+    <a class="site" data-href="atendimento" target="_blank" rel="noopener"><span class="live">No ar</span><span data-site="atendimento"></span></a>
+  </div>
+  <div class="br"><div class="br-top"><div class="dots"><i></i><i></i><i></i></div><div class="url" data-url="atendimento:/atendimento"></div></div>
+    <div class="wa">
+      <div class="rail"><i class="lg"></i><i class="on"></i><i></i><i></i><i></i></div>
+      <div class="cl">
+        <div class="tabs"><span>Fila (4)</span><span class="on">Meus (5)</span></div>
+        <div class="sr"><span class="inp" style="display:block">Buscar conversa…</span></div>
+        <div class="ci"><span class="av c3">GM</span><div><b>Gabriel Moreira</b><small>Na fila há 2 min</small></div><div class="r"><span class="acc">ACEITAR</span></div></div>
+        <div class="ci on"><span class="av c5">FS</span><div><b>Fernanda Souza</b><small>Perfeito, pode gerar o boleto</small></div><div class="r">10:42<span class="unr">2</span></div></div>
+        <div class="ci"><span class="av c4">RA</span><div><b>Roberto Almeida</b><small>Qual o horário de sábado?</small></div><div class="r">10:37</div></div>
+        <div class="ci"><span class="av c6">PC</span><div><b>Patrícia Campos</b><small>📷 Foto</small></div><div class="r">10:21</div></div>
+        <div class="ci"><span class="av c2">HN</span><div><b>Henrique Nogueira</b><small>Obrigado pelo retorno!</small></div><div class="r">09:58</div></div>
+        <div class="ci"><span class="av c1">VL</span><div><b>Vanessa Lima</b><small>Recebi o pedido, tudo certo</small></div><div class="r">09:40</div></div>
+      </div>
+      <div class="chat">
+        <div class="hd"><span class="av c5" style="width:28px;height:28px">FS</span><div><b>Fernanda Souza</b><small>+55 31 9•••• 4821 · com você desde 10:15</small></div><div class="row"><span class="btn gh">Transferir</span><span class="btn rd">Encerrar</span></div></div>
+        <div class="bub">
+          <span class="sysm">Conversa aceita por Lucas Andrade às 10:15</span>
+          <div class="bb">Bom dia! Gostaria de saber se o pedido 48213 já foi faturado.<small>10:14</small></div>
+          <div class="bb me"><span class="ag">Lucas Andrade</span>Bom dia, Fernanda! Vou conferir agora, um instante.<small>10:16 ✓✓</small></div>
+          <div class="bb me"><span class="ag">Lucas Andrade</span>Já está faturado. Prefere pagar por boleto ou PIX?<small>10:19 ✓✓</small></div>
+          <div class="bb">Boleto, por favor. Vencimento para o dia 20 dá?<small>10:41</small></div>
+          <div class="bb">Perfeito, pode gerar o boleto<small>10:42</small></div>
+        </div>
+        <div class="cmp"><span class="inp">Digite / para respostas rápidas…</span><span class="btn">Enviar</span></div>
+      </div>
+    </div></div>
+</section>
+
+<section class="slide screen-slide" data-sec="atendimento" data-name="Transferência" id="w-transf" data-desc="Passar a conversa a um colega">
+  <div class="cap">
+    <span class="eyebrow">Atendimento · Transferência</span>
+    <h2>Passar o cliente adiante sem perder nada</h2>
+    <p>O atendente escolhe um colega disponível. A conversa muda de dono com todo o histórico e o cliente não precisa repetir.</p>
+    <ul><li>Lista de atendentes com status online</li><li>Motivo da transferência registrado</li><li>Aviso imediato para quem recebe</li><li>Registro na auditoria</li></ul>
+    <a class="site" data-href="atendimento" target="_blank" rel="noopener"><span class="live">No ar</span><span data-site="atendimento"></span></a>
+  </div>
+  <div class="br"><div class="br-top"><div class="dots"><i></i><i></i><i></i></div><div class="url" data-url="atendimento:/atendimento"></div></div>
+    <div class="wa">
+      <div class="rail"><i class="lg"></i><i class="on"></i><i></i><i></i><i></i></div>
+      <div class="cl">
+        <div class="tabs"><span>Fila (4)</span><span class="on">Meus (5)</span></div>
+        <div class="sr"><span class="inp" style="display:block">Buscar conversa…</span></div>
+        <div class="ci"><span class="av c3">GM</span><div><b>Gabriel Moreira</b><small>Na fila há 3 min</small></div><div class="r"><span class="acc">ACEITAR</span></div></div>
+        <div class="ci"><span class="av c5">FS</span><div><b>Fernanda Souza</b><small>Perfeito, pode gerar o boleto</small></div><div class="r">10:42</div></div>
+        <div class="ci on"><span class="av c4">RA</span><div><b>Roberto Almeida</b><small>Preciso falar com o financeiro</small></div><div class="r">10:44</div></div>
+        <div class="ci"><span class="av c6">PC</span><div><b>Patrícia Campos</b><small>📷 Foto</small></div><div class="r">10:21</div></div>
+      </div>
+      <div class="chat">
+        <div class="hd"><span class="av c4" style="width:28px;height:28px">RA</span><div><b>Roberto Almeida</b><small>+55 31 9•••• 1207</small></div><div class="row"><span class="btn gh">Transferir</span><span class="btn rd">Encerrar</span></div></div>
+        <div class="bub"><div class="bb">Preciso negociar uma parcela em atraso, consegue me ajudar?<small>10:43</small></div><div class="bb me"><span class="ag">Lucas Andrade</span>Vou te passar para a equipe do financeiro, um momento.<small>10:44 ✓✓</small></div></div>
+        <div class="cmp"><span class="inp">Digite uma mensagem…</span><span class="btn">Enviar</span></div>
+        <div class="overlay"><div class="modal">
+          <h5>Transferir conversa</h5><span style="color:var(--mut);font-size:10px">Roberto Almeida será atendido por:</span>
+          <div class="op sel"><span class="av c1">MC</span><div><b>Mariana Costa</b><br><small style="color:var(--mut)"><span class="on-dot"></span>Financeiro · 2 conversas</small></div><span class="pl p">Selecionada</span></div>
+          <div class="op"><span class="av c2">TB</span><div><b>Thiago Braga</b><br><small style="color:var(--mut)"><span class="on-dot"></span>Financeiro · 4 conversas</small></div><span></span></div>
+          <div class="op"><span class="av c6">JO</span><div><b>Juliana Oliveira</b><br><small style="color:var(--mut)"><span class="off-dot"></span>Comercial · ausente</small></div><span></span></div>
+          <span class="inp">Motivo: negociação de parcela em atraso</span>
+          <div class="row" style="justify-content:flex-end"><span class="btn gh">Cancelar</span><span class="btn">Transferir</span></div>
+        </div></div>
+      </div>
+    </div></div>
+</section>
+
+<section class="slide screen-slide" data-sec="atendimento" data-name="Gestão" id="w-gestao" data-desc="Supervisão em tempo real">
+  <div class="cap">
+    <span class="eyebrow">Atendimento · Gestão</span>
+    <h2>O gestor vê toda a operação ao vivo</h2>
+    <p>Gestores e administradores acompanham qualquer conversa em modo somente leitura, sem tirar o cliente do atendente.</p>
+    <ul><li>Atendentes online e carga de cada um</li><li>Tempo de espera de quem está na fila</li><li>Abrir qualquer conversa para supervisionar</li><li>Atualização em tempo real</li></ul>
+    <a class="site" data-href="atendimento" target="_blank" rel="noopener"><span class="live">No ar</span><span data-site="atendimento"></span></a>
+  </div>
+  <div class="br"><div class="br-top"><div class="dots"><i></i><i></i><i></i></div><div class="url" data-url="atendimento:/gestao"></div></div>
+    <div class="app">
+      <div class="sd"><div class="lg"><i></i>Atendimento</div><div class="ni">Atendimento</div><div class="ni on">Gestão</div><div class="ni">Dashboard</div><div class="ni">Relatórios</div><div class="ni">Respostas rápidas</div><div class="gp">Administração</div><div class="ni">Usuários</div><div class="ni">Auditoria</div><div class="ni">Configurações</div><div class="me"><span class="av c6">SR</span><div><b>Sílvia Rocha</b><br><span style="color:var(--mut);font-size:9px">Gestora</span></div></div></div>
+      <div class="mn">
+        <div class="ph"><div><h3>Gestão</h3><small>Agora · 6 atendentes online · 4 na fila</small></div><span class="ro">👁 Somente leitura</span></div>
+        <div class="kpis">
+          <div class="kp"><span>Na fila</span><b>4</b><em>maior espera 3 min</em></div>
+          <div class="kp"><span>Em atendimento</span><b>19</b><em>por 6 atendentes</em></div>
+          <div class="kp"><span>Encerradas hoje</span><b>87</b><em class="up">+14 x ontem</em></div>
+          <div class="kp"><span>1ª resposta hoje</span><b>1m 52s</b><em>meta 3 min</em></div>
+        </div>
+        <div class="agents">
+          <div class="ag-c"><div class="t"><span class="av c2">LA</span><div><b>Lucas Andrade</b><small><span class="on-dot"></span>Online · Comercial</small></div></div><div class="s"><div><b>5</b><span>abertas</span></div><div><b>18</b><span>hoje</span></div><div><b>1m20</b><span>resp.</span></div></div><div class="cv"><b>Fernanda Souza</b><span>há 1 min</span></div><div class="cv"><b>Patrícia Campos</b><span>há 9 min</span></div></div>
+          <div class="ag-c"><div class="t"><span class="av c1">MC</span><div><b>Mariana Costa</b><small><span class="on-dot"></span>Online · Financeiro</small></div></div><div class="s"><div><b>3</b><span>abertas</span></div><div><b>14</b><span>hoje</span></div><div><b>2m05</b><span>resp.</span></div></div><div class="cv"><b>Roberto Almeida</b><span>agora</span></div><div class="cv"><b>Cláudia Pires</b><span>há 4 min</span></div></div>
+          <div class="ag-c"><div class="t"><span class="av c3">TB</span><div><b>Thiago Braga</b><small><span class="on-dot"></span>Online · Financeiro</small></div></div><div class="s"><div><b>4</b><span>abertas</span></div><div><b>16</b><span>hoje</span></div><div><b>1m48</b><span>resp.</span></div></div><div class="cv"><b>Sérgio Mendes</b><span>há 2 min</span></div><div class="cv"><b>Aline Duarte</b><span>há 6 min</span></div></div>
+          <div class="ag-c"><div class="t"><span class="av c4">BC</span><div><b>Bruna Cardoso</b><small><span class="on-dot"></span>Online · Suporte</small></div></div><div class="s"><div><b>3</b><span>abertas</span></div><div><b>15</b><span>hoje</span></div><div><b>2m30</b><span>resp.</span></div></div><div class="cv"><b>Igor Teixeira</b><span>há 3 min</span></div></div>
+          <div class="ag-c"><div class="t"><span class="av c5">DP</span><div><b>Daniel Pereira</b><small><span class="on-dot"></span>Online · Suporte</small></div></div><div class="s"><div><b>2</b><span>abertas</span></div><div><b>12</b><span>hoje</span></div><div><b>1m55</b><span>resp.</span></div></div><div class="cv"><b>Letícia Ramos</b><span>há 7 min</span></div></div>
+          <div class="ag-c"><div class="t"><span class="av c6">JO</span><div><b>Juliana Oliveira</b><small><span class="off-dot"></span>Ausente · Comercial</small></div></div><div class="s"><div><b>2</b><span>abertas</span></div><div><b>12</b><span>hoje</span></div><div><b>2m10</b><span>resp.</span></div></div><div class="cv"><b>Otávio Lins</b><span>há 15 min</span></div></div>
+        </div>
+      </div>
+    </div></div>
+</section>
+
+<section class="slide screen-slide" data-sec="atendimento" data-name="Dashboard" id="w-dash" data-desc="Tempos e volume de atendimento">
+  <div class="cap">
+    <span class="eyebrow">Atendimento · Dashboard</span>
+    <h2>Quanto o cliente espera, em números</h2>
+    <p>Tempos de aceite, primeira resposta e duração calculados a partir das próprias conversas, com filtro por período e atendente.</p>
+    <ul><li>Conversas únicas no período</li><li>Tempo médio de aceite e de resposta</li><li>Picos por hora do dia</li><li>Ranking de atendentes</li></ul>
+    <a class="site" data-href="atendimento" target="_blank" rel="noopener"><span class="live">No ar</span><span data-site="atendimento"></span></a>
+  </div>
+  <div class="br"><div class="br-top"><div class="dots"><i></i><i></i><i></i></div><div class="url" data-url="atendimento:/dashboard"></div></div>
+    <div class="app">
+      <div class="sd"><div class="lg"><i></i>Atendimento</div><div class="ni">Atendimento</div><div class="ni">Gestão</div><div class="ni on">Dashboard</div><div class="ni">Relatórios</div><div class="ni">Respostas rápidas</div><div class="gp">Administração</div><div class="ni">Usuários</div><div class="ni">Auditoria</div><div class="ni">Configurações</div><div class="me"><span class="av c6">SR</span><div><b>Sílvia Rocha</b><br><span style="color:var(--mut);font-size:9px">Gestora</span></div></div></div>
+      <div class="mn">
+        <div class="ph"><div><h3>Dashboard</h3><small>Outubro de 2026 · todos os atendentes</small></div><div class="row"><span class="inp">Período: último mês ▾</span><span class="inp">Atendente: todos ▾</span></div></div>
+        <div class="kpis">
+          <div class="kp"><span>Conversas únicas</span><b>1.284</b><em class="up">+8% x set.</em></div>
+          <div class="kp"><span>Tempo até aceite</span><b>1m 42s</b><em>média</em></div>
+          <div class="kp"><span>1ª resposta</span><b>2m 10s</b><em>após aceite</em></div>
+          <div class="kp"><span>Duração média</span><b>11m 30s</b><em>por conversa</em></div>
+        </div>
+        <div class="g2">
+          <div class="cd"><h4>Conversas por hora do dia <small>média de dias úteis</small></h4><div class="bars" id="w-bars"></div><div class="axis" id="w-axis"></div></div>
+          <div class="cd"><h4>Ranking de atendentes</h4>
+            <table class="tb"><tr><th>Atendente</th><th>Conversas</th><th>Resp.</th></tr>
+            <tr><td><span class="who"><span class="av c2">LA</span>Lucas</span></td><td class="num">312</td><td class="num">1m20</td></tr>
+            <tr><td><span class="who"><span class="av c3">TB</span>Thiago</span></td><td class="num">268</td><td class="num">1m48</td></tr>
+            <tr><td><span class="who"><span class="av c1">MC</span>Mariana</span></td><td class="num">241</td><td class="num">2m05</td></tr>
+            <tr><td><span class="who"><span class="av c4">BC</span>Bruna</span></td><td class="num">203</td><td class="num">2m30</td></tr>
+            <tr><td><span class="who"><span class="av c5">DP</span>Daniel</span></td><td class="num">146</td><td class="num">1m55</td></tr></table>
+          </div>
+        </div>
+      </div>
+    </div></div>
+</section>
+
+<section class="slide screen-slide" data-sec="atendimento" data-name="Respostas rápidas" id="w-resp" data-desc="Atalhos de mensagens">
+  <div class="cap">
+    <span class="eyebrow">Atendimento · Respostas rápidas</span>
+    <h2>Mensagens padrão a uma barra de distância</h2>
+    <p>O atendente digita “/” e escolhe a resposta. A empresa fala com a mesma voz em todos os atendimentos.</p>
+    <ul><li>Atalhos criados pelo gestor</li><li>Variáveis como nome do cliente</li><li>Respostas por departamento</li><li>Menos digitação, resposta mais rápida</li></ul>
+    <a class="site" data-href="atendimento" target="_blank" rel="noopener"><span class="live">No ar</span><span data-site="atendimento"></span></a>
+  </div>
+  <div class="br"><div class="br-top"><div class="dots"><i></i><i></i><i></i></div><div class="url" data-url="atendimento:/respostas-rapidas"></div></div>
+    <div class="app">
+      <div class="sd"><div class="lg"><i></i>Atendimento</div><div class="ni">Atendimento</div><div class="ni">Gestão</div><div class="ni">Dashboard</div><div class="ni">Relatórios</div><div class="ni on">Respostas rápidas</div><div class="gp">Administração</div><div class="ni">Usuários</div><div class="ni">Auditoria</div><div class="ni">Configurações</div><div class="me"><span class="av c6">SR</span><div><b>Sílvia Rocha</b><br><span style="color:var(--mut);font-size:9px">Gestora</span></div></div></div>
+      <div class="mn">
+        <div class="ph"><div><h3>Respostas rápidas</h3><small>12 respostas cadastradas</small></div><span class="btn">+ Nova resposta</span></div>
+        <div class="qr-list">
+          <div class="qr-it"><code>/bomdia</code><p>Bom dia, {nome}! Aqui é {atendente}. Como posso te ajudar hoje?</p><span class="pl n">Geral</span></div>
+          <div class="qr-it"><code>/horario</code><p>Nosso horário de atendimento é de segunda a sexta, das 8h às 18h, e aos sábados, das 8h às 12h.</p><span class="pl n">Geral</span></div>
+          <div class="qr-it"><code>/boleto</code><p>Seu boleto foi gerado e enviado para o e-mail cadastrado. Também posso enviar o código PIX por aqui, se preferir.</p><span class="pl p">Financeiro</span></div>
+          <div class="qr-it"><code>/pedido</code><p>Para consultar seu pedido, me informe o número que aparece na nota fiscal ou no e-mail de confirmação.</p><span class="pl b">Comercial</span></div>
+          <div class="qr-it"><code>/encerrar</code><p>Fico à disposição, {nome}. Se precisar de algo mais, é só chamar por aqui. Tenha um ótimo dia!</p><span class="pl n">Geral</span></div>
+          <div class="qr-it"><code>/troca</code><p>Trocas podem ser feitas em até 30 dias com a nota fiscal. Me envie uma foto do produto, por favor.</p><span class="pl g">Suporte</span></div>
+        </div>
+      </div>
+    </div></div>
+</section>
+
+<!-- =================== PESQUISA =================== -->
+<section class="slide cover" data-sec="pesquisa" data-name="Visão geral" id="p-capa">
+  <div class="l">
+    <span class="badge-sec">Plataforma 4 · Pesquisa de Satisfação</span>
+    <h1>A opinião do cliente <em>na hora</em>, em cada filial</h1>
+    <p class="lead">Tablets em modo quiosque no balcão e QR Code para o celular coletam a nota NPS. O painel mostra o resultado por filial e transforma cada nota baixa num caso para tratar.</p>
+    <div class="feat">
+      <div><b>Tablet em modo quiosque</b><span>Sem login, travado na pesquisa</span></div>
+      <div><b>QR Code por filial</b><span>Resposta pelo celular do cliente</span></div>
+      <div><b>Casos de detratores</b><span>Alerta por e-mail ou WhatsApp</span></div>
+      <div><b>Relatório em PowerPoint</b><span>Gráficos com a marca da empresa</span></div>
+    </div>
+    <a class="urlcard" data-href="pesquisa" target="_blank" rel="noopener"><div><small><span class="live">No ar</span></small><span class="u" data-site="pesquisa"></span></div><span class="go"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M7 17L17 7M9 7h8v8"/></svg></span></a>
+  </div>
+  <div class="tel" data-telas="pesquisa"><h3>Telas do sistema</h3></div>
+</section>
+
+<section class="slide screen-slide" data-sec="pesquisa" data-name="Tablet no balcão" id="p-tablet" data-desc="Coleta no modo quiosque">
+  <div class="cap">
+    <span class="eyebrow">Pesquisa · Tablet</span>
+    <h2>O cliente responde em três toques</h2>
+    <p>O tablet fica no balcão, travado na pesquisa. Cada resposta é gravada na filial em que o aparelho foi ativado.</p>
+    <ul><li>Números coloridos, carinhas, estrelas ou corações</li><li>Português, inglês e espanhol</li><li>Perguntas condicionais conforme a nota</li><li>Funciona mesmo com a internet instável</li></ul>
+    <a class="site" data-href="pesquisa" target="_blank" rel="noopener"><span class="live">No ar</span><span data-site="pesquisa"></span></a>
+  </div>
+  <div class="devices">
+    <div class="tablet"><div class="scr">
+      <div class="lgo"><i></i>Sua Empresa</div>
+      <div class="lang"><span class="on">PT</span><span>EN</span><span>ES</span></div>
+      <h5>Em uma escala de 0 a 10, quanto você recomendaria nossa loja a um amigo ou familiar?</h5>
+      <div class="nps" id="npsrow"></div>
+      <div class="nps-l"><span>Nada provável</span><span>Muito provável</span></div>
+      <div class="faces" style="margin-top:6px" id="faces"></div>
+      <span class="ft">Suas respostas são anônimas · Política de privacidade</span>
+    </div></div>
+  </div>
+</section>
+
+<section class="slide screen-slide" data-sec="pesquisa" data-name="Painel NPS" id="p-painel" data-desc="Resultado geral e por filial">
+  <div class="cap">
+    <span class="eyebrow">Pesquisa · Painel</span>
+    <h2>O NPS de cada filial, sempre atualizado</h2>
+    <p>Visão geral com nota, promotores e detratores, evolução diária e comparação entre filiais.</p>
+    <ul><li>NPS geral, por filial e por pergunta</li><li>Distribuição das notas de 0 a 10</li><li>Comentários recentes dos clientes</li><li>Exportação em CSV e PowerPoint</li></ul>
+    <a class="site" data-href="pesquisa" target="_blank" rel="noopener"><span class="live">No ar</span><span data-site="pesquisa"></span></a>
+  </div>
+  <div class="br"><div class="br-top"><div class="dots"><i></i><i></i><i></i></div><div class="url" data-url="pesquisa:/admin/"></div></div>
+    <div class="app">
+      <div class="sd"><div class="lg"><i style="background:#13324F"></i>Pesquisa</div><div class="gp">Análise</div><div class="ni on">Visão geral</div><div class="ni">Respostas</div><div class="ni">Casos <span class="ct">7</span></div><div class="ni">Ranking e metas</div><div class="gp">Coleta</div><div class="ni">Pesquisas</div><div class="ni">Filiais</div><div class="ni">Tablets</div><div class="gp">Administração</div><div class="ni">Usuários</div><div class="ni">Configurações</div></div>
+      <div class="mn">
+        <div class="ph"><div><h3>Visão geral</h3><small>Outubro de 2026 · 5 filiais</small></div><div class="row"><span class="btn gh">CSV</span><span class="btn" style="background:#13324F">Exportar PowerPoint</span></div></div>
+        <div class="kpis">
+          <div class="kp"><span>NPS</span><b style="color:var(--ac)">+61,4</b><em>1.920 notas</em></div>
+          <div class="kp"><span>Respostas</span><b>1.020</b><em>pesquisas concluídas</em></div>
+          <div class="kp"><span>Promotores</span><b style="color:var(--grn)">70%</b><em>notas 9 e 10</em></div>
+          <div class="kp"><span>Detratores</span><b style="color:var(--red)">9%</b><em>notas de 0 a 6</em></div>
+        </div>
+        <div class="g2">
+          <div class="cd"><h4>Distribuição das notas (0 a 10)</h4><div class="bars" id="p-bars" style="height:104px"></div><div class="axis" id="p-axis"></div></div>
+          <div class="cd"><h4>Comentários recentes</h4>
+            <div style="display:flex;flex-direction:column;gap:7px;font-size:10px">
+              <div><b>“Atendimento rápido e muito educado.”</b><br><span style="color:var(--mut)">Centro · nota 10 · hoje 11:20</span></div>
+              <div><b>“Fila do caixa estava longa.”</b><br><span style="color:var(--mut)">Shopping Norte · nota 5 · hoje 10:02</span></div>
+              <div><b>“Encontrei tudo o que precisava.”</b><br><span style="color:var(--mut)">Savassi · nota 9 · ontem 18:45</span></div>
+            </div></div>
+        </div>
+        <div class="cd" style="padding:6px 10px"><table class="tb"><tr><th>Filial</th><th>Respostas</th><th>NPS</th><th style="width:44%">Composição</th></tr>
+          <tr><td>Centro</td><td class="num">268</td><td style="color:var(--grn);font-weight:800">+72,0</td><td><div class="comp"><i style="width:78%;background:var(--grn)"></i><i style="width:16%;background:#C7D0DB"></i><i style="width:6%;background:var(--red)"></i></div></td></tr>
+          <tr><td>Savassi</td><td class="num">231</td><td style="color:var(--grn);font-weight:800">+65,4</td><td><div class="comp"><i style="width:73%;background:var(--grn)"></i><i style="width:19%;background:#C7D0DB"></i><i style="width:8%;background:var(--red)"></i></div></td></tr>
+          <tr><td>Shopping Norte</td><td class="num">204</td><td style="color:var(--amb);font-weight:800">+44,1</td><td><div class="comp"><i style="width:59%;background:var(--grn)"></i><i style="width:26%;background:#C7D0DB"></i><i style="width:15%;background:var(--red)"></i></div></td></tr></table></div>
+      </div>
+    </div></div>
+</section>
+
+<section class="slide screen-slide" data-sec="pesquisa" data-name="Casos" id="p-casos" data-desc="Detratores para tratar">
+  <div class="cap">
+    <span class="eyebrow">Pesquisa · Casos</span>
+    <h2>Toda nota baixa vira uma ação</h2>
+    <p>Cada nota de 0 a 6 abre um caso. O responsável recebe alerta, entra em contato com o cliente e registra a solução.</p>
+    <ul><li>Alerta por e-mail, WhatsApp ou webhook</li><li>Contato do cliente quando ele autoriza</li><li>Status: novo, em tratamento, resolvido</li><li>Histórico de cada tratativa</li></ul>
+    <a class="site" data-href="pesquisa" target="_blank" rel="noopener"><span class="live">No ar</span><span data-site="pesquisa"></span></a>
+  </div>
+  <div class="br"><div class="br-top"><div class="dots"><i></i><i></i><i></i></div><div class="url" data-url="pesquisa:/admin/#casos"></div></div>
+    <div class="app">
+      <div class="sd"><div class="lg"><i style="background:#13324F"></i>Pesquisa</div><div class="gp">Análise</div><div class="ni">Visão geral</div><div class="ni">Respostas</div><div class="ni on">Casos <span class="ct">7</span></div><div class="ni">Ranking e metas</div><div class="gp">Coleta</div><div class="ni">Pesquisas</div><div class="ni">Filiais</div><div class="ni">Tablets</div><div class="gp">Administração</div><div class="ni">Usuários</div><div class="ni">Configurações</div></div>
+      <div class="mn">
+        <div class="ph"><div><h3>Casos</h3><small>7 abertos · 23 resolvidos em outubro</small></div><div class="row"><span class="inp">Status: abertos ▾</span><span class="inp">Filial: todas ▾</span></div></div>
+        <div class="cases">
+          <div class="cd" style="padding:6px">
+            <div class="case on"><span class="sc" style="background:#DC2626">3</span><div><b>Shopping Norte · hoje 10:02</b><small>“Fila do caixa estava longa e só um caixa aberto.”</small></div><span class="pl r">Novo</span></div>
+            <div class="case"><span class="sc" style="background:#EA580C">5</span><div><b>Centro · ontem 17:40</b><small>“Produto em falta, voltei duas vezes.”</small></div><span class="pl a">Em tratamento</span></div>
+            <div class="case"><span class="sc" style="background:#F97316">6</span><div><b>Savassi · ontem 15:12</b><small>“Ar-condicionado estava fraco.”</small></div><span class="pl a">Em tratamento</span></div>
+            <div class="case"><span class="sc" style="background:#DC2626">2</span><div><b>Contagem · 04/11 19:30</b><small>“Fui mal atendido no setor de trocas.”</small></div><span class="pl a">Em tratamento</span></div>
+            <div class="case"><span class="sc" style="background:#EA580C">4</span><div><b>Shopping Norte · 04/11 12:08</b><small>“Estacionamento lotado e sem sinalização.”</small></div><span class="pl r">Novo</span></div>
+            <div class="case"><span class="sc" style="background:#F97316">6</span><div><b>Pampulha · 03/11 10:55</b><small>“Preço da prateleira diferente do caixa.”</small></div><span class="pl g">Resolvido</span></div>
+          </div>
+          <div class="cd">
+            <h4>Caso #212 <span class="pl r">Novo</span></h4>
+            <div class="kv"><span>Nota</span><b style="color:var(--red)">3 · detrator</b></div>
+            <div class="kv"><span>Filial</span><b>Shopping Norte</b></div>
+            <div class="kv"><span>Origem</span><b>Tablet do caixa 2</b></div>
+            <div class="kv"><span>Contato autorizado</span><b>Sim · WhatsApp</b></div>
+            <div class="kv"><span>Responsável</span><b>Gerente da filial</b></div>
+            <div style="background:var(--soft);border-radius:8px;padding:8px;font-size:10px;line-height:1.5;margin-top:8px">“Fila do caixa estava longa e só um caixa aberto.”</div>
+            <span class="inp" style="display:block;margin-top:8px">Registrar tratativa…</span>
+            <div class="row" style="margin-top:8px"><span class="btn gh">Contatar cliente</span><span class="btn" style="background:var(--grn)">Marcar resolvido</span></div>
+          </div>
+        </div>
+      </div>
+    </div></div>
+</section>
+
+<section class="slide screen-slide" data-sec="pesquisa" data-name="QR Code e celular" id="p-qr" data-desc="Resposta pelo celular">
+  <div class="cap">
+    <span class="eyebrow">Pesquisa · QR Code</span>
+    <h2>Onde não há tablet, há QR Code</h2>
+    <p>Cada filial tem um cartaz com QR Code. O cliente responde no próprio celular, sem baixar aplicativo.</p>
+    <ul><li>Cartaz gerado pelo painel, pronto para imprimir</li><li>Resposta vinculada à filial do cartaz</li><li>Cidade e estado, quando o cliente autoriza</li><li>Mesma pesquisa e mesmos idiomas do tablet</li></ul>
+    <a class="site" data-href="pesquisa" target="_blank" rel="noopener"><span class="live">No ar</span><span data-site="pesquisa"></span></a>
+  </div>
+  <div class="devices">
+    <div class="poster"><small>Sua opinião faz diferença</small><h6>Como foi sua visita hoje?</h6><div class="qw"><svg class="qr" id="qr2" viewBox="0 0 29 29" shape-rendering="crispEdges"></svg></div><small>Aponte a câmera do celular · leva 30 segundos</small><b style="font-size:12px">Filial Centro</b></div>
+    <div class="phone"><div class="scr">
+      <div style="display:flex;align-items:center;gap:6px;font-weight:800;font-size:11px;color:#13324F"><i style="width:18px;height:18px;border-radius:5px;background:#13324F;display:block"></i>Sua Empresa</div>
+      <h6>Quanto você recomendaria nossa loja a um amigo?</h6>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:5px;width:100%" id="npsphone"></div>
+      <div style="font-size:9.5px;color:#64748B">Filial Centro</div>
+      <div style="margin-top:auto;width:100%;background:#13324F;color:#fff;border-radius:9px;padding:9px;font-weight:800;font-size:11px">Enviar resposta</div>
+    </div></div>
+  </div>
+</section>
+
+<section class="slide screen-slide" data-sec="pesquisa" data-name="Ranking e metas" id="p-rank" data-desc="Filiais comparadas à meta">
+  <div class="cap">
+    <span class="eyebrow">Pesquisa · Ranking e metas</span>
+    <h2>Filiais comparadas com a meta da empresa</h2>
+    <p>Cada filial tem sua meta de NPS. O ranking mostra quem está acima e quem precisa de plano de ação.</p>
+    <ul><li>Meta de NPS por filial</li><li>Ranking do período</li><li>Relatório em PowerPoint com a marca da empresa</li><li>Horário de funcionamento e alerta de tablet sem sinal</li></ul>
+    <a class="site" data-href="pesquisa" target="_blank" rel="noopener"><span class="live">No ar</span><span data-site="pesquisa"></span></a>
+  </div>
+  <div class="br"><div class="br-top"><div class="dots"><i></i><i></i><i></i></div><div class="url" data-url="pesquisa:/admin/#ranking"></div></div>
+    <div class="app">
+      <div class="sd"><div class="lg"><i style="background:#13324F"></i>Pesquisa</div><div class="gp">Análise</div><div class="ni">Visão geral</div><div class="ni">Respostas</div><div class="ni">Casos <span class="ct">7</span></div><div class="ni on">Ranking e metas</div><div class="gp">Coleta</div><div class="ni">Pesquisas</div><div class="ni">Filiais</div><div class="ni">Tablets</div><div class="gp">Administração</div><div class="ni">Usuários</div><div class="ni">Configurações</div></div>
+      <div class="mn">
+        <div class="ph"><div><h3>Ranking e metas</h3><small>Outubro de 2026 · meta geral NPS +60</small></div><span class="btn" style="background:#13324F">Exportar PowerPoint</span></div>
+        <div class="cd">
+          <div class="goal" style="color:var(--mut);font-weight:700;font-size:9px;text-transform:uppercase;letter-spacing:.5px"><span>#</span><span>Filial</span><span>NPS x meta</span><span>NPS</span><span>Situação</span></div>
+          <div class="goal"><span class="rk">1</span><b>Centro</b><div class="gt"><i style="width:86%;background:var(--grn)"></i><u style="left:80%"></u></div><b class="num">+72,0</b><span class="pl g">Acima</span></div>
+          <div class="goal"><span class="rk">2</span><b>Pampulha</b><div class="gt"><i style="width:84%;background:var(--grn)"></i><u style="left:80%"></u></div><b class="num">+68,3</b><span class="pl g">Acima</span></div>
+          <div class="goal"><span class="rk">3</span><b>Savassi</b><div class="gt"><i style="width:83%;background:var(--grn)"></i><u style="left:80%"></u></div><b class="num">+65,4</b><span class="pl g">Acima</span></div>
+          <div class="goal"><span class="rk">4</span><b>Contagem</b><div class="gt"><i style="width:79%;background:var(--amb)"></i><u style="left:80%"></u></div><b class="num">+58,9</b><span class="pl a">Perto</span></div>
+          <div class="goal"><span class="rk">5</span><b>Shopping Norte</b><div class="gt"><i style="width:72%;background:var(--red)"></i><u style="left:80%"></u></div><b class="num">+44,1</b><span class="pl r">Abaixo</span></div>
+          <div class="legend"><span><i style="background:var(--ink);width:2px"></i>Meta +60</span><span>Escala de −100 a +100</span></div>
+        </div>
+        <div class="g2e">
+          <div class="cd"><h4>Tablets <small>5 de 6 conectados</small></h4>
+            <div class="kv"><span>Centro · caixa 1</span><b style="color:var(--grn)">● Online</b></div>
+            <div class="kv"><span>Shopping Norte · caixa 2</span><b style="color:var(--grn)">● Online</b></div>
+            <div class="kv"><span>Contagem · entrada</span><b style="color:var(--red)">● Sem sinal há 25 min</b></div></div>
+          <div class="cd"><h4>Origem das respostas</h4>
+            <div class="hb"><span>Tablet</span><div class="t"><i style="width:68%;background:#13324F"></i></div><b>68%</b></div>
+            <div class="hb"><span>QR Code</span><div class="t"><i style="width:32%"></i></div><b>32%</b></div>
+            <div style="font-size:9.5px;color:var(--mut);margin-top:6px">QR Code: 74% Belo Horizonte, 18% Contagem, 8% outras cidades</div></div>
+        </div>
+      </div>
+    </div></div>
+</section>
+
+<!-- =================== ENCERRAMENTO =================== -->
+<section class="slide closing" data-sec="encerramento" data-name="Acesse as plataformas" id="fim">
+  <div>
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:28px"><div class="mark" style="width:42px;height:42px;font-size:24px;border-radius:11px">S</div><b style="font-family:var(--display);font-size:20px">Sauberlich System</b></div>
+    <h2>Tudo isso já está <span>no ar.</span></h2>
+    <p>As quatro plataformas estão em produção, acessíveis pelo navegador. Os dados mostrados nesta apresentação são fictícios, criados para demonstrar as telas.</p>
+  </div>
+  <div class="links">
+    <a data-href="chamados" target="_blank" rel="noopener"><i style="background:#7E72F5"></i><div><b>Chamados</b><small data-site="chamados"></small></div><span class="live">No ar</span></a>
+    <a data-href="treinamentos" target="_blank" rel="noopener"><i style="background:#A57BF2"></i><div><b>Treinamentos</b><small data-site="treinamentos"></small></div><span class="live">No ar</span></a>
+    <a data-href="atendimento" target="_blank" rel="noopener"><i style="background:#2BC48D"></i><div><b>Atendimento WhatsApp</b><small data-site="atendimento"></small></div><span class="live">No ar</span></a>
+    <a data-href="pesquisa" target="_blank" rel="noopener"><i style="background:#F2843F"></i><div><b>Pesquisa de Satisfação</b><small data-site="pesquisa"></small></div><span class="live">No ar</span></a>
+  </div>
+</section>
+
+    </div>
+  </main>
+
+  <footer class="bottombar">
+    <button class="navbtn" id="prevBtn" aria-label="Slide anterior"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M15 18l-6-6 6-6"/></svg><span>Anterior</span></button>
+    <div class="screens" id="screens" role="tablist" aria-label="Telas desta seção"></div>
+    <span class="counter" id="counter"></span>
+    <button class="navbtn next" id="nextBtn" aria-label="Próximo slide"><span>Próximo</span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M9 18l6-6-6-6"/></svg></button>
+  </footer>
+</div>
+
+<script>
+/* Endereços das plataformas: altere aqui se algum domínio for diferente. */
+const SITES = {
+  chamados:     "chamados.sauberlich.com.br",
+  treinamentos: "treinamentos.sauberlich.com.br",
+  atendimento:  "atendimento.sauberlich.com.br",
+  pesquisa:     "pesquisa.sauberlich.com.br"
+};
+const SECTIONS = [
+  {id:"inicio", label:"Sauberlich System", c:"#13A3B4"},
+  {id:"chamados", label:"Chamados", c:"#7E72F5"},
+  {id:"treinamentos", label:"Treinamentos", c:"#A57BF2"},
+  {id:"atendimento", label:"Atendimento WhatsApp", c:"#2BC48D"},
+  {id:"pesquisa", label:"Pesquisa de Satisfação", c:"#F2843F"},
+  {id:"encerramento", label:"Acessos", c:"#5CD3DF"}
+];
+
+/* domínios */
+document.querySelectorAll("[data-site]").forEach(el => el.textContent = SITES[el.dataset.site]);
+document.querySelectorAll("[data-href]").forEach(el => el.href = "https://" + SITES[el.dataset.href]);
+document.querySelectorAll("[data-url]").forEach(el => {
+  const [k, path] = el.dataset.url.split(/:(.*)/s);
+  el.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>https://<b>' + SITES[k] + '</b>' + path;
+});
+
+/* gráficos de barras */
+function bars(id, axisId, data, labels, max, color){
+  const el = document.getElementById(id), ax = document.getElementById(axisId);
+  data.forEach((d,i) => {
+    const c = document.createElement("div"); c.className = "c";
+    (Array.isArray(d) ? d : [d]).forEach((v,j) => {
+      const b = document.createElement("i"); if (j) b.className = "s";
+      b.style.height = (v / max * 100) + "%";
+      if (color && !j) b.style.background = typeof color === "function" ? color(i) : color;
+      b.title = v; c.appendChild(b);
+    });
+    el.appendChild(c);
+    const s = document.createElement("span"); s.textContent = labels[i]; ax.appendChild(s);
+  });
+}
+bars("c-bars","c-axis",[[31,28],[27,30],[35,29],[22,25],[9,12],[6,8],[33,27],[38,34],[29,31],[34,30],[25,28],[8,10],[5,7],[37,32]],
+  ["24","25","26","27","28","29","30","31","1","2","3","4","5","6"],40);
+bars("w-bars","w-axis",[12,34,61,78,72,55,49,68,74,63,41,18],["8h","9h","10h","11h","12h","13h","14h","15h","16h","17h","18h","19h"],80);
+const npsCol = i => i<=6 ? "#DC2626" : i<=8 ? "#C7D0DB" : "#16A34A";
+bars("p-bars","p-axis",[8,5,9,12,17,21,25,112,186,398,947],["0","1","2","3","4","5","6","7","8","9","10"],947,npsCol);
+document.querySelectorAll("#p-bars .c i").forEach((b,i)=>{ if(+b.style.height.replace("%","")<4) b.style.height="4%"; });
+
+/* escala NPS colorida */
+const NPSC = ["#B91C1C","#D02B1F","#DC3E1E","#E5531C","#EE6B1B","#F4851A","#F59E0B","#EAB308","#A3C02A","#5DB044","#16A34A"];
+const row = document.getElementById("npsrow"), ph = document.getElementById("npsphone");
+NPSC.forEach((c,i)=>{ const s=document.createElement("span"); s.style.background=c; s.textContent=i; row.appendChild(s);
+  const p=document.createElement("span"); p.style.cssText="background:"+c+";color:#fff;border-radius:7px;padding:7px 0;font-weight:800;font-size:12px"+(i===9?";outline:3px solid #13324F;outline-offset:1px":""); p.textContent=i; ph.appendChild(p); });
+const faces = [["#DC2626","M8 17c2-2.5 6-2.5 8 0"],["#F59E0B","M8 16h8"],["#16A34A","M8 14c2 2.5 6 2.5 8 0"]];
+faces.forEach(([c,m])=>{ document.getElementById("faces").insertAdjacentHTML("beforeend",
+  '<span class="face" style="background:'+c+'22"><svg viewBox="0 0 24 24" fill="none" stroke="'+c+'" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><circle cx="9" cy="10" r="1" fill="'+c+'"/><circle cx="15" cy="10" r="1" fill="'+c+'"/><path d="'+m+'"/></svg></span>'); });
+document.getElementById("faces").insertAdjacentHTML("afterbegin",'<span style="font-size:10px;color:#94A3B8;align-self:center;margin-right:4px">Também em carinhas:</span>');
+
+/* QR ilustrativo (padrão decorativo, determinístico) */
+function qr(id, seed){
+  const svg = document.getElementById(id); let s = seed, out = '<rect width="29" height="29" fill="#fff"/>';
+  const rnd = () => (s = (s * 9301 + 49297) % 233280) / 233280;
+  const finder = (x,y) => '<rect x="'+x+'" y="'+y+'" width="7" height="7" fill="#0E1A2B"/><rect x="'+(x+1)+'" y="'+(y+1)+'" width="5" height="5" fill="#fff"/><rect x="'+(x+2)+'" y="'+(y+2)+'" width="3" height="3" fill="#0E1A2B"/>';
+  for (let y=1;y<28;y++) for (let x=1;x<28;x++){
+    const inF = (x<9&&y<9)||(x>19&&y<9)||(x<9&&y>19); if (inF) continue;
+    if (rnd() > .52) out += '<rect x="'+x+'" y="'+y+'" width="1" height="1" fill="#0E1A2B"/>';
+  }
+  svg.innerHTML = out + finder(1,1) + finder(21,1) + finder(1,21);
+}
+qr("qr1", 7); qr("qr2", 31);
+
+/* ---------- navegação ---------- */
+const slides = [...document.querySelectorAll(".slide")];
+const secnav = document.getElementById("secnav"), screens = document.getElementById("screens");
+let cur = 0;
+
+SECTIONS.forEach(s => {
+  const b = document.createElement("button"); b.style.setProperty("--c", s.c);
+  b.innerHTML = '<i></i>' + s.label; b.dataset.sec = s.id;
+  b.onclick = () => go(slides.findIndex(x => x.dataset.sec === s.id));
+  secnav.appendChild(b);
+});
+
+/* botões de telas nas capas de cada sistema */
+document.querySelectorAll("[data-telas]").forEach(box => {
+  const sec = box.dataset.telas;
+  slides.filter(s => s.dataset.sec === sec && !s.classList.contains("cover")).forEach((s, i) => {
+    const b = document.createElement("button"); b.dataset.to = s.id;
+    b.innerHTML = '<span class="n">' + (i+1) + '</span><span><b>' + s.dataset.name + '</b><small>' + (s.dataset.desc || "") + '</small></span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M9 18l6-6-6-6"/></svg>';
+    box.appendChild(b);
+  });
+});
+document.addEventListener("click", e => {
+  const t = e.target.closest("[data-to]"); if (!t) return;
+  const i = slides.findIndex(s => s.id === t.dataset.to); if (i >= 0) go(i);
+});
+
+function renderScreens(sec){
+  screens.innerHTML = '<span class="lbl">Telas</span>';
+  slides.forEach((s, i) => {
+    if (s.dataset.sec !== sec) return;
+    const b = document.createElement("button"); b.textContent = s.dataset.name; b.setAttribute("role","tab");
+    b.onclick = () => go(i); b.dataset.i = i; screens.appendChild(b);
+  });
+  screens.dataset.sec = sec;
+}
+
+function go(i){
+  if (i < 0 || i >= slides.length) return;
+  slides.forEach((s, k) => { s.classList.toggle("on", k === i); s.classList.toggle("prev", k < i); s.setAttribute("aria-hidden", k !== i); });
+  cur = i;
+  const s = slides[i], sec = s.dataset.sec;
+  [...secnav.children].forEach(b => b.setAttribute("aria-current", b.dataset.sec === sec));
+  if (screens.dataset.sec !== sec) renderScreens(sec);
+  screens.querySelectorAll("button").forEach(b => {
+    const on = +b.dataset.i === i; b.setAttribute("aria-current", on);
+    if (on) b.scrollIntoView({block:"nearest", inline:"nearest"});
+  });
+  secnav.querySelector('[aria-current="true"]')?.scrollIntoView({block:"nearest", inline:"nearest"});
+  document.getElementById("counter").textContent = (i+1) + " / " + slides.length;
+  document.getElementById("prevBtn").disabled = i === 0;
+  document.getElementById("nextBtn").disabled = i === slides.length - 1;
+  try { history.replaceState(null, "", "#" + s.id); } catch(e) {}
+}
+
+document.getElementById("prevBtn").onclick = () => go(cur - 1);
+document.getElementById("nextBtn").onclick = () => go(cur + 1);
+document.addEventListener("keydown", e => {
+  if (e.target.closest("input,textarea")) return;
+  if (["ArrowRight","PageDown"," "].includes(e.key)) { e.preventDefault(); go(cur + 1); }
+  else if (["ArrowLeft","PageUp"].includes(e.key)) { e.preventDefault(); go(cur - 1); }
+  else if (e.key === "Home") go(0);
+  else if (e.key === "End") go(slides.length - 1);
+  else if (/^[1-6]$/.test(e.key)) secnav.children[+e.key - 1]?.click();
+  else if (e.key.toLowerCase() === "f") toggleFs();
+});
+
+/* deslizar no celular/tablet */
+let tx = null;
+document.getElementById("viewport").addEventListener("touchstart", e => tx = e.touches[0].clientX, {passive:true});
+document.getElementById("viewport").addEventListener("touchend", e => {
+  if (tx === null) return; const dx = e.changedTouches[0].clientX - tx; tx = null;
+  if (Math.abs(dx) > 50) go(cur + (dx < 0 ? 1 : -1));
+});
+
+function toggleFs(){
+  try {
+    if (document.fullscreenElement) document.exitFullscreen();
+    else document.documentElement.requestFullscreen?.().catch(() => {});
+  } catch(e) {}
+}
+document.getElementById("fsBtn").onclick = toggleFs;
+
+/* escala do palco */
+const stage = document.getElementById("stage"), vp = document.getElementById("viewport");
+function fit(){
+  const pad = window.innerWidth < 640 ? 12 : 28;
+  const sc = Math.min((vp.clientWidth - pad*2) / 1280, (vp.clientHeight - pad*2) / 720);
+  stage.style.transform = "translate(-50%,-50%) scale(" + Math.max(sc, .1) + ")";
+}
+new ResizeObserver(fit).observe(vp); fit();
+
+const start = slides.findIndex(s => s.id === location.hash.slice(1));
+const startSec = slides.findIndex(s => s.dataset.sec === location.hash.slice(1));
+go(start >= 0 ? start : startSec >= 0 ? startSec : 0);
+</script>
+</body></html>
