@@ -208,3 +208,6 @@ body.mode-link .welcome-wrap { min-height: calc(100dvh - 40px); }
   .field { font-size: 16px; padding: 8px 10px; }
   .consent { font-size: 14px !important; }
 }
+
+/* Marca de quem desenvolveu o sistema (Sauberlich System) — discreta, sem atrapalhar o toque */
+.credit { position: fixed; left: 0; right: 0; bottom: calc(6px + env(safe-area-inset-bottom)); text-align: center; font-size: 11px; color: var(--fg); opacity: .55; pointer-events: none; z-index: 1; }

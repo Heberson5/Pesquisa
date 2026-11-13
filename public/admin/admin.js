@@ -101,7 +101,8 @@
           : h('div', { class: 'row' }, h('span', { class: 'brand-mark' }, initials(branding.companyName)), h('b', {}, branding.companyName)),
         h('div', {}, h('h2', {}, 'A opinião dos seus clientes, de todas as filiais, em um só lugar.'),
           h('p', {}, 'NPS em tempo real, relatórios em PowerPoint e tablets em modo quiosque.'))),
-      h('div', { class: 'login-side' }, h('div', { class: 'login' }, h('h1', {}, title), sub ? h('p', { class: 'muted' }, sub) : null, ...content))));
+      h('div', { class: 'login-side' }, h('div', { class: 'login' }, h('h1', {}, title), sub ? h('p', { class: 'muted' }, sub) : null, ...content,
+        h('p', { class: 'login-credit' }, window.SauberlichMarca.copyright())))));
   }
 
   function formOf(fields, button, onSubmit) {
@@ -285,7 +286,10 @@
           h('div', { class: 'who', title: me.name }, h('span', { class: 'avatar' }, initials(me.name)),
             h('div', { class: 'who-text' }, h('b', {}, me.name), h('span', {}, me.role === 'admin' ? 'Administrador' : 'Gestor de filial'))),
           h('button', { class: 'side-btn', title: 'Sair', onclick: async () => { await api('/logout', { method: 'POST' }).catch(() => {}); me = null; showLogin(); } },
-            icon('logout'), h('span', {}, 'Sair')))),
+            icon('logout'), h('span', {}, 'Sair')),
+          // Marca de quem desenvolveu o sistema — em todas as páginas; com o menu recolhido, só "SS".
+          h('p', { class: 'side-credit', title: window.SauberlichMarca.credit },
+            h('span', { class: 'credit-full' }, window.SauberlichMarca.credit), h('span', { class: 'credit-short' }, 'SS')))),
       h('div', {},
         h('div', { class: 'mobile-bar' },
           h('button', { class: 'btn secondary icon-only', 'aria-label': 'Abrir menu', onclick: () => shell.classList.add('mobile-open') }, icon('menu')),

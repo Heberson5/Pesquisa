@@ -2,6 +2,7 @@
 // Relatório PowerPoint (.pptx) com gráficos nativos (editáveis no PowerPoint),
 // logo e cores da empresa definidos em Configurações.
 const fs = require('node:fs');
+const { SAUBERLICH_CREDIT } = require('./marca');
 const path = require('node:path');
 const PptxGenJS = require('pptxgenjs');
 const { timezone } = require('./config');
@@ -107,11 +108,12 @@ async function buildReport({ settings, stats, surveys, filters, mediaDir, genera
     objects: [
       { placeholder: { options: { name: 'title', type: 'title', x: M, y: 2.5, w: 9.5, h: 1.6, fontFace: FONT, fontSize: 44, bold: true, color: onPrimary, align: 'left', valign: 'bottom', margin: 0 }, text: '' } },
       { placeholder: { options: { name: 'body', type: 'body', x: M, y: 4.25, w: 9.5, h: 1.4, fontFace: FONT, fontSize: 18, color: onPrimary, align: 'left', valign: 'top', margin: 0 }, text: '' } },
+      { text: { text: SAUBERLICH_CREDIT, options: { x: M, y: H - 0.5, w: 8, h: 0.3, fontFace: FONT, fontSize: 9, color: onPrimary, margin: 0 } } },
     ],
   });
   const contentObjects = [
     { placeholder: { options: { name: 'title', type: 'title', x: M, y: 0.4, w: W - 2 * M - 2.4, h: 0.8, fontFace: FONT, fontSize: 30, bold: true, color: INK, align: 'left', valign: 'middle', margin: 0 }, text: '' } },
-    { text: { text: `${settings.companyName}  ·  ${period}`, options: { x: M, y: H - 0.5, w: 8, h: 0.3, fontFace: FONT, fontSize: 10, color: MUTED, margin: 0 } } },
+    { text: { text: `${settings.companyName}  ·  ${period}  ·  ${SAUBERLICH_CREDIT}`, options: { x: M, y: H - 0.5, w: W - 2 * M - 0.8, h: 0.3, fontFace: FONT, fontSize: 10, color: MUTED, margin: 0 } } },
   ];
   if (logo) contentObjects.push({ image: fit(logo, W - M - 2.2, 0.45, 2.2, 0.7, 'right') });
   pres.defineSlideMaster({

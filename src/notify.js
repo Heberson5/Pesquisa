@@ -9,6 +9,7 @@ const nodemailer = require('nodemailer');
 const delivery = require('./delivery');
 const { get, all, run } = require('./db');
 const { sign } = require('./vault');
+const { SAUBERLICH_CREDIT } = require('./marca');
 
 const BACKOFF_MIN = [1, 5, 30, 120, 360];
 const MAX_ATTEMPTS = BACKOFF_MIN.length + 1;
@@ -58,8 +59,10 @@ function renderEmail({ title, intro, rows = [], button = null, footer = '', bran
 ${tableRows ? `<table role="presentation" style="font-size:14px;margin-bottom:16px">${tableRows}</table>` : ''}
 ${button ? `<a href="${escapeHtml(button.url)}" style="display:inline-block;background:${color};color:#fff;text-decoration:none;padding:12px 20px;border-radius:8px;font-weight:bold">${escapeHtml(button.label)}</a>` : ''}
 ${footer ? `<p style="margin:20px 0 0;color:#94a3b8;font-size:12px">${escapeHtml(footer)}</p>` : ''}
-</td></tr></table></td></tr></table></body></html>`;
-  const text = [title, '', intro, '', ...rows.map(([k, v]) => `${k}: ${v}`), button ? `\n${button.label}: ${button.url}` : '', footer ? `\n${footer}` : ''].join('\n');
+</td></tr></table>
+<p style="margin:12px 0 0;color:#b4bac1;font-size:11px;text-align:center">${SAUBERLICH_CREDIT}</p>
+</td></tr></table></body></html>`;
+  const text = [title, '', intro, '', ...rows.map(([k, v]) => `${k}: ${v}`), button ? `\n${button.label}: ${button.url}` : '', footer ? `\n${footer}` : '', `\n${SAUBERLICH_CREDIT}`].join('\n');
   return { html, text };
 }
 
